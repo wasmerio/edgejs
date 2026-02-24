@@ -1,0 +1,42 @@
+name: napi-v8
+
+on:
+  push:
+    paths:
+      - "napi-v8/**"
+      - ".github/workflows/napi-v8.yml"
+  pull_request:
+    paths:
+      - "napi-v8/**"
+      - ".github/workflows/napi-v8.yml"
+  workflow_dispatch:
+    inputs:
+      v8_monolith_lib:
+        description: "Absolute path to V8 monolith library for tier1 gtest run"
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate public N-API headers stay V8-agnostic
+        run: |
+          ! rg -n "v8::|<v8.h>|\"v8.h\"" napi-v8/include/js_native_api.h napi-v8/include/node_api.h
+      - name: Configure
+        run: cmake -S napi-v8 -B napi-v8/build
+      - name: Build
+        run: cmake --build napi-v8/build -j4
+
+  tier1-gtest:
+    runs-on: macos-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.v8_monolith_lib != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure with V8 monolith
+        run: cmake -S napi-v8 -B napi-v8/build -DNAPI_V8_V8_MONOLITH_LIB="${{ inputs.v8_monolith_lib }}"
+      - name: Build
+        run: cmake --build napi-v8/build -j4
+      - name: Run tier1 gtests
+        run: ctest --test-dir napi-v8/build --output-on-failure -R napi_v8_tier1_tests
