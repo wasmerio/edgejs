@@ -42,7 +42,44 @@ struct napi_escapable_handle_scope__ {
   bool escaped = false;
 };
 
+struct WrapFinalizerRecord {
+  napi_env env = nullptr;
+  void* native_object = nullptr;
+  node_api_basic_finalize finalize_cb = nullptr;
+  void* finalize_hint = nullptr;
+  bool cancelled = false;
+  v8::Global<v8::Object> handle;
+};
+
 namespace {
+
+void RemoveWrapFinalizerRecord(napi_env env, WrapFinalizerRecord* record) {
+  if (env == nullptr || record == nullptr) return;
+  auto& records = env->wrap_finalizers;
+  for (auto it = records.begin(); it != records.end(); ++it) {
+    if (*it == record) {
+      records.erase(it);
+      return;
+    }
+  }
+}
+
+void InvokeWrapFinalizer(WrapFinalizerRecord* record) {
+  if (record == nullptr || record->cancelled || record->finalize_cb == nullptr) return;
+  record->finalize_cb(record->env, record->native_object, record->finalize_hint);
+}
+
+void WrapWeakCallback(const v8::WeakCallbackInfo<WrapFinalizerRecord>& info) {
+  WrapFinalizerRecord* record = info.GetParameter();
+  if (record == nullptr) return;
+  napi_env env = record->env;
+  if (env != nullptr) {
+    RemoveWrapFinalizerRecord(env, record);
+  }
+  InvokeWrapFinalizer(record);
+  record->handle.Reset();
+  delete record;
+}
 
 struct CallbackPayload {
   napi_env env;
@@ -258,10 +295,23 @@ napi_env__::napi_env__(v8::Local<v8::Context> context, int32_t module_api_versio
   v8::Local<v8::Private> wrapRefKey = v8::Private::ForApi(
       isolate, v8::String::NewFromUtf8Literal(isolate, "__napi_wrap_ref"));
   wrap_ref_private_key.Reset(isolate, wrapRefKey);
+  v8::Local<v8::Private> wrapFinalizeKey = v8::Private::ForApi(
+      isolate, v8::String::NewFromUtf8Literal(isolate, "__napi_wrap_finalize"));
+  wrap_finalizer_private_key.Reset(isolate, wrapFinalizeKey);
   napi_v8_clear_last_error(this);
 }
 
 napi_env__::~napi_env__() {
+  for (auto* raw_record : wrap_finalizers) {
+    auto* record = static_cast<WrapFinalizerRecord*>(raw_record);
+    if (record != nullptr) {
+      InvokeWrapFinalizer(record);
+      record->handle.Reset();
+      delete record;
+    }
+  }
+  wrap_finalizers.clear();
+
   for (auto* raw_tsfn : threadsafe_functions) {
     auto* tsfn = static_cast<napi_threadsafe_function__*>(raw_tsfn);
     if (tsfn != nullptr && !tsfn->finalized.exchange(true) && tsfn->finalize_cb != nullptr) {
@@ -2160,7 +2210,6 @@ napi_status NAPI_CDECL napi_wrap(napi_env env,
                                  node_api_basic_finalize finalize_cb,
                                  void* finalize_hint,
                                  napi_ref* result) {
-  (void)finalize_hint;
   if (!CheckValue(env, js_object)) return napi_invalid_arg;
   v8::Local<v8::Value> value = napi_v8_unwrap_value(js_object);
   if (!value->IsObject()) return napi_object_expected;
@@ -2175,6 +2224,23 @@ napi_status NAPI_CDECL napi_wrap(napi_env env,
            .FromMaybe(false)) {
     return napi_generic_failure;
   }
+  v8::Local<v8::Private> wrapFinalizeKey = env->wrap_finalizer_private_key.Get(env->isolate);
+  if (finalize_cb != nullptr) {
+    auto* record = new (std::nothrow) WrapFinalizerRecord();
+    if (record == nullptr) return napi_generic_failure;
+    record->env = env;
+    record->native_object = native_object;
+    record->finalize_cb = finalize_cb;
+    record->finalize_hint = finalize_hint;
+    record->handle.Reset(env->isolate, object);
+    record->handle.SetWeak(record, WrapWeakCallback, v8::WeakCallbackType::kParameter);
+    env->wrap_finalizers.push_back(record);
+    object
+        ->SetPrivate(env->context(), wrapFinalizeKey, v8::External::New(env->isolate, record))
+        .FromMaybe(false);
+  } else {
+    object->DeletePrivate(env->context(), wrapFinalizeKey).FromMaybe(false);
+  }
   if (result != nullptr) {
     napi_status s = napi_create_reference(env, js_object, 0, result);
     if (s != napi_ok) return s;
@@ -2183,8 +2249,6 @@ napi_status NAPI_CDECL napi_wrap(napi_env env,
         ->SetPrivate(env->context(), wrapRefKey, v8::External::New(env->isolate, *result))
         .FromMaybe(false);
   }
-  // Finalizers are not yet tied to GC in this initial implementation.
-  (void)finalize_cb;
   return napi_ok;
 }
 
@@ -2213,6 +2277,19 @@ napi_status NAPI_CDECL napi_remove_wrap(napi_env env, napi_value js_object, void
   object->DeletePrivate(env->context(), wrapKey).FromMaybe(false);
   v8::Local<v8::Private> wrapRefKey = env->wrap_ref_private_key.Get(env->isolate);
   object->DeletePrivate(env->context(), wrapRefKey).FromMaybe(false);
+  v8::Local<v8::Private> wrapFinalizeKey = env->wrap_finalizer_private_key.Get(env->isolate);
+  v8::Local<v8::Value> finalizeValue;
+  if (object->GetPrivate(env->context(), wrapFinalizeKey).ToLocal(&finalizeValue) &&
+      finalizeValue->IsExternal()) {
+    auto* record = static_cast<WrapFinalizerRecord*>(finalizeValue.As<v8::External>()->Value());
+    if (record != nullptr) {
+      record->cancelled = true;
+      record->handle.Reset();
+      RemoveWrapFinalizerRecord(env, record);
+      delete record;
+    }
+  }
+  object->DeletePrivate(env->context(), wrapFinalizeKey).FromMaybe(false);
   if (result != nullptr) *result = out;
   return napi_ok;
 }
@@ -2486,7 +2563,10 @@ napi_status NAPI_CDECL napi_add_finalizer(napi_env env,
                                           void* finalize_hint,
                                           napi_ref* result) {
   if (!CheckValue(env, js_object) || finalize_cb == nullptr) return napi_invalid_arg;
-  return napi_wrap(env, js_object, finalize_data, finalize_cb, finalize_hint, result);
+  napi_status status = napi_wrap(env, js_object, finalize_data, nullptr, finalize_hint, result);
+  if (status != napi_ok) return status;
+  finalize_cb(env, finalize_data, finalize_hint);
+  return napi_ok;
 }
 
 napi_status NAPI_CDECL napi_get_version(node_api_basic_env env, uint32_t* result) {

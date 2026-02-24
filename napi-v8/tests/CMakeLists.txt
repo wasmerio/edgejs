@@ -226,6 +226,15 @@ if(NAPI_V8_V8_MONOLITH_LIB)
     runners/test_36_handle_scope.cc
     ported/js-native-api/test_handle_scope/test_handle_scope.c
   )
+  add_fixture_test(napi_v8_test_37_reference_double_free
+    runners/test_37_reference_double_free.cc
+    ported/js-native-api/test_reference_double_free/test_reference_double_free.c
+  )
+  add_fixture_test(napi_v8_test_38_finalizer
+    runners/test_38_finalizer.cc
+    ported/js-native-api/test_finalizer/test_finalizer.c
+  )
+  target_compile_definitions(napi_v8_test_38_finalizer PRIVATE NAPI_EXPERIMENTAL NODE_API_EXPERIMENTAL_NO_WARNING)
   find_library(NAPI_V8_UV_LIB NAMES uv libuv HINTS /opt/homebrew/lib /usr/local/lib)
   if(NAPI_V8_UV_LIB)
     target_link_libraries(napi_v8_test_28_node_instance_data PRIVATE "${NAPI_V8_UV_LIB}")

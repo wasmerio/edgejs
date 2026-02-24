@@ -54,11 +54,13 @@ struct napi_env__ {
   v8::Global<v8::Value> last_exception;
   v8::Global<v8::Private> wrap_private_key;
   v8::Global<v8::Private> wrap_ref_private_key;
+  v8::Global<v8::Private> wrap_finalizer_private_key;
   int32_t module_api_version = 8;
   void* instance_data = nullptr;
   napi_finalize instance_data_finalize_cb = nullptr;
   void* instance_data_finalize_hint = nullptr;
   std::vector<void*> threadsafe_functions;
+  std::vector<void*> wrap_finalizers;
   std::vector<TypeTagEntry> type_tag_entries;
 };
 
