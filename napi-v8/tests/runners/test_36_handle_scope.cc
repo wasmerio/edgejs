@@ -1,6 +1,5 @@
-#include <string>
-
 #include "test_env.h"
+#include "upstream_js_test.h"
 
 extern "C" napi_value Init(napi_env env, napi_value exports);
 
@@ -10,42 +9,9 @@ TEST_F(Test36HandleScope, PortedCoreFlow) {
   EnvScope s(runtime_.get());
   napi_value exports = nullptr;
   ASSERT_EQ(napi_create_object(s.env, &exports), napi_ok);
-  ASSERT_NE(Init(s.env, exports), nullptr);
-
-  napi_value global = nullptr;
-  ASSERT_EQ(napi_get_global(s.env, &global), napi_ok);
-  ASSERT_EQ(napi_set_named_property(s.env, global, "__ths", exports), napi_ok);
-
-  auto run_js = [&](const char* source_text) {
-    v8::TryCatch tc(s.isolate);
-    std::string wrapped = std::string("(() => { 'use strict'; ") + source_text + " })();";
-    v8::Local<v8::String> source =
-        v8::String::NewFromUtf8(s.isolate, wrapped.c_str(), v8::NewStringType::kNormal)
-            .ToLocalChecked();
-    v8::Local<v8::Script> script;
-    if (!v8::Script::Compile(s.context, source).ToLocal(&script)) return false;
-    v8::Local<v8::Value> out;
-    if (!script->Run(s.context).ToLocal(&out)) {
-      if (tc.HasCaught()) {
-        v8::String::Utf8Value msg(s.isolate, tc.Exception());
-        ADD_FAILURE() << "JS exception: " << (*msg ? *msg : "<empty>")
-                      << " while running: " << source_text;
-      }
-      return false;
-    }
-    return true;
-  };
-
-  ASSERT_TRUE(run_js(R"JS(
-__ths.NewScope();
-if (!(__ths.NewScopeEscape() instanceof Object)) throw new Error('escapeObject');
-__ths.NewScopeEscapeTwice();
-let threw = false;
-try {
-  __ths.NewScopeWithException(() => { throw new RangeError(); });
-} catch (e) {
-  threw = e instanceof RangeError;
-}
-if (!threw) throw new Error('scopeException');
-)JS"));
+  napi_value addon = Init(s.env, exports);
+  ASSERT_NE(addon, nullptr);
+  ASSERT_TRUE(InstallUpstreamJsShim(s, addon));
+  ASSERT_TRUE(RunUpstreamJsFile(
+      s, std::string(NAPI_V8_ROOT_PATH) + "/tests/ported/js-native-api/test_handle_scope/test.js"));
 }

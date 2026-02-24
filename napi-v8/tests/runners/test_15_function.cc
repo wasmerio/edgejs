@@ -1,5 +1,3 @@
-#include <string>
-
 #include "test_env.h"
 
 extern "C" napi_value Init(napi_env env, napi_value exports);
