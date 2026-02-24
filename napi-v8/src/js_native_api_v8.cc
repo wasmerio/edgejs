@@ -912,17 +912,176 @@ napi_status NAPI_CDECL napi_throw_error(napi_env env,
                                         const char* msg) {
   if (!CheckEnv(env)) return napi_invalid_arg;
   v8::Local<v8::String> message;
-  std::string full = (msg == nullptr) ? "N-API error" : msg;
-  if (code != nullptr) {
-    full = std::string(code) + ": " + full;
-  }
   if (!v8::String::NewFromUtf8(
-           env->isolate, full.c_str(), v8::NewStringType::kNormal)
+           env->isolate, (msg == nullptr) ? "N-API error" : msg, v8::NewStringType::kNormal)
            .ToLocal(&message)) {
     return napi_generic_failure;
   }
-  env->isolate->ThrowException(v8::Exception::Error(message));
-  env->last_exception.Reset(env->isolate, v8::Exception::Error(message));
+  v8::Local<v8::Object> err_obj = v8::Exception::Error(message).As<v8::Object>();
+  if (code != nullptr) {
+    v8::Local<v8::String> code_key = v8::String::NewFromUtf8Literal(env->isolate, "code");
+    v8::Local<v8::String> code_val;
+    if (v8::String::NewFromUtf8(env->isolate, code, v8::NewStringType::kNormal).ToLocal(&code_val)) {
+      err_obj->Set(env->context(), code_key, code_val).FromMaybe(false);
+    }
+  }
+  env->isolate->ThrowException(err_obj);
+  env->last_exception.Reset(env->isolate, err_obj);
+  return napi_pending_exception;
+}
+
+napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
+  if (!CheckValue(env, error)) return napi_invalid_arg;
+  v8::Local<v8::Value> ex = napi_v8_unwrap_value(error);
+  env->isolate->ThrowException(ex);
+  env->last_exception.Reset(env->isolate, ex);
+  return napi_pending_exception;
+}
+
+napi_status NAPI_CDECL napi_is_error(napi_env env, napi_value value, bool* result) {
+  if (!CheckValue(env, value) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> v = napi_v8_unwrap_value(value);
+  *result = v->IsNativeError();
+  return napi_ok;
+}
+
+static napi_status CreateErrorCommon(napi_env env,
+                                     v8::Local<v8::Value> (*factory)(v8::Local<v8::String>),
+                                     napi_value code,
+                                     napi_value msg,
+                                     napi_value* result) {
+  if (!CheckEnv(env) || msg == nullptr || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> msg_val = napi_v8_unwrap_value(msg);
+  if (!msg_val->IsString()) return napi_string_expected;
+  v8::Local<v8::String> message = msg_val.As<v8::String>();
+  v8::Local<v8::Value> created = factory(message);
+  if (!created->IsObject()) return napi_generic_failure;
+  v8::Local<v8::Object> err_obj = created.As<v8::Object>();
+  if (code != nullptr) {
+    v8::Local<v8::String> code_key = v8::String::NewFromUtf8Literal(env->isolate, "code");
+    err_obj->Set(env->context(), code_key, napi_v8_unwrap_value(code)).FromMaybe(false);
+  }
+  *result = napi_v8_wrap_value(env, err_obj);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL napi_create_error(napi_env env,
+                                         napi_value code,
+                                         napi_value msg,
+                                         napi_value* result) {
+  return CreateErrorCommon(
+      env,
+      [](v8::Local<v8::String> message) { return v8::Exception::Error(message); },
+      code,
+      msg,
+      result);
+}
+
+napi_status NAPI_CDECL napi_create_type_error(napi_env env,
+                                              napi_value code,
+                                              napi_value msg,
+                                              napi_value* result) {
+  return CreateErrorCommon(
+      env,
+      [](v8::Local<v8::String> message) { return v8::Exception::TypeError(message); },
+      code,
+      msg,
+      result);
+}
+
+napi_status NAPI_CDECL napi_create_range_error(napi_env env,
+                                               napi_value code,
+                                               napi_value msg,
+                                               napi_value* result) {
+  return CreateErrorCommon(
+      env,
+      [](v8::Local<v8::String> message) { return v8::Exception::RangeError(message); },
+      code,
+      msg,
+      result);
+}
+
+napi_status NAPI_CDECL node_api_create_syntax_error(napi_env env,
+                                                    napi_value code,
+                                                    napi_value msg,
+                                                    napi_value* result) {
+  return CreateErrorCommon(
+      env,
+      [](v8::Local<v8::String> message) { return v8::Exception::SyntaxError(message); },
+      code,
+      msg,
+      result);
+}
+
+napi_status NAPI_CDECL napi_throw_type_error(napi_env env,
+                                             const char* code,
+                                             const char* msg) {
+  if (!CheckEnv(env)) return napi_invalid_arg;
+  v8::Local<v8::String> message;
+  if (!v8::String::NewFromUtf8(env->isolate,
+                               (msg == nullptr) ? "Type error" : msg,
+                               v8::NewStringType::kNormal)
+           .ToLocal(&message)) {
+    return napi_generic_failure;
+  }
+  v8::Local<v8::Object> err = v8::Exception::TypeError(message).As<v8::Object>();
+  if (code != nullptr) {
+    v8::Local<v8::String> code_key = v8::String::NewFromUtf8Literal(env->isolate, "code");
+    v8::Local<v8::String> code_val;
+    if (v8::String::NewFromUtf8(env->isolate, code, v8::NewStringType::kNormal).ToLocal(&code_val)) {
+      err->Set(env->context(), code_key, code_val).FromMaybe(false);
+    }
+  }
+  env->isolate->ThrowException(err);
+  env->last_exception.Reset(env->isolate, err);
+  return napi_pending_exception;
+}
+
+napi_status NAPI_CDECL napi_throw_range_error(napi_env env,
+                                              const char* code,
+                                              const char* msg) {
+  if (!CheckEnv(env)) return napi_invalid_arg;
+  v8::Local<v8::String> message;
+  if (!v8::String::NewFromUtf8(env->isolate,
+                               (msg == nullptr) ? "Range error" : msg,
+                               v8::NewStringType::kNormal)
+           .ToLocal(&message)) {
+    return napi_generic_failure;
+  }
+  v8::Local<v8::Object> err = v8::Exception::RangeError(message).As<v8::Object>();
+  if (code != nullptr) {
+    v8::Local<v8::String> code_key = v8::String::NewFromUtf8Literal(env->isolate, "code");
+    v8::Local<v8::String> code_val;
+    if (v8::String::NewFromUtf8(env->isolate, code, v8::NewStringType::kNormal).ToLocal(&code_val)) {
+      err->Set(env->context(), code_key, code_val).FromMaybe(false);
+    }
+  }
+  env->isolate->ThrowException(err);
+  env->last_exception.Reset(env->isolate, err);
+  return napi_pending_exception;
+}
+
+napi_status NAPI_CDECL node_api_throw_syntax_error(napi_env env,
+                                                   const char* code,
+                                                   const char* msg) {
+  if (!CheckEnv(env)) return napi_invalid_arg;
+  v8::Local<v8::String> message;
+  if (!v8::String::NewFromUtf8(env->isolate,
+                               (msg == nullptr) ? "Syntax error" : msg,
+                               v8::NewStringType::kNormal)
+           .ToLocal(&message)) {
+    return napi_generic_failure;
+  }
+  v8::Local<v8::Object> err = v8::Exception::SyntaxError(message).As<v8::Object>();
+  if (code != nullptr) {
+    v8::Local<v8::String> code_key = v8::String::NewFromUtf8Literal(env->isolate, "code");
+    v8::Local<v8::String> code_val;
+    if (v8::String::NewFromUtf8(env->isolate, code, v8::NewStringType::kNormal).ToLocal(&code_val)) {
+      err->Set(env->context(), code_key, code_val).FromMaybe(false);
+    }
+  }
+  env->isolate->ThrowException(err);
+  env->last_exception.Reset(env->isolate, err);
   return napi_pending_exception;
 }
 
