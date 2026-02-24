@@ -3,6 +3,7 @@
 
 #include <climits>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <limits>
@@ -369,10 +370,14 @@ void NAPI_CDECL napi_fatal_error(const char* location,
                                  size_t location_len,
                                  const char* message,
                                  size_t message_len) {
-  (void)location;
-  (void)location_len;
-  (void)message;
-  (void)message_len;
+  const char* loc = (location == nullptr) ? "" : location;
+  const char* msg = (message == nullptr) ? "" : message;
+  size_t loc_len = (location_len == NAPI_AUTO_LENGTH) ? std::strlen(loc) : location_len;
+  size_t msg_len = (message_len == NAPI_AUTO_LENGTH) ? std::strlen(msg) : message_len;
+  std::fprintf(stderr, "FATAL ERROR: %.*s %.*s\n",
+               static_cast<int>(loc_len), loc,
+               static_cast<int>(msg_len), msg);
+  std::fflush(stderr);
   std::abort();
 }
 

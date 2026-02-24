@@ -66,13 +66,13 @@ This matrix classifies Node test directories for Phase 1 `napi-v8`.
 - `test_buffer` (ported to gtest harness)
 - `test_callback_scope` (ported to gtest harness)
 - `test_cleanup_hook` (ported to gtest harness)
+- `test_env_teardown_gc` (ported to gtest harness)
+- `test_fatal` (ported to gtest harness)
+- `test_fatal_exception` (ported to gtest harness)
+- `test_init_order` (ported to gtest harness)
 
 ### defer_phase2
 
-- `test_env_teardown_gc`
-- `test_fatal`
-- `test_fatal_exception`
-- `test_init_order`
 - `test_make_callback`
 - `test_make_callback_recurse`
 - `test_reference_by_node_api_version`

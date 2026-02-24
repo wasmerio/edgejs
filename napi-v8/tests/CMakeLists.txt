@@ -282,6 +282,22 @@ if(NAPI_V8_V8_MONOLITH_LIB)
     runners/test_49_node_cleanup_hook.cc
     ported/node-api/test_cleanup_hook/binding.c
   )
+  add_fixture_test(napi_v8_test_50_node_env_teardown_gc
+    runners/test_50_node_env_teardown_gc.cc
+    ported/node-api/test_env_teardown_gc/binding.c
+  )
+  add_fixture_test(napi_v8_test_51_node_fatal
+    runners/test_51_node_fatal.cc
+    ported/node-api/test_fatal/test_fatal.c
+  )
+  add_fixture_test(napi_v8_test_52_node_fatal_exception
+    runners/test_52_node_fatal_exception.cc
+    ported/node-api/test_fatal_exception/test_fatal_exception.c
+  )
+  add_fixture_test(napi_v8_test_53_node_init_order
+    runners/test_53_node_init_order.cc
+    ported/node-api/test_init_order/test_init_order.cc
+  )
   find_library(NAPI_V8_UV_LIB NAMES uv libuv HINTS /opt/homebrew/lib /usr/local/lib)
   if(NAPI_V8_UV_LIB)
     target_link_libraries(napi_v8_test_42_node_async PRIVATE "${NAPI_V8_UV_LIB}")
@@ -300,6 +316,9 @@ if(NAPI_V8_V8_MONOLITH_LIB)
   endif()
   if(NAPI_V8_UV_LIB)
     target_link_libraries(napi_v8_test_48_node_callback_scope PRIVATE "${NAPI_V8_UV_LIB}")
+  endif()
+  if(NAPI_V8_UV_LIB)
+    target_link_libraries(napi_v8_test_51_node_fatal PRIVATE "${NAPI_V8_UV_LIB}")
   endif()
 else()
   message(STATUS "Skipping napi_v8_tier1_tests: set NAPI_V8_V8_MONOLITH_LIB to link V8 runtime")

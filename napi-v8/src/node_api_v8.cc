@@ -468,6 +468,13 @@ napi_status NAPI_CDECL napi_make_callback(napi_env env,
   return napi_call_function(env, recv, func, argc, argv, result);
 }
 
+napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
+  if (!CheckEnv(env) || err == nullptr) return napi_invalid_arg;
+  env->last_exception.Reset(env->isolate, napi_v8_unwrap_value(err));
+  env->isolate->ThrowException(napi_v8_unwrap_value(err));
+  return napi_ok;
+}
+
 napi_status NAPI_CDECL napi_add_env_cleanup_hook(node_api_basic_env env,
                                                  napi_cleanup_hook fun,
                                                  void* arg) {
