@@ -1,5 +1,6 @@
 #include "internal/napi_v8_env.h"
 
+#include <climits>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -319,16 +320,191 @@ napi_status NAPI_CDECL napi_create_string_utf8(napi_env env,
                                                const char* str,
                                                size_t length,
                                                napi_value* result) {
-  if (!CheckEnv(env) || str == nullptr || result == nullptr) return napi_invalid_arg;
-  auto context = env->context();
-  const int v8Length =
-      (length == NAPI_AUTO_LENGTH) ? -1 : static_cast<int>(length);
+  if (!CheckEnv(env)) return napi_invalid_arg;
+  if (result == nullptr) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  if (str == nullptr) {
+    if (length != 0) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+    str = "";
+  }
+  if (length == NAPI_AUTO_LENGTH) {
+    length = std::strlen(str);
+  }
+  if (length > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  const int v8Length = static_cast<int>(length);
   v8::MaybeLocal<v8::String> maybe =
       v8::String::NewFromUtf8(env->isolate, str, v8::NewStringType::kNormal, v8Length);
   v8::Local<v8::String> out;
   if (!maybe.ToLocal(&out)) return napi_v8_set_last_error(env, napi_generic_failure, "Cannot create string");
   *result = napi_v8_wrap_value(env, out);
-  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+  return (*result == nullptr) ? napi_generic_failure : napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_create_string_latin1(napi_env env,
+                                                 const char* str,
+                                                 size_t length,
+                                                 napi_value* result) {
+  if (!CheckEnv(env)) return napi_invalid_arg;
+  if (result == nullptr) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  if (str == nullptr) {
+    if (length != 0) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+    str = "";
+  }
+  if (length == NAPI_AUTO_LENGTH) {
+    length = std::strlen(str);
+  }
+  if (length > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::MaybeLocal<v8::String> maybe = v8::String::NewFromOneByte(
+      env->isolate,
+      reinterpret_cast<const uint8_t*>(str),
+      v8::NewStringType::kNormal,
+      static_cast<int>(length));
+  v8::Local<v8::String> out;
+  if (!maybe.ToLocal(&out)) return napi_v8_set_last_error(env, napi_generic_failure, "Cannot create string");
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_create_string_utf16(napi_env env,
+                                                const char16_t* str,
+                                                size_t length,
+                                                napi_value* result) {
+  if (!CheckEnv(env)) return napi_invalid_arg;
+  if (result == nullptr) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  if (str == nullptr) {
+    if (length != 0) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+    static const char16_t empty[] = {0};
+    str = empty;
+  }
+  if (length == NAPI_AUTO_LENGTH) {
+    const char16_t* p = str;
+    while (*p != 0) ++p;
+    length = static_cast<size_t>(p - str);
+  }
+  if (length > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::MaybeLocal<v8::String> maybe = v8::String::NewFromTwoByte(
+      env->isolate,
+      reinterpret_cast<const uint16_t*>(str),
+      v8::NewStringType::kNormal,
+      static_cast<int>(length));
+  v8::Local<v8::String> out;
+  if (!maybe.ToLocal(&out)) return napi_v8_set_last_error(env, napi_generic_failure, "Cannot create string");
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL node_api_create_external_string_latin1(
+    napi_env env,
+    char* str,
+    size_t length,
+    node_api_basic_finalize finalize_callback,
+    void* finalize_hint,
+    napi_value* result,
+    bool* copied) {
+  (void)finalize_callback;
+  (void)finalize_hint;
+  if (copied != nullptr) *copied = false;
+  return napi_create_string_latin1(env, str, length, result);
+}
+
+napi_status NAPI_CDECL node_api_create_external_string_utf16(
+    napi_env env,
+    char16_t* str,
+    size_t length,
+    node_api_basic_finalize finalize_callback,
+    void* finalize_hint,
+    napi_value* result,
+    bool* copied) {
+  (void)finalize_callback;
+  (void)finalize_hint;
+  if (copied != nullptr) *copied = false;
+  return napi_create_string_utf16(env, str, length, result);
+}
+
+napi_status NAPI_CDECL node_api_create_property_key_latin1(
+    napi_env env, const char* str, size_t length, napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  if (str == nullptr) {
+    if (length != 0) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+    str = "";
+  }
+  if (length == NAPI_AUTO_LENGTH) {
+    length = std::strlen(str);
+  }
+  if (length > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::String> out;
+  if (!v8::String::NewFromOneByte(
+           env->isolate,
+           reinterpret_cast<const uint8_t*>(str),
+           v8::NewStringType::kInternalized,
+           static_cast<int>(length))
+           .ToLocal(&out)) {
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL node_api_create_property_key_utf8(
+    napi_env env, const char* str, size_t length, napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  if (str == nullptr) {
+    if (length != 0) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+    str = "";
+  }
+  if (length == NAPI_AUTO_LENGTH) {
+    length = std::strlen(str);
+  }
+  if (length > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::String> out;
+  if (!v8::String::NewFromUtf8(
+           env->isolate,
+           str,
+           v8::NewStringType::kInternalized,
+           static_cast<int>(length))
+           .ToLocal(&out)) {
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL node_api_create_property_key_utf16(
+    napi_env env, const char16_t* str, size_t length, napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  if (str == nullptr) {
+    if (length != 0) return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+    static const char16_t empty[] = {0};
+    str = empty;
+  }
+  if (length == NAPI_AUTO_LENGTH) {
+    const char16_t* p = str;
+    while (*p != 0) ++p;
+    length = static_cast<size_t>(p - str);
+  }
+  if (length > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::String> out;
+  if (!v8::String::NewFromTwoByte(
+           env->isolate,
+           reinterpret_cast<const uint16_t*>(str),
+           v8::NewStringType::kInternalized,
+           static_cast<int>(length))
+           .ToLocal(&out)) {
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_v8_clear_last_error(env);
 }
 
 napi_status NAPI_CDECL napi_create_symbol(napi_env env,
@@ -848,20 +1024,72 @@ napi_status NAPI_CDECL napi_get_value_string_utf8(
   if (!CheckValue(env, value)) return napi_invalid_arg;
   v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
   if (!local->IsString()) return napi_string_expected;
-
-  v8::String::Utf8Value utf8(env->isolate, local);
-  if (*utf8 == nullptr) return napi_generic_failure;
-  size_t len = std::strlen(*utf8);
-
-  if (result != nullptr) {
-    *result = len;
+  v8::Local<v8::String> str = local.As<v8::String>();
+  if (buf == nullptr) {
+    if (result == nullptr) return napi_invalid_arg;
+    *result = str->Utf8LengthV2(env->isolate);
+  } else if (bufsize != 0) {
+    size_t copied = str->WriteUtf8V2(env->isolate,
+                                     buf,
+                                     bufsize - 1,
+                                     v8::String::WriteFlags::kReplaceInvalidUtf8);
+    buf[copied] = '\0';
+    if (result != nullptr) *result = copied;
+  } else if (result != nullptr) {
+    *result = 0;
   }
-  if (buf != nullptr && bufsize > 0) {
-    size_t to_copy = (len < (bufsize - 1)) ? len : (bufsize - 1);
-    std::memcpy(buf, *utf8, to_copy);
-    buf[to_copy] = '\0';
+  return napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_value_string_latin1(
+    napi_env env, napi_value value, char* buf, size_t bufsize, size_t* result) {
+  if (!CheckValue(env, value)) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsString()) return napi_string_expected;
+  v8::Local<v8::String> str = local.As<v8::String>();
+  if (buf == nullptr) {
+    if (result == nullptr) return napi_invalid_arg;
+    *result = str->Length();
+  } else if (bufsize != 0) {
+    uint32_t length = static_cast<uint32_t>(
+        std::min(bufsize - 1, static_cast<size_t>(str->Length())));
+    str->WriteOneByteV2(env->isolate,
+                        0,
+                        length,
+                        reinterpret_cast<uint8_t*>(buf),
+                        v8::String::WriteFlags::kNullTerminate);
+    if (result != nullptr) *result = length;
+  } else if (result != nullptr) {
+    *result = 0;
   }
-  return napi_ok;
+  return napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_value_string_utf16(napi_env env,
+                                                   napi_value value,
+                                                   char16_t* buf,
+                                                   size_t bufsize,
+                                                   size_t* result) {
+  if (!CheckValue(env, value)) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsString()) return napi_string_expected;
+  v8::Local<v8::String> str = local.As<v8::String>();
+  if (buf == nullptr) {
+    if (result == nullptr) return napi_invalid_arg;
+    *result = str->Length();
+  } else if (bufsize != 0) {
+    uint32_t length = static_cast<uint32_t>(
+        std::min(bufsize - 1, static_cast<size_t>(str->Length())));
+    str->WriteV2(env->isolate,
+                 0,
+                 length,
+                 reinterpret_cast<uint16_t*>(buf),
+                 v8::String::WriteFlags::kNullTerminate);
+    if (result != nullptr) *result = length;
+  } else if (result != nullptr) {
+    *result = 0;
+  }
+  return napi_v8_clear_last_error(env);
 }
 
 napi_status NAPI_CDECL napi_get_value_external(napi_env env,
