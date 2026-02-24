@@ -1,6 +1,7 @@
 #include "internal/napi_v8_env.h"
 
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
@@ -251,6 +252,29 @@ napi_status NAPI_CDECL napi_create_array(napi_env env, napi_value* result) {
   return (*result == nullptr) ? napi_generic_failure : napi_ok;
 }
 
+napi_status NAPI_CDECL napi_create_array_with_length(napi_env env,
+                                                     size_t length,
+                                                     napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  auto context = env->context();
+  uint32_t length32 = static_cast<uint32_t>(
+      length > static_cast<size_t>(std::numeric_limits<uint32_t>::max())
+          ? std::numeric_limits<uint32_t>::max()
+          : length);
+  v8::Local<v8::Array> arr = v8::Array::New(env->isolate);
+  if (length32 > 0) {
+    if (!arr
+             ->Set(context,
+                   v8::String::NewFromUtf8Literal(env->isolate, "length"),
+                   v8::Integer::NewFromUnsigned(env->isolate, length32))
+             .FromMaybe(false)) {
+      return napi_generic_failure;
+    }
+  }
+  *result = napi_v8_wrap_value(env, arr);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
 napi_status NAPI_CDECL napi_create_string_utf8(napi_env env,
                                                const char* str,
                                                size_t length,
@@ -292,6 +316,84 @@ napi_status NAPI_CDECL napi_get_value_uint32(napi_env env,
   v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
   if (!local->IsNumber()) return napi_number_expected;
   *result = local->Uint32Value(env->context()).FromMaybe(0);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_value_int32(napi_env env,
+                                            napi_value value,
+                                            int32_t* result) {
+  if (!CheckValue(env, value) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsNumber()) return napi_number_expected;
+  *result = local->Int32Value(env->context()).FromMaybe(0);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_is_array(napi_env env, napi_value value, bool* result) {
+  if (!CheckValue(env, value) || result == nullptr) return napi_invalid_arg;
+  *result = napi_v8_unwrap_value(value)->IsArray();
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_array_length(napi_env env,
+                                             napi_value value,
+                                             uint32_t* result) {
+  if (!CheckValue(env, value) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsArray()) return napi_array_expected;
+  *result = local.As<v8::Array>()->Length();
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_element(napi_env env,
+                                        napi_value object,
+                                        uint32_t index,
+                                        napi_value* result) {
+  if (!CheckValue(env, object) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(object);
+  if (!local->IsObject()) return napi_object_expected;
+  v8::Local<v8::Value> out;
+  if (!local.As<v8::Object>()->Get(env->context(), index).ToLocal(&out)) {
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL napi_set_element(napi_env env,
+                                        napi_value object,
+                                        uint32_t index,
+                                        napi_value value) {
+  if (!CheckValue(env, object) || value == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(object);
+  if (!local->IsObject()) return napi_object_expected;
+  if (!local.As<v8::Object>()
+           ->Set(env->context(), index, napi_v8_unwrap_value(value))
+           .FromMaybe(false)) {
+    return napi_generic_failure;
+  }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_has_element(napi_env env,
+                                        napi_value object,
+                                        uint32_t index,
+                                        bool* result) {
+  if (!CheckValue(env, object) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(object);
+  if (!local->IsObject()) return napi_object_expected;
+  *result = local.As<v8::Object>()->Has(env->context(), index).FromMaybe(false);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_delete_element(napi_env env,
+                                           napi_value object,
+                                           uint32_t index,
+                                           bool* result) {
+  if (!CheckValue(env, object) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(object);
+  if (!local->IsObject()) return napi_object_expected;
+  *result = local.As<v8::Object>()->Delete(env->context(), index).FromMaybe(false);
   return napi_ok;
 }
 

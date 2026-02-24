@@ -100,6 +100,10 @@ if(NAPI_V8_V8_MONOLITH_LIB)
     ported/js-native-api/8_passing_wrapped/8_passing_wrapped.cc
     ported/js-native-api/8_passing_wrapped/myobject.cc
   )
+  add_fixture_test(napi_v8_test_9_array
+    runners/test_9_array.cc
+    ported/js-native-api/test_array/test_array.c
+  )
 else()
   message(STATUS "Skipping napi_v8_tier1_tests: set NAPI_V8_V8_MONOLITH_LIB to link V8 runtime")
 endif()
