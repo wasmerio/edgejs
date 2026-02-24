@@ -324,6 +324,49 @@ napi_status NAPI_CDECL napi_create_uint32(napi_env env,
   return (*result == nullptr) ? napi_generic_failure : napi_ok;
 }
 
+napi_status NAPI_CDECL napi_create_bigint_int64(napi_env env,
+                                                int64_t value,
+                                                napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  *result = napi_v8_wrap_value(env, v8::BigInt::New(env->isolate, value));
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL napi_create_bigint_uint64(napi_env env,
+                                                 uint64_t value,
+                                                 napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  *result = napi_v8_wrap_value(env, v8::BigInt::NewFromUnsigned(env->isolate, value));
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL napi_create_bigint_words(napi_env env,
+                                                int sign_bit,
+                                                size_t word_count,
+                                                const uint64_t* words,
+                                                napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  if ((sign_bit != 0 && sign_bit != 1) || word_count > static_cast<size_t>(INT_MAX)) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  if (word_count > 0 && words == nullptr) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::TryCatch tc(env->isolate);
+  v8::Local<v8::BigInt> out;
+  if (!v8::BigInt::NewFromWords(
+           env->context(), sign_bit, static_cast<int>(word_count), words)
+           .ToLocal(&out)) {
+    if (tc.HasCaught()) {
+      env->last_exception.Reset(env->isolate, tc.Exception());
+      return napi_v8_set_last_error(env, napi_pending_exception, "BigInt creation threw");
+    }
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
 napi_status NAPI_CDECL napi_create_object(napi_env env, napi_value* result) {
   if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
   *result = napi_v8_wrap_value(env, v8::Object::New(env->isolate));
@@ -676,6 +719,71 @@ napi_status NAPI_CDECL napi_get_value_int64(napi_env env,
     return napi_v8_set_last_error(env, napi_number_expected, "A number was expected");
   }
   *result = local->IntegerValue(env->context()).FromMaybe(0);
+  return napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_value_bigint_int64(napi_env env,
+                                                   napi_value value,
+                                                   int64_t* result,
+                                                   bool* lossless) {
+  if (!CheckEnv(env) || value == nullptr || result == nullptr || lossless == nullptr) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsBigInt()) {
+    return napi_v8_set_last_error(env, napi_bigint_expected, "A bigint was expected");
+  }
+  *result = local.As<v8::BigInt>()->Int64Value(lossless);
+  return napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_value_bigint_uint64(napi_env env,
+                                                    napi_value value,
+                                                    uint64_t* result,
+                                                    bool* lossless) {
+  if (!CheckEnv(env) || value == nullptr || result == nullptr || lossless == nullptr) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsBigInt()) {
+    return napi_v8_set_last_error(env, napi_bigint_expected, "A bigint was expected");
+  }
+  *result = local.As<v8::BigInt>()->Uint64Value(lossless);
+  return napi_v8_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_value_bigint_words(napi_env env,
+                                                   napi_value value,
+                                                   int* sign_bit,
+                                                   size_t* word_count,
+                                                   uint64_t* words) {
+  if (!CheckEnv(env) || value == nullptr || word_count == nullptr) {
+    return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::Value> local = napi_v8_unwrap_value(value);
+  if (!local->IsBigInt()) {
+    return napi_v8_set_last_error(env, napi_bigint_expected, "A bigint was expected");
+  }
+  v8::Local<v8::BigInt> bigint = local.As<v8::BigInt>();
+  int sign = 0;
+  int wc = static_cast<int>(bigint->WordCount());
+  if (words == nullptr) {
+    if (sign_bit != nullptr) {
+      int tmp_count = wc;
+      uint64_t dummy_word = 0;
+      uint64_t* tmp_words = (tmp_count > 0) ? &dummy_word : nullptr;
+      bigint->ToWordsArray(&sign, &tmp_count, tmp_words);
+      *sign_bit = sign;
+    }
+    *word_count = static_cast<size_t>(wc);
+    return napi_v8_clear_last_error(env);
+  }
+  int requested = (*word_count > static_cast<size_t>(INT_MAX))
+                      ? INT_MAX
+                      : static_cast<int>(*word_count);
+  bigint->ToWordsArray(&sign, &requested, words);
+  if (sign_bit != nullptr) *sign_bit = sign;
+  *word_count = static_cast<size_t>(requested);
   return napi_v8_clear_last_error(env);
 }
 

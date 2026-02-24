@@ -192,6 +192,10 @@ if(NAPI_V8_V8_MONOLITH_LIB)
     runners/test_28_node_instance_data.cc
     ported/node-api/test_instance_data/test_instance_data.c
   )
+  add_fixture_test(napi_v8_test_29_bigint
+    runners/test_29_bigint.cc
+    ported/js-native-api/test_bigint/test_bigint.c
+  )
   find_library(NAPI_V8_UV_LIB NAMES uv libuv HINTS /opt/homebrew/lib /usr/local/lib)
   if(NAPI_V8_UV_LIB)
     target_link_libraries(napi_v8_test_28_node_instance_data PRIVATE "${NAPI_V8_UV_LIB}")
