@@ -54,12 +54,12 @@ This matrix classifies Node test directories for Phase 1 `napi-v8`.
 
 ### implement_now
 
-- `test_exception`
 - `test_instance_data`
 
 ### in_progress
 
 - `test_general` (ported to gtest harness)
+- `test_exception` (ported to gtest harness)
 
 ### defer_phase2
 

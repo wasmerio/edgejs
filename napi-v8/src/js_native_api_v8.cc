@@ -294,6 +294,24 @@ napi_status NAPI_CDECL napi_create_external(napi_env env,
   return (*result == nullptr) ? napi_generic_failure : napi_ok;
 }
 
+napi_status NAPI_CDECL napi_create_external_buffer(napi_env env,
+                                                   size_t length,
+                                                   void* data,
+                                                   node_api_basic_finalize finalize_cb,
+                                                   void* finalize_hint,
+                                                   napi_value* result) {
+  (void)finalize_cb;
+  (void)finalize_hint;
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(env->isolate, length);
+  if (length > 0 && data != nullptr) {
+    std::memcpy(ab->Data(), data, length);
+  }
+  v8::Local<v8::Uint8Array> view = v8::Uint8Array::New(ab, 0, length);
+  *result = napi_v8_wrap_value(env, view);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
 napi_status NAPI_CDECL napi_create_array_with_length(napi_env env,
                                                      size_t length,
                                                      napi_value* result) {
@@ -1031,6 +1049,111 @@ napi_status NAPI_CDECL napi_has_named_property(napi_env env,
   return napi_ok;
 }
 
+napi_status NAPI_CDECL napi_set_property(napi_env env,
+                                         napi_value object,
+                                         napi_value key,
+                                         napi_value value) {
+  if (!CheckValue(env, object) || !CheckValue(env, key) || value == nullptr) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  if (!target.As<v8::Object>()
+           ->Set(env->context(), napi_v8_unwrap_value(key), napi_v8_unwrap_value(value))
+           .FromMaybe(false)) {
+    return napi_generic_failure;
+  }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_property(napi_env env,
+                                         napi_value object,
+                                         napi_value key,
+                                         napi_value* result) {
+  if (!CheckValue(env, object) || !CheckValue(env, key) || result == nullptr) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  v8::Local<v8::Value> out;
+  if (!target.As<v8::Object>()->Get(env->context(), napi_v8_unwrap_value(key)).ToLocal(&out)) {
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, out);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL napi_has_property(napi_env env,
+                                         napi_value object,
+                                         napi_value key,
+                                         bool* result) {
+  if (!CheckValue(env, object) || !CheckValue(env, key) || result == nullptr) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  *result = target.As<v8::Object>()->Has(env->context(), napi_v8_unwrap_value(key)).FromMaybe(false);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_delete_property(napi_env env,
+                                            napi_value object,
+                                            napi_value key,
+                                            bool* result) {
+  if (!CheckValue(env, object) || !CheckValue(env, key) || result == nullptr) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  *result = target.As<v8::Object>()->Delete(env->context(), napi_v8_unwrap_value(key)).FromMaybe(false);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_has_own_property(napi_env env,
+                                             napi_value object,
+                                             napi_value key,
+                                             bool* result) {
+  if (!CheckValue(env, object) || !CheckValue(env, key) || result == nullptr) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> key_value = napi_v8_unwrap_value(key);
+  if (!key_value->IsName()) {
+    return napi_v8_set_last_error(env, napi_name_expected, "A string or symbol was expected");
+  }
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  *result = target.As<v8::Object>()
+                ->HasOwnProperty(env->context(), key_value.As<v8::Name>())
+                .FromMaybe(false);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_property_names(napi_env env,
+                                               napi_value object,
+                                               napi_value* result) {
+  if (!CheckValue(env, object) || result == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  v8::Local<v8::Array> names;
+  if (!target.As<v8::Object>()->GetPropertyNames(env->context()).ToLocal(&names)) {
+    return napi_generic_failure;
+  }
+  *result = napi_v8_wrap_value(env, names);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_all_property_names(napi_env env,
+                                                   napi_value object,
+                                                   napi_key_collection_mode key_mode,
+                                                   napi_key_filter key_filter,
+                                                   napi_key_conversion key_conversion,
+                                                   napi_value* result) {
+  (void)key_mode;
+  (void)key_filter;
+  (void)key_conversion;
+  return napi_get_property_names(env, object, result);
+}
+
 napi_status NAPI_CDECL napi_set_named_property(napi_env env,
                                                napi_value object,
                                                const char* utf8name,
@@ -1711,6 +1834,121 @@ napi_status NAPI_CDECL node_api_get_module_file_name(
   if (!CheckEnv(napiEnv)) return napi_invalid_arg;
   *result = kModuleUrl;
   return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_object_freeze(napi_env env, napi_value object) {
+  if (!CheckValue(env, object)) return napi_invalid_arg;
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  if (!target.As<v8::Object>()
+           ->SetIntegrityLevel(env->context(), v8::IntegrityLevel::kFrozen)
+           .FromMaybe(false)) {
+    return napi_generic_failure;
+  }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_object_seal(napi_env env, napi_value object) {
+  if (!CheckValue(env, object)) return napi_invalid_arg;
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(object);
+  if (!target->IsObject()) return napi_object_expected;
+  if (!target.As<v8::Object>()
+           ->SetIntegrityLevel(env->context(), v8::IntegrityLevel::kSealed)
+           .FromMaybe(false)) {
+    return napi_generic_failure;
+  }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_type_tag_object(
+    napi_env env, napi_value value, const napi_type_tag* type_tag) {
+  if (!CheckValue(env, value) || type_tag == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(value);
+  if (!target->IsObject()) return napi_invalid_arg;
+  v8::Local<v8::Object> obj = target.As<v8::Object>();
+  v8::Local<v8::Private> kLo = v8::Private::ForApi(
+      env->isolate, v8::String::NewFromUtf8Literal(env->isolate, "__napi_type_tag_lo"));
+  v8::Local<v8::Private> kHi = v8::Private::ForApi(
+      env->isolate, v8::String::NewFromUtf8Literal(env->isolate, "__napi_type_tag_hi"));
+  if (!obj
+           ->SetPrivate(env->context(),
+                        kLo,
+                        v8::BigInt::NewFromUnsigned(env->isolate, type_tag->lower))
+           .FromMaybe(false) ||
+      !obj
+           ->SetPrivate(env->context(),
+                        kHi,
+                        v8::BigInt::NewFromUnsigned(env->isolate, type_tag->upper))
+           .FromMaybe(false)) {
+    return napi_generic_failure;
+  }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_check_object_type_tag(napi_env env,
+                                                  napi_value value,
+                                                  const napi_type_tag* type_tag,
+                                                  bool* result) {
+  if (!CheckValue(env, value) || type_tag == nullptr || result == nullptr) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> target = napi_v8_unwrap_value(value);
+  if (!target->IsObject()) {
+    *result = false;
+    return napi_ok;
+  }
+  v8::Local<v8::Object> obj = target.As<v8::Object>();
+  v8::Local<v8::Private> kLo = v8::Private::ForApi(
+      env->isolate, v8::String::NewFromUtf8Literal(env->isolate, "__napi_type_tag_lo"));
+  v8::Local<v8::Private> kHi = v8::Private::ForApi(
+      env->isolate, v8::String::NewFromUtf8Literal(env->isolate, "__napi_type_tag_hi"));
+  v8::Local<v8::Value> lo;
+  v8::Local<v8::Value> hi;
+  if (!obj->GetPrivate(env->context(), kLo).ToLocal(&lo) ||
+      !obj->GetPrivate(env->context(), kHi).ToLocal(&hi) ||
+      !lo->IsBigInt() || !hi->IsBigInt()) {
+    *result = false;
+    return napi_ok;
+  }
+  bool lossless_lo = false;
+  bool lossless_hi = false;
+  uint64_t lo_v = lo.As<v8::BigInt>()->Uint64Value(&lossless_lo);
+  uint64_t hi_v = hi.As<v8::BigInt>()->Uint64Value(&lossless_hi);
+  *result = lossless_lo && lossless_hi && lo_v == type_tag->lower && hi_v == type_tag->upper;
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL
+node_api_create_object_with_properties(napi_env env,
+                                       napi_value prototype_or_null,
+                                       napi_value* property_names,
+                                       napi_value* property_values,
+                                       size_t property_count,
+                                       napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  if ((property_count > 0) && (property_names == nullptr || property_values == nullptr)) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Object> obj = v8::Object::New(env->isolate);
+  if (prototype_or_null != nullptr) {
+    v8::Local<v8::Value> proto = napi_v8_unwrap_value(prototype_or_null);
+    if (!proto->IsNull() && !proto->IsObject()) return napi_object_expected;
+    if (!obj->SetPrototypeV2(env->context(), proto).FromMaybe(false)) {
+      return napi_generic_failure;
+    }
+  }
+  for (size_t i = 0; i < property_count; ++i) {
+    if (property_names[i] == nullptr || property_values[i] == nullptr) return napi_invalid_arg;
+    if (!obj
+             ->Set(env->context(),
+                   napi_v8_unwrap_value(property_names[i]),
+                   napi_v8_unwrap_value(property_values[i]))
+             .FromMaybe(false)) {
+      return napi_generic_failure;
+    }
+  }
+  *result = napi_v8_wrap_value(env, obj);
+  return (*result == nullptr) ? napi_generic_failure : napi_ok;
 }
 
 }  // extern "C"
