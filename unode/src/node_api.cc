@@ -39,6 +39,8 @@ struct napi_callback_scope__ {
   napi_env env = nullptr;
 };
 
+void napi_v8_run_async_cleanup_hooks(napi_env env);
+
 namespace {
 
 inline bool CheckEnv(napi_env env) {
