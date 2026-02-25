@@ -454,7 +454,6 @@ napi_value RequireResolveCallback(napi_env env, napi_callback_info info) {
     ThrowLoaderError(env, "Empty module specifier");
     return nullptr;
   }
-
   napi_value resolved_path = ResolveSpecifierForContext(env, context, specifier, false);
   if (resolved_path != nullptr) {
     return resolved_path;

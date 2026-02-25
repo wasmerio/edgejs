@@ -20,6 +20,8 @@ module.exports = {
     'path',
     'querystring',
     'stream',
+    'stream/promises',
+    'stream/web',
     'string_decoder',
     'url',
     'util',

@@ -3,12 +3,14 @@
 const UV_ENOENT = -2;
 const UV_EEXIST = -17;
 const kHasBackingStore = new WeakSet();
+const basePrimordials = require('../util/primordials');
 
 function uncurryThis(fn) {
   return Function.call.bind(fn);
 }
 
 const primordials = {
+  ...basePrimordials,
   Array,
   ArrayBufferIsView: ArrayBuffer.isView,
   ArrayIsArray: Array.isArray,
@@ -27,6 +29,7 @@ const primordials = {
   NumberMIN_SAFE_INTEGER: Number.MIN_SAFE_INTEGER,
   ObjectDefineProperties: Object.defineProperties,
   ObjectDefineProperty: Object.defineProperty,
+  ObjectGetOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
   ObjectPrototypeHasOwnProperty: uncurryThis(Object.prototype.hasOwnProperty),
   ObjectSetPrototypeOf: Object.setPrototypeOf,
   RegExpPrototypeSymbolReplace: uncurryThis(RegExp.prototype[Symbol.replace]),
@@ -34,6 +37,8 @@ const primordials = {
   StringPrototypeSlice: uncurryThis(String.prototype.slice),
   StringPrototypeToLowerCase: uncurryThis(String.prototype.toLowerCase),
   StringPrototypeTrim: uncurryThis(String.prototype.trim),
+  Symbol,
+  SymbolFor: Symbol.for,
   SymbolSpecies: Symbol.species,
   SymbolToPrimitive: Symbol.toPrimitive,
   TypedArrayPrototypeFill: uncurryThis(Uint8Array.prototype.fill),
@@ -57,6 +62,14 @@ function getNativeInternalBinding() {
 
 function internalBinding(name) {
   if (name === 'uv') return { UV_ENOENT, UV_EEXIST };
+  if (name === 'errors') {
+    return {
+      exitCodes: {
+        kNoFailure: 0,
+        kGenericUserError: 1,
+      },
+    };
+  }
   if (name === 'os') return globalThis.__unode_os || {};
   if (name === 'buffer') return globalThis.__unode_buffer || {};
   if (name === 'string_decoder') {
@@ -98,6 +111,9 @@ function internalBinding(name) {
           const index = Number(n);
           return !Number.isInteger(index) || String(index) !== n;
         });
+      },
+      getCallSites() {
+        return [];
       },
       isInsideNodeModules() {
         return false;

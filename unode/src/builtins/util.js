@@ -146,10 +146,15 @@ function inherits(ctor, superCtor) {
   Object.setPrototypeOf(ctor, superCtor);
 }
 
+function getCallSites() {
+  return [];
+}
+
 module.exports = {
   inspect,
   format,
   inherits,
+  getCallSites,
 };
 module.exports.inspect.custom = inspectCustom;
 module.exports.inspect.defaultOptions = {

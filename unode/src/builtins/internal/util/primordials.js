@@ -50,9 +50,24 @@ module.exports = {
   ObjectDefineProperty: Object.defineProperty,
   ObjectAssign: Object.assign,
   ObjectKeys: Object.keys,
+  ObjectGetOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
   ObjectGetPrototypeOf: Object.getPrototypeOf,
   ObjectSetPrototypeOf: Object.setPrototypeOf,
+  MapPrototypeGet: uncurryThis(Map.prototype.get),
+  MapPrototypeSet: uncurryThis(Map.prototype.set),
   Promise,
+  PromisePrototypeThen: uncurryThis(Promise.prototype.then),
+  PromiseWithResolvers: Promise.withResolvers ?
+    Promise.withResolvers.bind(Promise) :
+    (() => {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }),
   PromiseReject: Promise.reject.bind(Promise),
   PromiseResolve: Promise.resolve.bind(Promise),
   ReflectApply: Reflect.apply,
@@ -79,9 +94,15 @@ module.exports = {
     (s) => String(s),
   StringPrototypeToLowerCase: uncurryThis(String.prototype.toLowerCase),
   StringPrototypeToUpperCase: uncurryThis(String.prototype.toUpperCase),
+  SafeArrayIterator: Array,
+  SafeMap: Map,
+  SafeSet: Set,
   Symbol,
   SymbolAsyncIterator: Symbol.asyncIterator,
   SymbolDispose,
   SymbolFor: Symbol.for,
+  SymbolIterator: Symbol.iterator,
+  SymbolToStringTag: Symbol.toStringTag,
+  TypeError,
   decodeURIComponent,
 };

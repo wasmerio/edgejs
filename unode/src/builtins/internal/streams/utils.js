@@ -1,7 +1,4 @@
 'use strict';
 
-function isWritable(stream) {
-  return stream != null && typeof stream.write === 'function';
-}
-
-module.exports = { isWritable };
+const path = require('path');
+module.exports = require(path.resolve(__dirname, '../../../../../node/lib/internal/streams/utils.js'));

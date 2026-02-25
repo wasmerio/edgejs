@@ -1,56 +1,131 @@
 'use strict';
 
-const EventEmitter = require('events');
+const {
+  ObjectDefineProperty,
+  ObjectKeys,
+  ReflectApply,
+} = primordials;
 
-function Stream() {
-  EventEmitter.call(this);
-  this.writable = true;
-}
-Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
-Object.setPrototypeOf(Stream, EventEmitter);
+const {
+  promisify: { custom: customPromisify },
+} = require('internal/util');
 
-Stream.prototype.write = function write(_chunk, cb) {
-  if (typeof cb === 'function') cb(null);
-  return true;
-};
+const {
+  streamReturningOperators,
+  promiseReturningOperators,
+} = require('internal/streams/operators');
 
-Stream.prototype.pipe = function pipe(dest) {
-  if (dest && typeof dest.emit === 'function') {
-    this.on('end', function onEnd() {
-      if (typeof dest.end === 'function') dest.end();
-    });
+const {
+  codes: {
+    ERR_ILLEGAL_CONSTRUCTOR,
+  },
+} = require('internal/errors');
+const compose = require('internal/streams/compose');
+const { setDefaultHighWaterMark, getDefaultHighWaterMark } = require('internal/streams/state');
+const { pipeline } = require('internal/streams/pipeline');
+const { destroyer } = require('internal/streams/destroy');
+const { eos } = require('internal/streams/end-of-stream');
+const internalBuffer = require('internal/buffer');
+
+const promises = require('stream/promises');
+const utils = require('internal/streams/utils');
+const { isArrayBufferView, isUint8Array } = require('internal/util/types');
+
+const Stream = module.exports = require('internal/streams/legacy').Stream;
+
+Stream.isDestroyed = utils.isDestroyed;
+Stream.isDisturbed = utils.isDisturbed;
+Stream.isErrored = utils.isErrored;
+Stream.isReadable = utils.isReadable;
+Stream.isWritable = utils.isWritable;
+
+Stream.Readable = require('internal/streams/readable');
+const streamKeys = ObjectKeys(streamReturningOperators);
+for (let i = 0; i < streamKeys.length; i++) {
+  const key = streamKeys[i];
+  const op = streamReturningOperators[key];
+  function fn(...args) {
+    if (new.target) {
+      throw new ERR_ILLEGAL_CONSTRUCTOR();
+    }
+    return Stream.Readable.from(ReflectApply(op, this, args));
   }
-  return dest;
-};
-
-function Writable(options = {}) {
-  Stream.call(this);
-  this._writeImpl = typeof options.write === 'function' ?
-    options.write :
-    (_chunk, _encoding, callback) => callback();
-}
-Object.setPrototypeOf(Writable.prototype, Stream.prototype);
-Object.setPrototypeOf(Writable, Stream);
-
-Writable.prototype.write = function write(chunk, encoding, cb) {
-  if (typeof encoding === 'function') {
-    cb = encoding;
-    encoding = 'utf8';
-  }
-  this._writeImpl(chunk, encoding || 'utf8', (err) => {
-    if (!err) this.emit('drain');
-    if (typeof cb === 'function') cb(err || null);
+  ObjectDefineProperty(fn, 'name', { __proto__: null, value: op.name });
+  ObjectDefineProperty(fn, 'length', { __proto__: null, value: op.length });
+  ObjectDefineProperty(Stream.Readable.prototype, key, {
+    __proto__: null,
+    value: fn,
+    enumerable: false,
+    configurable: true,
+    writable: true,
   });
-  return true;
-};
+}
+const promiseKeys = ObjectKeys(promiseReturningOperators);
+for (let i = 0; i < promiseKeys.length; i++) {
+  const key = promiseKeys[i];
+  const op = promiseReturningOperators[key];
+  function fn(...args) {
+    if (new.target) {
+      throw new ERR_ILLEGAL_CONSTRUCTOR();
+    }
+    return ReflectApply(op, this, args);
+  }
+  ObjectDefineProperty(fn, 'name', { __proto__: null, value: op.name });
+  ObjectDefineProperty(fn, 'length', { __proto__: null, value: op.length });
+  ObjectDefineProperty(Stream.Readable.prototype, key, {
+    __proto__: null,
+    value: fn,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+}
+Stream.Writable = require('internal/streams/writable');
+Stream.Duplex = require('internal/streams/duplex');
+Stream.Transform = require('internal/streams/transform');
+Stream.PassThrough = require('internal/streams/passthrough');
+Stream.duplexPair = require('internal/streams/duplexpair');
+Stream.pipeline = pipeline;
+const { addAbortSignal } = require('internal/streams/add-abort-signal');
+Stream.addAbortSignal = addAbortSignal;
+Stream.finished = eos;
+Stream.destroy = destroyer;
+Stream.compose = compose;
+Stream.setDefaultHighWaterMark = setDefaultHighWaterMark;
+Stream.getDefaultHighWaterMark = getDefaultHighWaterMark;
 
-Writable.prototype.end = function end(chunk, encoding, cb) {
-  if (chunk !== undefined) this.write(chunk, encoding);
-  this.emit('finish');
-  if (typeof cb === 'function') cb();
-  return this;
-};
+ObjectDefineProperty(Stream, 'promises', {
+  __proto__: null,
+  configurable: true,
+  enumerable: true,
+  get() {
+    return promises;
+  },
+});
 
-module.exports = Stream;
-module.exports.Stream = Stream;
-module.exports.Writable = Writable;
+ObjectDefineProperty(pipeline, customPromisify, {
+  __proto__: null,
+  enumerable: true,
+  get() {
+    return promises.pipeline;
+  },
+});
+
+ObjectDefineProperty(eos, customPromisify, {
+  __proto__: null,
+  enumerable: true,
+  get() {
+    return promises.finished;
+  },
+});
+
+// Backwards-compat with node 0.4.x
+Stream.Stream = Stream;
+
+Stream._isArrayBufferView = isArrayBufferView;
+Stream._isUint8Array = isUint8Array;
+Stream._uint8ArrayToBuffer = function _uint8ArrayToBuffer(chunk) {
+  return new internalBuffer.FastBuffer(chunk.buffer,
+                                       chunk.byteOffset,
+                                       chunk.byteLength);
+};

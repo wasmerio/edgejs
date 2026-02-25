@@ -237,6 +237,65 @@ class ERR_INVALID_URL_SCHEME extends TypeError {
   }
 }
 
+class ERR_STREAM_CANNOT_PIPE extends Error {
+  constructor() {
+    super('Cannot pipe, not readable');
+    this.code = 'ERR_STREAM_CANNOT_PIPE';
+  }
+}
+
+class ERR_STREAM_DESTROYED extends Error {
+  constructor(name = 'stream') {
+    super(`Cannot call write after a stream was destroyed`);
+    this.code = 'ERR_STREAM_DESTROYED';
+    this.name = `${name}Error`;
+  }
+}
+
+class ERR_STREAM_PREMATURE_CLOSE extends Error {
+  constructor() {
+    super('Premature close');
+    this.code = 'ERR_STREAM_PREMATURE_CLOSE';
+  }
+}
+
+class ERR_STREAM_UNABLE_TO_PIPE extends Error {
+  constructor() {
+    super('Unable to pipe from a closed stream');
+    this.code = 'ERR_STREAM_UNABLE_TO_PIPE';
+  }
+}
+
+class ERR_INVALID_RETURN_VALUE extends TypeError {
+  constructor(input, name, value) {
+    super(`Expected ${input} to be returned from the "${name}" function but got ${value}`);
+    this.code = 'ERR_INVALID_RETURN_VALUE';
+  }
+}
+
+class ERR_STREAM_WRITE_AFTER_END extends Error {
+  constructor() {
+    super('write after end');
+    this.code = 'ERR_STREAM_WRITE_AFTER_END';
+  }
+}
+
+class ERR_STREAM_NULL_VALUES extends TypeError {
+  constructor() {
+    super('May not write null values to stream');
+    this.code = 'ERR_STREAM_NULL_VALUES';
+  }
+}
+
+function aggregateTwoErrors(innerError, outerError) {
+  if (!innerError) return outerError;
+  if (!outerError) return innerError;
+  const err = new Error(outerError.message);
+  err.code = outerError.code;
+  err.cause = innerError;
+  return err;
+}
+
 function hideStackFrames(fn) {
   return fn;
 }
@@ -252,6 +311,7 @@ function genericNodeError(message, errorProperties) {
 module.exports = {
   AbortError,
   hideStackFrames,
+  aggregateTwoErrors,
   genericNodeError,
   codes: {
     ERR_INVALID_ARG_VALUE,
@@ -271,6 +331,13 @@ module.exports = {
     ERR_INVALID_FILE_URL_PATH,
     ERR_INVALID_FILE_URL_HOST,
     ERR_INVALID_URL_SCHEME,
+    ERR_STREAM_CANNOT_PIPE,
+    ERR_STREAM_DESTROYED,
+    ERR_STREAM_PREMATURE_CLOSE,
+    ERR_STREAM_UNABLE_TO_PIPE,
+    ERR_INVALID_RETURN_VALUE,
+    ERR_STREAM_WRITE_AFTER_END,
+    ERR_STREAM_NULL_VALUES,
   },
   kEnhanceStackBeforeInspector,
 };

@@ -277,6 +277,9 @@ napi_status InstallProcessStream(napi_env env,
   if (napi_set_named_property(env, stream_obj, "writable", true_value) != napi_ok) {
     return napi_generic_failure;
   }
+  if (napi_set_named_property(env, stream_obj, "_isStdio", true_value) != napi_ok) {
+    return napi_generic_failure;
+  }
   napi_value false_value = nullptr;
   if (napi_get_boolean(env, false, &false_value) != napi_ok || false_value == nullptr) {
     return napi_generic_failure;
@@ -290,6 +293,38 @@ napi_status InstallProcessStream(napi_env env,
     return napi_generic_failure;
   }
   if (napi_set_named_property(env, stream_obj, "write", write_fn) != napi_ok) {
+    return napi_generic_failure;
+  }
+  auto return_undefined = [](napi_env env, napi_callback_info info) -> napi_value {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  };
+  auto return_this = [](napi_env env, napi_callback_info info) -> napi_value {
+    napi_value this_arg = nullptr;
+    if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
+      napi_value undefined = nullptr;
+      napi_get_undefined(env, &undefined);
+      return undefined;
+    }
+    return this_arg;
+  };
+  const char* event_methods_this[] = {"on", "addListener", "once", "prependListener", "removeListener"};
+  for (const char* method : event_methods_this) {
+    napi_value fn = nullptr;
+    if (napi_create_function(env, method, NAPI_AUTO_LENGTH, return_this, nullptr, &fn) != napi_ok || fn == nullptr) {
+      return napi_generic_failure;
+    }
+    if (napi_set_named_property(env, stream_obj, method, fn) != napi_ok) {
+      return napi_generic_failure;
+    }
+  }
+  napi_value emit_fn = nullptr;
+  if (napi_create_function(env, "emit", NAPI_AUTO_LENGTH, return_undefined, nullptr, &emit_fn) != napi_ok ||
+      emit_fn == nullptr) {
+    return napi_generic_failure;
+  }
+  if (napi_set_named_property(env, stream_obj, "emit", emit_fn) != napi_ok) {
     return napi_generic_failure;
   }
   return napi_set_named_property(env, process_obj, name, stream_obj);
