@@ -13,6 +13,7 @@ NAPI_EXTERN napi_status unofficial_napi_v8_open_env_scope(int32_t module_api_ver
                                                           napi_env* env_out,
                                                           void** scope_out);
 NAPI_EXTERN napi_status unofficial_napi_v8_close_env_scope(void* scope);
+NAPI_EXTERN napi_status unofficial_napi_request_gc_for_testing(napi_env env);
 
 #ifdef __cplusplus
 }

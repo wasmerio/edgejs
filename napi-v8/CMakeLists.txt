@@ -25,6 +25,24 @@ set(NAPI_V8_V8_DEFINES
   "${NAPI_V8_V8_DEFINES_DEFAULT}"
   CACHE STRING "Semicolon-separated V8 embedder compile definitions"
 )
+set(NAPI_V8_V8_LIBRARY_DEFAULT "")
+if(DEFINED ENV{NAPI_V8_V8_LIBRARY})
+  set(NAPI_V8_V8_LIBRARY_DEFAULT "$ENV{NAPI_V8_V8_LIBRARY}")
+elseif(DEFINED ENV{NAPI_V8_V8_MONOLITH_LIB})
+  set(NAPI_V8_V8_LIBRARY_DEFAULT "$ENV{NAPI_V8_V8_MONOLITH_LIB}")
+endif()
+set(NAPI_V8_V8_LIBRARY
+  "${NAPI_V8_V8_LIBRARY_DEFAULT}"
+  CACHE FILEPATH "Path to V8 runtime library (monolith or dylib)"
+)
+set(NAPI_V8_V8_EXTRA_LIBS_DEFAULT "")
+if(DEFINED ENV{NAPI_V8_V8_EXTRA_LIBS})
+  set(NAPI_V8_V8_EXTRA_LIBS_DEFAULT "$ENV{NAPI_V8_V8_EXTRA_LIBS}")
+endif()
+set(NAPI_V8_V8_EXTRA_LIBS
+  "${NAPI_V8_V8_EXTRA_LIBS_DEFAULT}"
+  CACHE STRING "Semicolon-separated extra V8 libraries (e.g. libplatform/libbase)"
+)
 
 add_library(napi_v8 STATIC
   src/js_native_api_v8.cc
@@ -47,6 +65,12 @@ target_compile_definitions(napi_v8
 )
 if(NAPI_V8_V8_DEFINES)
   target_compile_definitions(napi_v8 PRIVATE ${NAPI_V8_V8_DEFINES})
+endif()
+if(NAPI_V8_V8_LIBRARY)
+  target_link_libraries(napi_v8 PUBLIC "${NAPI_V8_V8_LIBRARY}")
+endif()
+if(NAPI_V8_V8_EXTRA_LIBS)
+  target_link_libraries(napi_v8 PUBLIC ${NAPI_V8_V8_EXTRA_LIBS})
 endif()
 
 if(NAPI_V8_BUILD_TESTS)

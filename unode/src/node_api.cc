@@ -1,9 +1,9 @@
-#include "internal/napi_v8_env.h"
 #include "../../node/src/node_api.h"
 #include "../../node/src/node_api_types.h"
 
 #include <atomic>
 #include <new>
+#include <unordered_map>
 #include <vector>
 
 #include <uv.h>
@@ -43,15 +43,31 @@ void napi_v8_run_async_cleanup_hooks(napi_env env);
 
 namespace {
 
+struct UnodeEnvState {
+  std::vector<napi_async_cleanup_hook_handle> async_cleanup_hooks;
+  bool async_cleanup_hook_registered = false;
+};
+
+std::unordered_map<napi_env, UnodeEnvState> g_unode_env_state;
+
 inline bool CheckEnv(napi_env env) {
   return env != nullptr;
+}
+
+UnodeEnvState& GetOrCreateEnvState(napi_env env) {
+  return g_unode_env_state[env];
+}
+
+UnodeEnvState* GetEnvState(napi_env env) {
+  auto it = g_unode_env_state.find(env);
+  if (it == g_unode_env_state.end()) return nullptr;
+  return &it->second;
 }
 
 void RunAsyncCleanupHooksOnEnvTeardown(void* arg) {
   auto* env = static_cast<napi_env>(arg);
   if (!CheckEnv(env)) return;
   napi_v8_run_async_cleanup_hooks(env);
-  env->async_cleanup_hook_registered = false;
 }
 
 void UvExecute(uv_work_t* req) {
@@ -72,10 +88,12 @@ void UvAfterWork(uv_work_t* req, int status) {
 void napi_v8_run_async_cleanup_hooks(napi_env env) {
   if (!CheckEnv(env)) return;
 
+  auto* state = GetEnvState(env);
+  if (state == nullptr) return;
+
   std::vector<napi_async_cleanup_hook_handle> pending;
-  pending.reserve(env->async_cleanup_hooks.size());
-  for (void* raw : env->async_cleanup_hooks) {
-    auto* handle = static_cast<napi_async_cleanup_hook_handle>(raw);
+  pending.reserve(state->async_cleanup_hooks.size());
+  for (auto* handle : state->async_cleanup_hooks) {
     if (handle != nullptr && !handle->removed) {
       pending.push_back(handle);
     }
@@ -89,11 +107,10 @@ void napi_v8_run_async_cleanup_hooks(napi_env env) {
 
   // Drive libuv callbacks queued by async cleanup hooks until hooks are removed.
   size_t guard = 0;
-  while (!env->async_cleanup_hooks.empty() && guard++ < 128) {
+  while (!state->async_cleanup_hooks.empty() && guard++ < 128) {
     uv_run(uv_default_loop(), UV_RUN_DEFAULT);
     bool any_left = false;
-    for (void* raw : env->async_cleanup_hooks) {
-      auto* handle = static_cast<napi_async_cleanup_hook_handle>(raw);
+    for (auto* handle : state->async_cleanup_hooks) {
       if (handle != nullptr && !handle->removed) {
         any_left = true;
         break;
@@ -102,11 +119,10 @@ void napi_v8_run_async_cleanup_hooks(napi_env env) {
     if (!any_left) break;
   }
 
-  for (void* raw : env->async_cleanup_hooks) {
-    auto* handle = static_cast<napi_async_cleanup_hook_handle>(raw);
+  for (auto* handle : state->async_cleanup_hooks) {
     delete handle;
   }
-  env->async_cleanup_hooks.clear();
+  g_unode_env_state.erase(env);
 }
 
 extern "C" {
@@ -226,7 +242,6 @@ napi_status NAPI_CDECL napi_create_threadsafe_function(
   tsfn->finalize_data = thread_finalize_data;
   tsfn->context = context;
   tsfn->refcount.store(static_cast<uint32_t>(initial_thread_count == 0 ? 1 : initial_thread_count));
-  env->threadsafe_functions.push_back(tsfn);
   *result = tsfn;
   return napi_ok;
 }
@@ -282,11 +297,12 @@ napi_status NAPI_CDECL napi_add_async_cleanup_hook(
     napi_async_cleanup_hook_handle* remove_handle) {
   auto* napiEnv = const_cast<napi_env>(env);
   if (!CheckEnv(napiEnv) || hook == nullptr) return napi_invalid_arg;
-  if (!napiEnv->async_cleanup_hook_registered) {
+  auto& state = GetOrCreateEnvState(napiEnv);
+  if (!state.async_cleanup_hook_registered) {
     napi_status status =
         napi_add_env_cleanup_hook(napiEnv, RunAsyncCleanupHooksOnEnvTeardown, napiEnv);
     if (status != napi_ok) return status;
-    napiEnv->async_cleanup_hook_registered = true;
+    state.async_cleanup_hook_registered = true;
   }
 
   auto* handle = new (std::nothrow) napi_async_cleanup_hook_handle__();
@@ -295,7 +311,7 @@ napi_status NAPI_CDECL napi_add_async_cleanup_hook(
   handle->hook = hook;
   handle->arg = arg;
 
-  napiEnv->async_cleanup_hooks.push_back(handle);
+  state.async_cleanup_hooks.push_back(handle);
   if (remove_handle != nullptr) *remove_handle = handle;
   return napi_ok;
 }
@@ -307,7 +323,9 @@ napi_status NAPI_CDECL napi_remove_async_cleanup_hook(
   remove_handle->removed = true;
 
   auto* env = remove_handle->env;
-  auto& hooks = env->async_cleanup_hooks;
+  auto* state = GetEnvState(env);
+  if (state == nullptr) return napi_invalid_arg;
+  auto& hooks = state->async_cleanup_hooks;
   for (auto it = hooks.begin(); it != hooks.end(); ++it) {
     if (*it == remove_handle) {
       hooks.erase(it);
@@ -315,9 +333,9 @@ napi_status NAPI_CDECL napi_remove_async_cleanup_hook(
     }
   }
   delete remove_handle;
-  if (hooks.empty() && env->async_cleanup_hook_registered) {
+  if (hooks.empty() && state->async_cleanup_hook_registered) {
     napi_remove_env_cleanup_hook(env, RunAsyncCleanupHooksOnEnvTeardown, env);
-    env->async_cleanup_hook_registered = false;
+    g_unode_env_state.erase(env);
   }
   return napi_ok;
 }

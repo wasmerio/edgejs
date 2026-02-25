@@ -8,24 +8,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(UNODE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(NAPI_V8_ROOT "${UNODE_ROOT}/../napi-v8")
 set(NAPI_V8_NODE_ROOT "${UNODE_ROOT}/../node")
-set(UNODE_V8_MONOLITH_LIB_DEFAULT "")
-if(DEFINED ENV{NAPI_V8_V8_LIBRARY})
-  set(UNODE_V8_MONOLITH_LIB_DEFAULT "$ENV{NAPI_V8_V8_LIBRARY}")
-elseif(DEFINED ENV{NAPI_V8_V8_MONOLITH_LIB})
-  set(UNODE_V8_MONOLITH_LIB_DEFAULT "$ENV{NAPI_V8_V8_MONOLITH_LIB}")
-endif()
-set(UNODE_V8_MONOLITH_LIB
-  "${UNODE_V8_MONOLITH_LIB_DEFAULT}"
-  CACHE FILEPATH "Path to V8 runtime library (monolith or dylib)"
-)
-set(UNODE_V8_EXTRA_LIBS_DEFAULT "")
-if(DEFINED ENV{NAPI_V8_V8_EXTRA_LIBS})
-  set(UNODE_V8_EXTRA_LIBS_DEFAULT "$ENV{NAPI_V8_V8_EXTRA_LIBS}")
-endif()
-set(UNODE_V8_EXTRA_LIBS
-  "${UNODE_V8_EXTRA_LIBS_DEFAULT}"
-  CACHE STRING "Semicolon-separated extra V8 libraries (e.g. libplatform/libbase)"
-)
 
 # Hard gate: unode runtime/library sources must never directly reference V8.
 file(GLOB_RECURSE UNODE_PURE_SRC_FILES
@@ -58,9 +40,7 @@ add_library(unode_node_api STATIC
 
 target_include_directories(unode_node_api
   PRIVATE
-    "${NAPI_V8_ROOT}/src"
     "${NAPI_V8_ROOT}/include"
-    "${NAPI_V8_V8_INCLUDE_DIR}"
     "${NAPI_V8_UV_INCLUDE_DIR}"
 )
 
@@ -96,26 +76,14 @@ if(UNODE_BUILD_CLI)
     PRIVATE
       "${UNODE_ROOT}/src"
       "${NAPI_V8_ROOT}/include"
-      "${NAPI_V8_V8_INCLUDE_DIR}"
   )
   target_link_libraries(unode
     PRIVATE
       unode_runtime
       napi_v8
-      "${UNODE_V8_MONOLITH_LIB}"
   )
-  if(UNODE_V8_EXTRA_LIBS)
-    target_link_libraries(unode PRIVATE ${UNODE_V8_EXTRA_LIBS})
-  endif()
   if(NAPI_V8_V8_DEFINES)
     target_compile_definitions(unode PRIVATE ${NAPI_V8_V8_DEFINES})
-  endif()
-  if(UNODE_V8_MONOLITH_LIB)
-    get_filename_component(UNODE_V8_LIB_DIR "${UNODE_V8_MONOLITH_LIB}" DIRECTORY)
-    set_target_properties(unode PROPERTIES
-      BUILD_RPATH "${UNODE_V8_LIB_DIR}"
-      INSTALL_RPATH "${UNODE_V8_LIB_DIR}"
-    )
   endif()
 endif()
 

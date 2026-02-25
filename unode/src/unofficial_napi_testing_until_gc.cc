@@ -1,7 +1,7 @@
 #include <limits>
 #include <string>
 
-#include "napi_v8_platform.h"
+#include "napi_v8_unofficial_testing.h"
 
 #include "unofficial_napi_testing_until_gc.h"
 
