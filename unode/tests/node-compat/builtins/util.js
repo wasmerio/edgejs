@@ -13,12 +13,47 @@ function formatValue(value, opts, depth) {
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
   if (typeof value === 'symbol') return value.toString();
   if (typeof value === 'function') return '[Function' + (value.name ? ': ' + value.name : '') + ']';
+  if (typeof Buffer === 'function' && Buffer.isBuffer && Buffer.isBuffer(value)) {
+    let inspectMax = typeof Buffer.INSPECT_MAX_BYTES === 'number' ? Buffer.INSPECT_MAX_BYTES : value.length;
+    try {
+      const bufferMod = require('buffer');
+      if (bufferMod && typeof bufferMod.INSPECT_MAX_BYTES === 'number') {
+        inspectMax = bufferMod.INSPECT_MAX_BYTES;
+      }
+    } catch {}
+    const max = Number.isInteger(inspectMax) ? inspectMax : value.length;
+    const len = Math.min(value.length, Math.max(0, max));
+    const parts = [];
+    for (let i = 0; i < len; i++) {
+      parts.push(value[i].toString(16).padStart(2, '0'));
+    }
+    const remaining = value.length - len;
+    const suffix = remaining > 0 ? ` ... ${remaining} more ${remaining === 1 ? 'byte' : 'bytes'}` : '';
+    const extraKeys = Object.keys(value).filter((k) => {
+      const n = Number(k);
+      return !Number.isInteger(n) || String(n) !== k;
+    });
+    const props = extraKeys.length
+      ? extraKeys.map((k) => `${k}: ${formatValue(value[k], opts, depth + 1)}`).join(', ')
+      : '';
+    const bytesPart = `${parts.join(' ')}${suffix}`.trim();
+    if (bytesPart && props) return `<Buffer ${bytesPart}, ${props}>`;
+    if (bytesPart) return `<Buffer ${bytesPart}>`;
+    if (props) return `<Buffer ${props}>`;
+    return '<Buffer >';
+  }
   if (value && typeof value === 'object' && opts.customInspect !== false && typeof value[inspectCustom] === 'function') {
     return String(value[inspectCustom]());
   }
   if (Array.isArray(value)) {
     if (opts.depth !== undefined && depth >= opts.depth) return '[Array]';
     return '[ ' + value.map(function (v) { return formatValue(v, opts, depth + 1); }).join(', ') + ' ]';
+  }
+  if (ArrayBuffer.isView(value) && !(typeof Buffer === 'function' && Buffer.isBuffer && Buffer.isBuffer(value))) {
+    if (typeof value.length === 'number' && value.length === 0) {
+      const ctor = value.constructor && value.constructor.name ? value.constructor.name : 'TypedArray';
+      return `${ctor}(0) []`;
+    }
   }
   if (typeof value === 'object') {
     if (opts.depth !== undefined && depth >= opts.depth) return '[Object]';
@@ -77,3 +112,27 @@ module.exports = {
   format,
 };
 module.exports.inspect.custom = inspectCustom;
+module.exports.inspect.defaultOptions = {
+  maxArrayLength: Infinity,
+};
+
+class TextEncoder {
+  encode(input = '') {
+    return Buffer.from(String(input), 'utf8');
+  }
+}
+
+class TextDecoder {
+  constructor(encoding = 'utf-8') {
+    this.encoding = String(encoding || 'utf-8').toLowerCase();
+  }
+  decode(input) {
+    const bytes = Buffer.from(input || []);
+    return bytes.toString(this.encoding === 'utf-8' ? 'utf8' : this.encoding);
+  }
+}
+
+module.exports.TextEncoder = TextEncoder;
+module.exports.TextDecoder = TextDecoder;
+if (typeof globalThis.TextEncoder !== 'function') globalThis.TextEncoder = TextEncoder;
+if (typeof globalThis.TextDecoder !== 'function') globalThis.TextDecoder = TextDecoder;

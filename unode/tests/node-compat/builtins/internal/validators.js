@@ -48,11 +48,14 @@ function validateBoolean(value, name) {
 }
 
 function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
-  if (!Number.isInteger(value)) {
+  if (typeof value !== 'number') {
     throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
   }
+  if (!Number.isInteger(value)) {
+    throw new ERR_OUT_OF_RANGE(name, 'an integer', value);
+  }
   if (value < min || value > max) {
-    throw new ERR_INVALID_ARG_VALUE(name, value);
+    throw new ERR_OUT_OF_RANGE(name, `>= ${min} && <= ${max}`, value);
   }
 }
 
@@ -65,13 +68,47 @@ function validateInt32(value, name, min = -2147483648, max = 2147483647) {
   }
 }
 
+function validateArray(value, name) {
+  if (!Array.isArray(value)) {
+    throw new ERR_INVALID_ARG_TYPE(name, ['Array'], value);
+  }
+}
+
+function validateBuffer(value, name = 'buffer') {
+  const isBufferLike = value != null &&
+    typeof value === 'object' &&
+    typeof value.byteLength === 'number' &&
+    (typeof value.length === 'number' || ArrayBuffer.isView(value));
+  if (!isBufferLike) {
+    throw new ERR_INVALID_ARG_TYPE(name, ['Buffer', 'TypedArray', 'DataView'], value);
+  }
+}
+
+function validateNumber(value, name, min, max) {
+  if (typeof value !== 'number') {
+    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  }
+  if ((min !== undefined || max !== undefined) && !Number.isFinite(value)) {
+    throw new ERR_OUT_OF_RANGE(name, 'a finite number', value);
+  }
+  if (min !== undefined && value < min) {
+    throw new ERR_OUT_OF_RANGE(name, `>= ${min}`, value);
+  }
+  if (max !== undefined && value > max) {
+    throw new ERR_OUT_OF_RANGE(name, `<= ${max}`, value);
+  }
+}
+
 module.exports = {
+  validateArray,
   validateObject,
   validateAbortSignal,
   validateBoolean,
+  validateBuffer,
   validateFunction,
   validateInt32,
   validateInteger,
+  validateNumber,
   validateString,
   validateUint32,
 };

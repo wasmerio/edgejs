@@ -16,6 +16,7 @@ extern char** environ;
 #endif
 
 #include "unode_fs.h"
+#include "unode_buffer.h"
 #include "unode_encoding.h"
 #include "unode_module_loader.h"
 #include "unode_os.h"
@@ -346,6 +347,7 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
     return 1;
   }
   UnodeInstallFsBinding(env);
+  UnodeInstallBufferBinding(env);
   UnodeInstallOsBinding(env);
   UnodeInstallEncodingBinding(env);
   status = UnodeInstallModuleLoader(env, entry_script_path);
@@ -379,6 +381,10 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "    process.nextTick(function(){ if (process.stderr && typeof process.stderr.write === 'function') process.stderr.write(text + '\\n'); });"
       "  };"
       "}"
+      "if (typeof process.on !== 'function') process.on = function(){ return process; };"
+      "if (typeof process.addListener !== 'function') process.addListener = process.on;"
+      "if (typeof process.removeListener !== 'function') process.removeListener = function(){ return process; };"
+      "if (typeof process.once !== 'function') process.once = process.on;"
       "if (typeof process.platform !== 'string') process.platform = 'darwin';"
       "if (typeof process.exit !== 'function') process.exit = function(){};"
       "})();";
@@ -443,9 +449,22 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "if (typeof globalThis.queueMicrotask === 'undefined') {"
       "  globalThis.queueMicrotask = function(f) { if (typeof f === 'function') f(); };"
       "}"
-      "if (typeof globalThis.structuredClone === 'undefined') {"
-      "  globalThis.structuredClone = function(v) { return JSON.parse(JSON.stringify(v)); };"
-      "}"
+      "globalThis.__unode_detached_arraybuffers = globalThis.__unode_detached_arraybuffers || new WeakSet();"
+      "var __unode_original_structuredClone = globalThis.structuredClone;"
+      "globalThis.structuredClone = function(v, options) {"
+      "  if (options && options.transfer && typeof options.transfer.length === 'number') {"
+      "    for (var i = 0; i < options.transfer.length; i++) {"
+      "      var t = options.transfer[i];"
+      "      if (t && Object.prototype.toString.call(t) === '[object ArrayBuffer]') {"
+      "        globalThis.__unode_detached_arraybuffers.add(t);"
+      "      }"
+      "    }"
+      "  }"
+      "  if (typeof __unode_original_structuredClone === 'function') {"
+      "    return __unode_original_structuredClone(v, options);"
+      "  }"
+      "  return JSON.parse(JSON.stringify(v));"
+      "};"
       "if (typeof globalThis.fetch === 'undefined') {"
       "  globalThis.fetch = function() { return Promise.reject(new Error('fetch not implemented')); };"
       "}"
@@ -455,6 +474,14 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "    this.href = String(u);"
       "    this.pathname = (u && u.pathname) ? u.pathname : '';"
       "  };"
+      "}"
+      "if (typeof globalThis.Buffer !== 'function') {"
+      "  try {"
+      "    var __bufferMod = require('buffer');"
+      "    if (__bufferMod && typeof __bufferMod.Buffer === 'function') {"
+      "      globalThis.Buffer = __bufferMod.Buffer;"
+      "    }"
+      "  } catch (_) {}"
       "}"
       "if (typeof globalThis.Buffer === 'undefined') {"
       "  function __encodeUtf8(s){var u=[],i=0,c;while(i<s.length){c=s.charCodeAt(i++);"
@@ -694,6 +721,27 @@ napi_status UnodeInstallProcessObject(napi_env env) {
     return (status == napi_ok) ? napi_generic_failure : status;
   }
   status = napi_set_named_property(env, process_obj, "on", on_fn);
+  if (status != napi_ok) {
+    return status;
+  }
+  status = napi_set_named_property(env, process_obj, "addListener", on_fn);
+  if (status != napi_ok) {
+    return status;
+  }
+  status = napi_set_named_property(env, process_obj, "once", on_fn);
+  if (status != napi_ok) {
+    return status;
+  }
+  napi_value remove_listener_fn = nullptr;
+  status = napi_create_function(env, "removeListener", NAPI_AUTO_LENGTH, [](napi_env env, napi_callback_info info) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }, nullptr, &remove_listener_fn);
+  if (status != napi_ok || remove_listener_fn == nullptr) {
+    return (status == napi_ok) ? napi_generic_failure : status;
+  }
+  status = napi_set_named_property(env, process_obj, "removeListener", remove_listener_fn);
   if (status != napi_ok) {
     return status;
   }

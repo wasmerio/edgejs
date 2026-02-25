@@ -2,6 +2,17 @@
 
 const isWindows = typeof process !== 'undefined' && process.platform === 'win32';
 const kEmptyObject = Object.freeze({ __proto__: null });
+const customInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+const kIsEncodingSymbol = Symbol('kIsEncodingSymbol');
+const encodingsMap = Object.freeze({
+  utf8: 1,
+  utf16le: 2,
+  latin1: 3,
+  ascii: 4,
+  base64: 5,
+  base64url: 6,
+  hex: 7,
+});
 
 function getLazy(initializer) {
   let initialized = false;
@@ -70,11 +81,60 @@ function getCIDR(address, netmask, family) {
   return null;
 }
 
+function normalizeEncoding(enc) {
+  if (enc == null) return 'utf8';
+  const key = String(enc).toLowerCase();
+  if (key === 'utf8' || key === 'utf-8') return 'utf8';
+  if (key === 'ucs2' || key === 'ucs-2' || key === 'utf16le' || key === 'utf-16le') return 'utf16le';
+  if (key === 'latin1' || key === 'binary') return 'latin1';
+  if (key === 'ascii') return 'ascii';
+  if (key === 'base64') return 'base64';
+  if (key === 'base64url') return 'base64url';
+  if (key === 'hex') return 'hex';
+  return undefined;
+}
+
+function defineLazyProperties(target, source, keys) {
+  for (const key of keys) {
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        const value = source[key];
+        Object.defineProperty(target, key, {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value,
+        });
+        return value;
+      },
+    });
+  }
+}
+
+function deprecate(fn) {
+  return fn;
+}
+
+function lazyDOMException(message, name) {
+  const err = new Error(message);
+  err.name = name || 'DOMException';
+  return err;
+}
+
 module.exports = {
   getLazy,
   isWindows,
   assignFunctionName,
+  customInspectSymbol,
+  defineLazyProperties,
+  deprecate,
+  encodingsMap,
   kEmptyObject,
+  kIsEncodingSymbol,
+  lazyDOMException,
   getCIDR,
+  normalizeEncoding,
   promisify,
 };

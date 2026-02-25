@@ -1,102 +1,98 @@
 'use strict';
 
-const BufferObj = globalThis.Buffer || {};
-const encodingBinding = globalThis.__unode_encoding || null;
+const path = require('path');
+const { internalBinding, primordials } = require('internal/test/binding');
 
-function isUint8Array(value) {
-  return value && typeof value === 'object' && value.buffer instanceof ArrayBuffer &&
-    typeof value.byteLength === 'number' && typeof value.length === 'number';
+if (typeof globalThis.internalBinding !== 'function') {
+  globalThis.internalBinding = internalBinding;
+}
+if (!globalThis.primordials) {
+  globalThis.primordials = primordials;
 }
 
-function attachBufferLikeMethods(view) {
-  if (!isUint8Array(view)) return view;
-  if (!view.equals) {
-    Object.defineProperty(view, 'equals', {
-      configurable: true,
-      value(other) {
-        if (!isUint8Array(other) || this.length !== other.length) return false;
-        for (let i = 0; i < this.length; i++) {
-          if (this[i] !== other[i]) return false;
-        }
-        return true;
-      },
-    });
+const exported = require(path.resolve(__dirname, '../../../../node/lib/buffer.js'));
+const { Buffer } = exported;
+
+function isDetachedArrayBuffer(input) {
+  const ab = input instanceof ArrayBuffer ? input :
+    (ArrayBuffer.isView(input) ? input.buffer : null);
+  return !!(ab && globalThis.__unode_detached_arraybuffers &&
+    globalThis.__unode_detached_arraybuffers.has(ab));
+}
+
+function makeInvalidStateError() {
+  const err = new Error('The ArrayBuffer is detached');
+  err.name = 'TypeError';
+  err.code = 'ERR_INVALID_STATE';
+  return err;
+}
+
+if (typeof Buffer.isUtf8 === 'function') {
+  const originalIsUtf8 = Buffer.isUtf8;
+  Buffer.isUtf8 = function isUtf8(input) {
+    if (isDetachedArrayBuffer(input)) throw makeInvalidStateError();
+    return originalIsUtf8(input);
+  };
+}
+
+if (typeof Buffer.isAscii === 'function') {
+  const originalIsAscii = Buffer.isAscii;
+  Buffer.isAscii = function isAscii(input) {
+    if (isDetachedArrayBuffer(input)) throw makeInvalidStateError();
+    return originalIsAscii(input);
+  };
+}
+
+function validateIsEncodingInput(input) {
+  const isAB = input instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && input instanceof SharedArrayBuffer);
+  const isView = ArrayBuffer.isView(input);
+  if (!isAB && !isView) {
+    const err = new TypeError(
+      'The "input" argument must be an instance of ArrayBuffer, Buffer, or ArrayBufferView.'
+    );
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
   }
-  Object.defineProperty(view, 'toString', {
-    configurable: true,
-    value(enc) {
-      const encoding = enc == null ? 'utf8' : String(enc).toLowerCase();
-      if (encodingBinding && typeof encodingBinding.encodeBase64 === 'function') {
-        if (encoding === 'base64') return encodingBinding.encodeBase64(this, false);
-        if (encoding === 'base64url') return encodingBinding.encodeBase64(this, true).replace(/=+$/g, '');
-      }
-      if (encodingBinding && typeof encodingBinding.decodeUtf8 === 'function') {
-        if (encoding === 'utf8' || encoding === 'utf-8') return encodingBinding.decodeUtf8(this);
-      }
-      let out = '';
-      for (let i = 0; i < this.length; i++) out += String.fromCharCode(this[i]);
-      return out;
-    },
-  });
-  return view;
 }
 
-function base64ByteLength(str) {
-  let bytes = str.length;
-  if (bytes > 0 && str.charCodeAt(bytes - 1) === 0x3D) bytes--;
-  if (bytes > 1 && str.charCodeAt(bytes - 1) === 0x3D) bytes--;
-  return (bytes * 3) >>> 2;
-}
-
-if (encodingBinding && typeof encodingBinding.encodeUtf8 === 'function') {
-  const originalFrom = BufferObj.from;
-  BufferObj.from = function from(value, encoding) {
-    if (typeof value === 'string') {
-      const enc = encoding == null ? 'utf8' : String(encoding).toLowerCase();
-      if (enc === 'utf8' || enc === 'utf-8') {
-        return attachBufferLikeMethods(encodingBinding.encodeUtf8(value));
-      }
-      if ((enc === 'base64' || enc === 'base64url') && typeof encodingBinding.decodeBase64 === 'function') {
-        return attachBufferLikeMethods(encodingBinding.decodeBase64(value, enc === 'base64url'));
-      }
-    }
-    if (typeof originalFrom === 'function') {
-      return attachBufferLikeMethods(originalFrom.call(this, value, encoding));
-    }
-    if (value && typeof value.length === 'number') {
-      return attachBufferLikeMethods(new Uint8Array(value));
-    }
-    return attachBufferLikeMethods(new Uint8Array(0));
+if (typeof exported.isUtf8 === 'function') {
+  const original = exported.isUtf8;
+  exported.isUtf8 = function isUtf8(input) {
+    validateIsEncodingInput(input);
+    if (isDetachedArrayBuffer(input)) throw makeInvalidStateError();
+    return original(input);
   };
 }
 
-if (encodingBinding && typeof encodingBinding.utf8ByteLength === 'function') {
-  BufferObj.byteLength = function byteLength(value, encoding) {
-    if (typeof value === 'string') {
-      const enc = encoding == null ? 'utf8' : String(encoding).toLowerCase();
-      if (enc === 'utf8' || enc === 'utf-8') return encodingBinding.utf8ByteLength(value);
-      if (enc === 'base64' || enc === 'base64url') {
-        return base64ByteLength(value);
-      }
+if (typeof exported.isAscii === 'function') {
+  const original = exported.isAscii;
+  exported.isAscii = function isAscii(input) {
+    validateIsEncodingInput(input);
+    if (isDetachedArrayBuffer(input)) throw makeInvalidStateError();
+    return original(input);
+  };
+}
+
+let inspectMaxBytes = typeof exported.INSPECT_MAX_BYTES === 'number' ? exported.INSPECT_MAX_BYTES : 50;
+Object.defineProperty(exported, 'INSPECT_MAX_BYTES', {
+  configurable: true,
+  enumerable: true,
+  get() {
+    return inspectMaxBytes;
+  },
+  set(value) {
+    if (typeof value !== 'number') {
+      const err = new TypeError('The "value" argument must be of type number');
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
     }
-    if (typeof value === 'string') return value.length;
-    if (value && value.byteLength !== undefined) return value.byteLength;
-    if (value && value.length !== undefined) return value.length;
-    return 0;
-  };
-}
+    if ((Number.isFinite(value) && value < 0) || Number.isNaN(value)) {
+      const err = new RangeError('The value of "value" is out of range');
+      err.code = 'ERR_OUT_OF_RANGE';
+      throw err;
+    }
+    inspectMaxBytes = Number.isFinite(value) ? Math.trunc(value) : value;
+  },
+});
 
-const originalAlloc = BufferObj.alloc;
-if (typeof originalAlloc === 'function') {
-  BufferObj.alloc = function alloc(size) {
-    return attachBufferLikeMethods(originalAlloc.call(this, size));
-  };
-}
-const originalAllocUnsafe = BufferObj.allocUnsafe;
-if (typeof originalAllocUnsafe === 'function') {
-  BufferObj.allocUnsafe = function allocUnsafe(size) {
-    return attachBufferLikeMethods(originalAllocUnsafe.call(this, size));
-  };
-}
-
-module.exports = { Buffer: BufferObj };
+module.exports = exported;
