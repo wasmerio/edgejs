@@ -248,6 +248,65 @@ napi_value GetCachedExportsFromJsCache(napi_env env, ModuleLoaderState* state, c
   return exports_value;
 }
 
+napi_value CreateResolvedPathString(napi_env env, const fs::path& resolved_path) {
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, resolved_path.string().c_str(), NAPI_AUTO_LENGTH, &out) != napi_ok || out == nullptr) {
+    return nullptr;
+  }
+  return out;
+}
+
+napi_value ResolveSpecifierForContext(napi_env env, RequireContext* context, const std::string& specifier, bool throw_on_error) {
+  fs::path resolved_path;
+  if (!ResolveModulePath(specifier, context->base_dir, &resolved_path)) {
+    if (throw_on_error) {
+      ThrowModuleNotFound(env, specifier);
+    }
+    return nullptr;
+  }
+  return CreateResolvedPathString(env, resolved_path);
+}
+
+napi_value RequireResolveCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  void* data = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, &data) != napi_ok || data == nullptr) {
+    return nullptr;
+  }
+  auto* context = static_cast<RequireContext*>(data);
+  if (context->state == nullptr) {
+    ThrowLoaderError(env, "Invalid require.resolve context");
+    return nullptr;
+  }
+  if (argc < 1 || argv[0] == nullptr) {
+    ThrowLoaderError(env, "Missing module specifier");
+    return nullptr;
+  }
+  const std::string specifier = ValueToUtf8(env, argv[0]);
+  if (specifier.empty()) {
+    ThrowLoaderError(env, "Empty module specifier");
+    return nullptr;
+  }
+
+  napi_value resolved_path = ResolveSpecifierForContext(env, context, specifier, false);
+  if (resolved_path != nullptr) {
+    return resolved_path;
+  }
+
+  // Node allows cached bare specifiers to resolve to themselves.
+  if (GetCachedExportsFromJsCache(env, context->state, specifier) != nullptr) {
+    napi_value key_value = nullptr;
+    if (napi_create_string_utf8(env, specifier.c_str(), NAPI_AUTO_LENGTH, &key_value) == napi_ok && key_value != nullptr) {
+      return key_value;
+    }
+    return nullptr;
+  }
+
+  ThrowModuleNotFound(env, specifier);
+  return nullptr;
+}
+
 napi_value CreateRequireFunction(napi_env env, RequireContext* context);
 
 bool EvaluateJsModule(napi_env env,
@@ -352,14 +411,23 @@ napi_value RequireCallback(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  fs::path resolved_path;
-  if (!ResolveModulePath(specifier, context->base_dir, &resolved_path)) {
-    ThrowModuleNotFound(env, specifier);
+  napi_value from_js_cache = GetCachedExportsFromJsCache(env, context->state, specifier);
+  if (from_js_cache != nullptr) {
+    return from_js_cache;
+  }
+
+  napi_value resolved_path_value = ResolveSpecifierForContext(env, context, specifier, true);
+  if (resolved_path_value == nullptr) {
+    return nullptr;
+  }
+  const std::string resolved_key = ValueToUtf8(env, resolved_path_value);
+  if (resolved_key.empty()) {
+    ThrowLoaderError(env, "Failed to resolve module path");
     return nullptr;
   }
 
-  const std::string resolved_key = resolved_path.string();
-  napi_value from_js_cache = GetCachedExportsFromJsCache(env, context->state, resolved_key);
+  fs::path resolved_path = fs::path(resolved_key);
+  from_js_cache = GetCachedExportsFromJsCache(env, context->state, resolved_key);
   if (from_js_cache != nullptr) {
     return from_js_cache;
   }
@@ -382,6 +450,14 @@ napi_value CreateRequireFunction(napi_env env, RequireContext* context) {
     return nullptr;
   }
   if (napi_set_named_property(env, require_fn, "cache", cache_obj) != napi_ok) {
+    return nullptr;
+  }
+  napi_value resolve_fn = nullptr;
+  if (napi_create_function(env, "resolve", NAPI_AUTO_LENGTH, RequireResolveCallback, context, &resolve_fn) != napi_ok ||
+      resolve_fn == nullptr) {
+    return nullptr;
+  }
+  if (napi_set_named_property(env, require_fn, "resolve", resolve_fn) != napi_ok) {
     return nullptr;
   }
   return require_fn;

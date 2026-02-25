@@ -59,6 +59,9 @@ if(NAPI_V8_V8_LIBRARY)
   add_unode_node_api_test(unode_test_2_module_loader_phase02
     "${UNODE_ROOT}/tests/runners/test_2_module_loader_phase02.cc"
   )
+  add_unode_node_api_test(unode_test_3_node_dropin_subset_phase02
+    "${UNODE_ROOT}/tests/runners/test_3_node_dropin_subset_phase02.cc"
+  )
 else()
   message(STATUS "Skipping unode node-api tests: set NAPI_V8_V8_LIBRARY for napi-v8 runtime linkage")
 endif()
