@@ -11,8 +11,37 @@ class Test3NodeDropinSubsetPhase02 : public FixtureTestBase {};
 namespace {
 
 int RunNodeCompatScript(napi_env env, const char* relative_path, std::string* error_out) {
-  const std::string script_path = std::string(NAPI_V8_ROOT_PATH) + "/tests/node-compat/" + relative_path;
-  return UnodeRunScriptFile(env, script_path.c_str(), error_out);
+  namespace fs = std::filesystem;
+  const std::string unode_root(NAPI_V8_ROOT_PATH);
+  fs::path unode_root_path(unode_root);
+  if (!unode_root_path.is_absolute()) {
+    fs::path search = fs::current_path();
+    const fs::path builtins_relative = unode_root_path / "tests" / "node-compat" / "builtins";
+    bool found = false;
+    for (; !search.empty() && search != search.parent_path(); search = search.parent_path()) {
+      fs::path candidate = (search / builtins_relative).lexically_normal();
+      if (fs::exists(candidate)) {
+        unode_root_path = fs::absolute(search / unode_root_path);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      unode_root_path = fs::absolute(fs::current_path().parent_path() / unode_root_path);
+    }
+  } else {
+    unode_root_path = fs::absolute(unode_root_path);
+  }
+  const std::string fallback_builtins =
+      (unode_root_path / "tests" / "node-compat" / "builtins").string();
+  const std::string script_path =
+      (unode_root_path / "tests" / "node-compat" / relative_path).string();
+  setenv("UNODE_FALLBACK_BUILTINS_DIR", fallback_builtins.c_str(), 1);
+  UnodeSetFallbackBuiltinsDir(fallback_builtins.c_str());
+  const int exit_code = UnodeRunScriptFile(env, script_path.c_str(), error_out);
+  UnodeSetFallbackBuiltinsDir(nullptr);
+  unsetenv("UNODE_FALLBACK_BUILTINS_DIR");
+  return exit_code;
 }
 
 // Run a Node test script from the node repo (raw drop-in). Uses UNODE_FALLBACK_BUILTINS_DIR

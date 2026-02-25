@@ -30,8 +30,9 @@ endforeach()
 set(NAPI_V8_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${NAPI_V8_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/napi-v8")
 
-set(NAPI_V8_UV_INCLUDE_DIR "${NAPI_V8_NODE_ROOT}/deps/uv/include")
-find_library(UNODE_UV_LIB NAMES uv libuv HINTS /opt/homebrew/lib /usr/local/lib)
+# Use Node's bundled libuv (same as Node) for consistent behavior (e.g. mkdtemp).
+set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+add_subdirectory("${NAPI_V8_NODE_ROOT}/deps/uv" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
 
 add_library(unode_node_api STATIC
   src/node_api.cc
@@ -41,16 +42,14 @@ add_library(unode_node_api STATIC
 target_include_directories(unode_node_api
   PRIVATE
     "${NAPI_V8_ROOT}/include"
-    "${NAPI_V8_UV_INCLUDE_DIR}"
 )
 
 target_link_libraries(unode_node_api
   PUBLIC
     napi_v8
+  PRIVATE
+    uv_a
 )
-if(UNODE_UV_LIB)
-  target_link_libraries(unode_node_api PRIVATE "${UNODE_UV_LIB}")
-endif()
 
 add_library(unode_runtime STATIC
   src/unode_runtime.cc
@@ -62,16 +61,14 @@ target_include_directories(unode_runtime
     "${UNODE_ROOT}/src"
   PRIVATE
     "${NAPI_V8_ROOT}/include"
-    "${NAPI_V8_UV_INCLUDE_DIR}"
 )
 target_link_libraries(unode_runtime
   PUBLIC
     napi_v8
     unode_node_api
+  PRIVATE
+    uv_a
 )
-if(UNODE_UV_LIB)
-  target_link_libraries(unode_runtime PRIVATE "${UNODE_UV_LIB}")
-endif()
 
 add_library(unode_cli STATIC
   src/unode_cli.cc

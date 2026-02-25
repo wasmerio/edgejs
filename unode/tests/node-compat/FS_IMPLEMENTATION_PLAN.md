@@ -9,15 +9,17 @@ Goal: implement the Node.js `fs` module fully enough to run Node's own fs tests 
 ### C++ binding (`unode_fs.h` / `unode_fs.cc`)
 
 - **Installed as:** `globalThis.__unode_fs`
-- **Methods:** `readFileUtf8(path, flags)`, `writeFileUtf8(path, data, flags, mode)`, `mkdir(path, mode, recursive)`, `rmSync(path, maxRetries, recursive, retryDelay)`, `readdir(path, withFileTypes)`, `realpath(path)`
+- **Methods:** `readFileUtf8`, `writeFileUtf8`, `mkdir`, `rmSync`, `readdir`, `realpath`, `stat`, `lstat`, `fstat`, `existsSync`, `access`, `open`, `close`, `readSync`, `writeSync`, `rename`, `unlink`, `rmdir`, `truncate`, `ftruncate`, `copyFile`, `readlink`, `symlink`, `chmod`, `fchmod`, `utimes`, `futimes`, `lutimes`, `fsync`, `mkdtemp` (and others as in Node binding).
+- **libuv:** Node’s bundled libuv (`deps/uv`) is used so behavior (e.g. mkdtemp template) matches Node.
 - **Error reporting:** `ThrowUVException`, `ThrowErrnoException` (code, errno, syscall, path on error object)
-- **Constants:** O_* flags, UV_DIRENT_* types, exposed on the binding object
+- **Constants:** O_* flags, UV_DIRENT_* types, S_IF* for Stats, copyfile flags, etc., exposed on the binding object
 
 ### JS builtin (`builtins/fs.js`)
 
-- **Exports:** `readFileSync`, `writeFileSync`, `mkdirSync`, `rmSync`, `readdirSync`, `realpathSync`, `constants`, `Dirent`
-- **Helpers:** `getValidatedPath`, `getOptions`, `stringToFlags`, `parseFileMode`, `validateRmOptionsSync`, `Dirent` class (with `isFile`, `isDirectory`, etc.)
-- **Limitations:** UTF-8 only for read/write; no `openSync`/`closeSync`; no `stat`/`lstat`/`fstat`; no `Stats`; no `existsSync`; no `accessSync`; no Buffer support; no async APIs
+- **Exports:** `readFileSync`, `writeFileSync`, `mkdirSync`, `rmSync`, `readdirSync`, `realpathSync`, `constants`, `Dirent`, `Stats`, `statSync`, `lstatSync`, `fstatSync`, `existsSync`, `accessSync`, `openSync`, `closeSync`, `readSync`, `writeSync`, `renameSync`, `unlinkSync`, `rmdirSync`, `truncateSync`, `ftruncateSync`, `copyFileSync`, `appendFileSync`, `readlinkSync`, `symlinkSync`, `chmodSync`, `fchmodSync`, `utimesSync`, `futimesSync`, `lutimes`, `fsync`, `mkdtempSync`, `mkdtemp`, and async variants where listed in Phase D.
+- **Helpers:** `getValidatedPath` (accepts string, Buffer, Uint8Array, URL; decodes Buffer/Uint8Array as UTF-8 via `decodeUtf8FromBytes`; Buffer branch uses `.toString('utf8')`), `getOptions`, `stringToFlags`, `parseFileMode`, `validateRmOptionsSync`, `Dirent`, `Stats` (from binding stat array).
+- **Encoding / mkdtemp:** Prefix is normalized with `String(prefix).normalize('NFC')` before calling the binding so basename length matches Node across URL/Buffer input. Minimal `TextEncoder` polyfill on `globalThis` when missing (for tests using `encoder.encode()`).
+- **Limitations:** UTF-8 only for read/write; async APIs use setImmediate-style scheduling; no streams.
 
 ---
 
@@ -179,26 +181,27 @@ Location: `node/test/parallel/test-fs-*.js`.
 
 ---
 
-### Phase D: Symlinks, chmod, utimes, mkdtemp (optional)
+### Phase D: Symlinks, chmod, utimes, mkdtemp
 
 **C++ (implemented)**
 
-- `readlink`, `symlink` (with UV_FS_SYMLINK_DIR / UV_FS_SYMLINK_JUNCTION constants), `chmod`, `fchmod`, `utimes`, `futimes`, `mkdtemp` in `unode_fs.cc`; all use libuv sync API and throw via `ThrowUVException` on error.
+- `readlink`, `symlink` (with UV_FS_SYMLINK_DIR / UV_FS_SYMLINK_JUNCTION), `chmod`, `fchmod`, `utimes`, `futimes`, `lutimes`, `fsync`, `mkdtemp` in `unode_fs.cc`; all use libuv sync API and throw via `ThrowUVException`. libuv is **bundled** (Node’s `deps/uv`) so mkdtemp behavior matches Node. mkdtemp binding appends exactly `"XXXXXX"` to the prefix (no stripping), matching Node’s C++ layer.
 
 **JS (implemented)**
 
-- `readlinkSync`, `readlink`, `symlinkSync`, `symlink`, `chmodSync`, `chmod`, `fchmodSync`, `fchmod`, `utimesSync`, `utimes`, `futimesSync`, `mkdtempSync`, `mkdtemp`; `_toUnixTimestamp` for tests; symlink type → flags via `symlinkTypeToFlags`; mkdtemp appends `XXXXXX` if missing.
-- Path builtin: `dirname`, `basename` added for Phase D tests.
-- Common: `canCreateSymLink()` added (returns true).
-- `getValidatedPath` accepts Buffer-like / Uint8Array and file URL (strip `file://`).
+- `readlinkSync`, `readlink`, `symlinkSync`, `symlink`, `chmodSync`, `chmod`, `fchmodSync`, `fchmod`, `utimesSync`, `utimes`, `futimesSync`, `futimes`, `lutimes`, `fsync`, `mkdtempSync`, `mkdtemp`; `_toUnixTimestamp` for tests; symlink type → flags via `symlinkTypeToFlags`. mkdtemp: prefix is normalized with `String(prefix).normalize('NFC')` before calling the binding so basename length is consistent for string, URL, Buffer, and Uint8Array input (Node test expects `Buffer.byteLength(basename) === 12` for `\u0222abc.XXXXXX`).
+- Path builtin: `dirname`, `basename` for Phase D tests.
+- Common: `canCreateSymLink()` (returns true).
+- `getValidatedPath`: accepts Buffer (`.toString('utf8')`), Uint8Array/ArrayBufferView (UTF-8 via `decodeUtf8FromBytes` or `TextDecoder`), file URL (pathname, strip `file://`). Ensures UTF-8 decoding so mkdtemp never receives Latin-1–decoded bytes (e.g. Ȣ → È¢).
+- `TextEncoder` polyfill on `globalThis` when missing so Node’s test-fs-mkdtemp.js Uint8Array block (`encoder.encode(...)`) runs.
 
-**Raw Node tests in runner**
+**Raw Node tests in runner (all passing)**
 
-- `RawFsMkdtempFromNodeTest` (test-fs-mkdtemp.js) – may fail on basename length assertion (14 vs 12) due to platform.
-- `RawFsReadlinkTypeCheckFromNodeTest` (test-fs-readlink-type-check.js) – **passing**.
-- `RawFsSymlinkFromNodeTest` (test-fs-symlink.js) – needs `assert.rejects` in assert builtin.
-- `RawFsChmodFromNodeTest` (test-fs-chmod.js) – needs error message shape (path argument name).
-- `RawFsUtimesFromNodeTest` (test-fs-utimes.js) – needs `util.inspect` in util builtin.
+- `RawFsMkdtempFromNodeTest` (test-fs-mkdtemp.js)
+- `RawFsReadlinkTypeCheckFromNodeTest` (test-fs-readlink-type-check.js)
+- `RawFsSymlinkFromNodeTest` (test-fs-symlink.js)
+- `RawFsChmodFromNodeTest` (test-fs-chmod.js)
+- `RawFsUtimesFromNodeTest` (test-fs-utimes.js)
 
 **Tests (Node)**
 
@@ -217,7 +220,7 @@ Location: `node/test/parallel/test-fs-*.js`.
 
 1. **Unode-owned tests** – Add small unit tests under `unode/tests/` that call our fs builtin directly (e.g. readFileSync, writeFileSync, statSync, existsSync) and assert behavior. These don’t require Node’s test harness.
 2. **Node test copy / subset** – Optionally copy a few Node tests into `unode/tests/node-compat/parallel/` (e.g. test-fs-exists-sync-subset.js) that use only our implemented APIs and our common.
-3. **Raw Node tests** – Once Phase A/B are done, add more raw CTest cases (like RawRequireDotFromNodeTest) that run `node/test/parallel/test-fs-exists.js`, `test-fs-stat.js`, `test-fs-write-sync.js`, etc., with `UNODE_FALLBACK_BUILTINS_DIR` and `NODE_TEST_DIR`. Fix any small differences (e.g. error messages, optional options).
+3. **Raw Node tests** – CTest cases (e.g. RawFsMkdtempFromNodeTest) run Node’s `node/test/parallel/test-fs-*.js` with `UNODE_FALLBACK_BUILTINS_DIR` and `NODE_TEST_DIR`. **RunNodeCompatScript** (in the phase02 runner) resolves the unode root, sets `UnodeSetFallbackBuiltinsDir` to `node-compat/builtins`, and runs the script by absolute path so compat scripts (e.g. ModuleLoadingSubsetTest) resolve `assert`, `path`, `fs` from the fallback builtins regardless of cwd.
 4. **CI** – Run the chosen fs tests in CI when `NAPI_V8_NODE_ROOT_PATH` is set.
 
 ---
@@ -239,6 +242,7 @@ Location: `node/test/parallel/test-fs-*.js`.
 1. **Phase A** – Implement stat/lstat/fstat (C++), Stats (JS), existsSync, accessSync. Add RawFsExistsFromNodeTest and RawFsStatFromNodeTest.
 2. **Phase B** – Implement openSync, closeSync, readSync, writeSync (C++ + JS). Add RawFsWriteSyncFromNodeTest, RawFsReaddirFromNodeTest.
 3. **Phase C** – Implement renameSync, unlinkSync, rmdirSync, truncateSync, ftruncateSync, copyFileSync, appendFileSync. All Phase C raw tests in the runner pass (rename, unlink, truncate, copyfile, append-file-sync); rmdir has no raw test in the runner yet.
-4. **Phase D/E** – As needed for additional Node tests or compatibility.
+4. **Phase D** – Symlinks, chmod, utimes, mkdtemp, lutimes, fsync. **Done:** all Phase D raw tests pass (mkdtemp, readlink, symlink, chmod, utimes). mkdtemp matches Node via bundled libuv, NFC-normalized prefix in JS, and correct UTF-8 decoding in getValidatedPath; assert.rejects, util.inspect, and chmod error message shape are in builtins/common.
+5. **Phase E** – Async APIs and streams as needed for additional Node tests or compatibility.
 
 This plan gets you to a fully tested, Node-aligned fs implementation in stages, with clear reference to Node’s implementation and tests.
