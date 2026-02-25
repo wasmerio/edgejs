@@ -78,14 +78,21 @@ function formatValue(value, opts, depth) {
     }
   }
   if (typeof value === 'object') {
-    if (opts.depth !== undefined && depth >= opts.depth) return '[Object]';
+    if (opts.depth !== undefined && depth >= opts.depth) {
+      if (value && value.constructor && value.constructor.name) {
+        return value.constructor.name;
+      }
+      return '[Object]';
+    }
     const keys = Object.keys(value);
-    if (keys.length === 0) return '{}';
+    const ctorName = value && value.constructor && value.constructor.name ? value.constructor.name : '';
+    const open = ctorName && ctorName !== 'Object' ? `${ctorName} {` : '{';
+    if (keys.length === 0) return `${open}}`;
     const parts = keys.map(function(k) {
       const key = IDENTIFIER_RE.test(k) ? k : quoteString(k);
       return key + ': ' + formatValue(value[k], opts, depth + 1);
     });
-    return formatEntries('{', '}', parts, depth, opts);
+    return formatEntries(open, '}', parts, depth, opts);
   }
   return String(value);
 }
@@ -130,9 +137,19 @@ function format(fmt) {
   return out;
 }
 
+function inherits(ctor, superCtor) {
+  if (ctor == null || superCtor == null) {
+    throw new TypeError('The constructor arguments must be provided');
+  }
+  ctor.super_ = superCtor;
+  Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+  Object.setPrototypeOf(ctor, superCtor);
+}
+
 module.exports = {
   inspect,
   format,
+  inherits,
 };
 module.exports.inspect.custom = inspectCustom;
 module.exports.inspect.defaultOptions = {

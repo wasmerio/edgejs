@@ -1265,3 +1265,25 @@ module.exports = {
   Dir,
 };
 module.exports.rename = rename;
+
+function promisifyFs(fn) {
+  return (...args) => new Promise((resolve, reject) => {
+    fn(...args, (err, value) => {
+      if (err) return reject(err);
+      return resolve(value);
+    });
+  });
+}
+
+module.exports.promises = {
+  symlink: promisifyFs(symlink),
+  readlink: promisifyFs(readlink),
+  stat: promisifyFs(stat),
+  lstat: promisifyFs(lstat),
+  utimes: promisifyFs(utimes),
+  chmod: promisifyFs(chmod),
+  unlink: promisifyFs(unlink),
+  copyFile: promisifyFs(copyFile),
+  mkdtemp: promisifyFs(mkdtemp),
+  readdir: promisifyFs(readdir),
+};

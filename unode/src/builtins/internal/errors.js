@@ -36,6 +36,7 @@ class ERR_INVALID_ARG_TYPE extends TypeError {
   constructor(name, expected, actual) {
     function formatName(n) {
       const s = String(n);
+      if (s.includes('.')) return `The "${s}" property`;
       if (s.endsWith(' argument')) return `The ${s}`;
       return `The "${s}" argument`;
     }
@@ -176,6 +177,19 @@ class ERR_SYSTEM_ERROR extends Error {
 }
 ERR_SYSTEM_ERROR.HideStackFramesError = ERR_SYSTEM_ERROR;
 
+class ERR_UNHANDLED_ERROR extends Error {
+  constructor(context) {
+    const msg = context === undefined ?
+      'Unhandled error.' :
+      `Unhandled error. (${String(context)})`;
+    super(msg);
+    this.code = 'ERR_UNHANDLED_ERROR';
+    this.context = context;
+  }
+}
+
+const kEnhanceStackBeforeInspector = Symbol('kEnhanceStackBeforeInspector');
+
 function hideStackFrames(fn) {
   return fn;
 }
@@ -203,5 +217,7 @@ module.exports = {
     ERR_INVALID_BUFFER_SIZE,
     ERR_MISSING_ARGS,
     ERR_SYSTEM_ERROR,
+    ERR_UNHANDLED_ERROR,
   },
+  kEnhanceStackBeforeInspector,
 };

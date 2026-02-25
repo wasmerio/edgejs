@@ -46,6 +46,13 @@ const promisify = function promisify(fn) {
 };
 promisify.custom = Symbol.for('nodejs.util.promisify.custom');
 
+function spliceOne(list, index) {
+  for (let i = index; i + 1 < list.length; i++) {
+    list[i] = list[i + 1];
+  }
+  list.pop();
+}
+
 function getCIDR(address, netmask, family) {
   if (typeof address !== 'string' || typeof netmask !== 'string') return null;
   if (family === 'IPv4') {
@@ -136,5 +143,6 @@ module.exports = {
   lazyDOMException,
   getCIDR,
   normalizeEncoding,
+  spliceOne,
   promisify,
 };

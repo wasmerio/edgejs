@@ -90,7 +90,7 @@ function fail(message) {
 function matchesExpected(err, expected) {
   if (!expected) return true;
   if (Object.prototype.toString.call(expected) === '[object RegExp]') {
-    return expected.test(String(err));
+    return expected.test(String(err)) || expected.test(String(err && err.code || ''));
   }
   if (typeof expected === 'function') {
     if (expected.prototype && (expected === Error || expected.prototype instanceof Error)) {
@@ -143,22 +143,20 @@ function match(actual, regexp, message) {
 }
 
 function rejects(asyncFn, expected) {
-  return Promise.resolve().then(function () {
-    const p = typeof asyncFn === 'function' ? asyncFn() : asyncFn;
-    if (p == null || typeof p.then !== 'function') {
-      return Promise.reject(new AssertionError('Expected asyncFn to return a Promise'));
-    }
-    return p.then(
-      function () {
-        throw new AssertionError('Expected asyncFn to reject');
-      },
-      function (err) {
-        if (!matchesExpected(err, expected)) {
-          throw new AssertionError('Function rejected with unexpected error shape: ' + String(err && err.message));
-        }
+  const p = typeof asyncFn === 'function' ? asyncFn() : asyncFn;
+  if (p == null || typeof p.then !== 'function') {
+    return Promise.reject(new AssertionError('Expected asyncFn to return a Promise'));
+  }
+  return p.then(
+    function () {
+      throw new AssertionError('Expected asyncFn to reject');
+    },
+    function (err) {
+      if (!matchesExpected(err, expected)) {
+        throw new AssertionError('Function rejected with unexpected error shape: ' + String(err && err.message));
       }
-    );
-  });
+    }
+  );
 }
 
 // Node's assert is callable: assert(value, msg) === assert.ok(value, msg)

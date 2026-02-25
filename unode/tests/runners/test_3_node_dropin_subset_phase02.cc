@@ -500,6 +500,14 @@ TEST_F(Test3NodeDropinSubsetPhase02, RawOsConstantsSignalsFromNodeTest) {
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
 
+TEST_F(Test3NodeDropinSubsetPhase02, NodeCompatEventEmitterMethodNamesTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-event-emitter-method-names.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
 #define DEFINE_RAW_NODE_TEST(test_name, script_name)            \
   TEST_F(Test3NodeDropinSubsetPhase02, test_name) {             \
     EnvScope s(runtime_.get());                                 \
@@ -576,6 +584,43 @@ DEFINE_RAW_NODE_TEST(RawBufferZeroFillFromNodeTest, "test-buffer-zero-fill.js")
 DEFINE_RAW_NODE_TEST(RawBufferAllocUnsafeIsInitializedWithZeroFillFlagFromNodeTest, "test-buffer-alloc-unsafe-is-initialized-with-zero-fill-flag.js")
 DEFINE_RAW_NODE_TEST(RawBufferAllocUnsafeIsUninitializedFromNodeTest, "test-buffer-alloc-unsafe-is-uninitialized.js")
 DEFINE_RAW_NODE_TEST(RawBufferSwapFromNodeTest, "test-buffer-swap.js")
+
+// Raw Node events/EventEmitter tests (drop-in from node/test/parallel)
+DEFINE_RAW_NODE_TEST(RawEventCaptureRejectionsFromNodeTest, "test-event-capture-rejections.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterAddListenersFromNodeTest, "test-event-emitter-add-listeners.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterCheckListenerLeaksFromNodeTest, "test-event-emitter-check-listener-leaks.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterEmitContextFromNodeTest, "test-event-emitter-emit-context.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterErrorMonitorFromNodeTest, "test-event-emitter-error-monitor.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterErrorsFromNodeTest, "test-event-emitter-errors.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterGetMaxListenersFromNodeTest, "test-event-emitter-get-max-listeners.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterInvalidListenerFromNodeTest, "test-event-emitter-invalid-listener.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterListenerCountFromNodeTest, "test-event-emitter-listener-count.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterListenersFromNodeTest, "test-event-emitter-listeners.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterListenersSideEffectsFromNodeTest, "test-event-emitter-listeners-side-effects.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterMaxListenersFromNodeTest, "test-event-emitter-max-listeners.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterMaxListenersWarningFromNodeTest, "test-event-emitter-max-listeners-warning.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterMaxListenersWarningForSymbolFromNodeTest, "test-event-emitter-max-listeners-warning-for-symbol.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterMaxListenersWarningForNullFromNodeTest, "test-event-emitter-max-listeners-warning-for-null.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterModifyInEmitFromNodeTest, "test-event-emitter-modify-in-emit.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterNoErrorProvidedToErrorEventFromNodeTest, "test-event-emitter-no-error-provided-to-error-event.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterNumArgsFromNodeTest, "test-event-emitter-num-args.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterOnceFromNodeTest, "test-event-emitter-once.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterPrependFromNodeTest, "test-event-emitter-prepend.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterRemoveAllListenersFromNodeTest, "test-event-emitter-remove-all-listeners.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterRemoveListenersFromNodeTest, "test-event-emitter-remove-listeners.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterSetMaxListenersSideEffectsFromNodeTest, "test-event-emitter-set-max-listeners-side-effects.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterSpecialEventNamesFromNodeTest, "test-event-emitter-special-event-names.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterSubclassFromNodeTest, "test-event-emitter-subclass.js")
+DEFINE_RAW_NODE_TEST(RawEventEmitterSymbolsFromNodeTest, "test-event-emitter-symbols.js")
+DEFINE_RAW_NODE_TEST(RawEventsCustomeventFromNodeTest, "test-events-customevent.js")
+DEFINE_RAW_NODE_TEST(RawEventsGetmaxlistenersFromNodeTest, "test-events-getmaxlisteners.js")
+DEFINE_RAW_NODE_TEST(RawEventsListFromNodeTest, "test-events-list.js")
+DEFINE_RAW_NODE_TEST(RawEventsListenerCountWithListenerFromNodeTest, "test-events-listener-count-with-listener.js")
+DEFINE_RAW_NODE_TEST(RawEventsOnAsyncIteratorFromNodeTest, "test-events-on-async-iterator.js")
+DEFINE_RAW_NODE_TEST(RawEventsOnceFromNodeTest, "test-events-once.js")
+DEFINE_RAW_NODE_TEST(RawEventsStaticGeteventlistenersFromNodeTest, "test-events-static-geteventlisteners.js")
+DEFINE_RAW_NODE_TEST(RawEventsUncaughtExceptionStackFromNodeTest, "test-events-uncaught-exception-stack.js")
+DEFINE_RAW_NODE_TEST(RawEventTargetFromNodeTest, "test-event-target.js")
 
 #undef DEFINE_RAW_NODE_TEST
 

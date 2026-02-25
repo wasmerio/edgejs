@@ -13,6 +13,8 @@ module.exports = {
     'assert',
     'buffer',
     'console',
+    'domain',
+    'events',
     'fs',
     'module',
     'path',

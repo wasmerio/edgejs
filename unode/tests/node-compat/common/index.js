@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+try { require('internal/event_target'); } catch {}
 
 const mustCallChecks = [];
 
@@ -41,6 +42,10 @@ function _mustCallInner(fn, criteria, field) {
 
 function mustCall(fn, exact) {
   return _mustCallInner(fn, exact === undefined ? 1 : exact, 'exact');
+}
+
+function mustCallAtLeast(fn, minimum) {
+  return _mustCallInner(fn, minimum === undefined ? 1 : minimum, 'minimum');
 }
 
 function mustSucceed(fn, exact) {
@@ -140,6 +145,7 @@ function skipIf32Bits() {
 
 module.exports = {
   mustCall,
+  mustCallAtLeast,
   mustSucceed,
   mustNotCall,
   expectWarning,

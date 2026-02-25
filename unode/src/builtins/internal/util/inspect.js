@@ -16,8 +16,29 @@ function getStringWidth(str) {
   return width;
 }
 
+function identicalSequenceRange(a, b) {
+  for (let i = 0; i < a.length - 3; i++) {
+    const pos = b.indexOf(a[i]);
+    if (pos !== -1) {
+      const rest = b.length - pos;
+      if (rest > 3) {
+        let len = 1;
+        const maxLen = Math.min(a.length - i, rest);
+        while (maxLen > len && a[i + len] === b[pos + len]) {
+          len++;
+        }
+        if (len > 3) {
+          return [len, i];
+        }
+      }
+    }
+  }
+  return [0, 0];
+}
+
 module.exports = {
   inspect: util.inspect || ((value) => String(value)),
+  identicalSequenceRange,
   getStringWidth,
   stripVTControlCharacters,
 };

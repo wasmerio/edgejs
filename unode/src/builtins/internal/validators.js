@@ -10,12 +10,13 @@ const {
 
 function validateFunction(value, name) {
   if (typeof value !== 'function') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'Function', value);
+    throw new ERR_INVALID_ARG_TYPE(name, 'function', value);
   }
 }
 
 function validateAbortSignal(value, name) {
-  if (!value || typeof value !== 'object' || typeof value.aborted !== 'boolean') {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'object' || typeof value.aborted !== 'boolean') {
     throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal', value);
   }
 }
