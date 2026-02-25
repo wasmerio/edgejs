@@ -1,9 +1,30 @@
 'use strict';
 
 const inspectCustom = Symbol('nodejs.util.inspect.custom');
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 function quoteString(str) {
   return "'" + String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+}
+
+function shouldMultiline(singleLine, entries, opts) {
+  if (opts.compact === false) return true;
+  if (entries.some((entry) => entry.includes('\n'))) return true;
+  return singleLine.length > opts.breakLength;
+}
+
+function formatMultiline(open, close, entries, depth, opts) {
+  const innerIndent = ' '.repeat((depth + 1) * opts.indent);
+  const outerIndent = ' '.repeat(depth * opts.indent);
+  const body = entries.map((entry) => `${innerIndent}${entry}`).join(',\n');
+  return `${open}\n${body}\n${outerIndent}${close}`;
+}
+
+function formatEntries(open, close, entries, depth, opts) {
+  if (entries.length === 0) return `${open}${close}`;
+  const singleLine = `${open} ${entries.join(', ')} ${close}`;
+  if (!shouldMultiline(singleLine, entries, opts)) return singleLine;
+  return formatMultiline(open, close, entries, depth, opts);
 }
 
 function formatValue(value, opts, depth) {
@@ -47,7 +68,8 @@ function formatValue(value, opts, depth) {
   }
   if (Array.isArray(value)) {
     if (opts.depth !== undefined && depth >= opts.depth) return '[Array]';
-    return '[ ' + value.map(function (v) { return formatValue(v, opts, depth + 1); }).join(', ') + ' ]';
+    const entries = value.map((v) => formatValue(v, opts, depth + 1));
+    return formatEntries('[', ']', entries, depth, opts);
   }
   if (ArrayBuffer.isView(value) && !(typeof Buffer === 'function' && Buffer.isBuffer && Buffer.isBuffer(value))) {
     if (typeof value.length === 'number' && value.length === 0) {
@@ -60,15 +82,16 @@ function formatValue(value, opts, depth) {
     const keys = Object.keys(value);
     if (keys.length === 0) return '{}';
     const parts = keys.map(function(k) {
-      return k + ': ' + formatValue(value[k], opts, depth + 1);
+      const key = IDENTIFIER_RE.test(k) ? k : quoteString(k);
+      return key + ': ' + formatValue(value[k], opts, depth + 1);
     });
-    return '{ ' + parts.join(', ') + ' }';
+    return formatEntries('{', '}', parts, depth, opts);
   }
   return String(value);
 }
 
 function inspect(value, options) {
-  const opts = options && typeof options === 'object' ? options : {};
+  const opts = Object.assign({}, inspect.defaultOptions, options && typeof options === 'object' ? options : {});
   return formatValue(value, opts, 0);
 }
 
@@ -113,6 +136,11 @@ module.exports = {
 };
 module.exports.inspect.custom = inspectCustom;
 module.exports.inspect.defaultOptions = {
+  breakLength: 80,
+  compact: true,
+  customInspect: true,
+  depth: 2,
+  indent: 2,
   maxArrayLength: Infinity,
 };
 
