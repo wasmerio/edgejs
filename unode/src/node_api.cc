@@ -1,12 +1,9 @@
 #include "internal/napi_v8_env.h"
 #include "node_api.h"
 #include "node_api_types.h"
-#include "unode_node_api.h"
 
 #include <atomic>
-#include <iostream>
 #include <new>
-#include <string>
 #include <vector>
 
 #include <uv.h>
@@ -50,57 +47,7 @@ struct napi_callback_scope__ {
 namespace {
 
 inline bool CheckEnv(napi_env env) {
-  return env != nullptr && env->isolate != nullptr;
-}
-
-std::string ValueToUtf8(napi_env env, napi_value value) {
-  napi_value string_value = nullptr;
-  if (napi_coerce_to_string(env, value, &string_value) != napi_ok || string_value == nullptr) {
-    return "";
-  }
-  size_t length = 0;
-  if (napi_get_value_string_utf8(env, string_value, nullptr, 0, &length) != napi_ok) {
-    return "";
-  }
-  std::string out(length + 1, '\0');
-  size_t copied = 0;
-  if (napi_get_value_string_utf8(env, string_value, out.data(), out.size(), &copied) != napi_ok) {
-    return "";
-  }
-  out.resize(copied);
-  return out;
-}
-
-napi_value ConsoleLogCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 8;
-  napi_value args[8] = {nullptr};
-  napi_status status = napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-  if (status == napi_ok) {
-    for (size_t i = 0; i < argc; ++i) {
-      if (i > 0) {
-        std::cout << " ";
-      }
-      std::cout << ValueToUtf8(env, args[i]);
-    }
-    std::cout << "\n";
-  }
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-}
-
-// Installs a JS-callable bridge that triggers GC for upstream tests.
-napi_value ForceGcCallback(napi_env env, napi_callback_info info) {
-  (void)info;
-  if (!CheckEnv(env)) {
-    napi_throw_error(env, nullptr, "Invalid environment");
-    return nullptr;
-  }
-  env->isolate->LowMemoryNotification();
-  env->isolate->PerformMicrotaskCheckpoint();
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
+  return env != nullptr;
 }
 
 void RunNodeApiCleanupHooks(napi_env env) {
@@ -122,79 +69,6 @@ void UvAfterWork(uv_work_t* req, int status) {
 }
 
 }  // namespace
-
-napi_status UnodeInstallConsole(napi_env env) {
-  if (!CheckEnv(env)) {
-    return napi_invalid_arg;
-  }
-
-  napi_value global = nullptr;
-  napi_status status = napi_get_global(env, &global);
-  if (status != napi_ok || global == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-
-  napi_value console_obj = nullptr;
-  bool has_console = false;
-  status = napi_has_named_property(env, global, "console", &has_console);
-  if (status != napi_ok) return status;
-  if (has_console) {
-    status = napi_get_named_property(env, global, "console", &console_obj);
-    if (status != napi_ok || console_obj == nullptr) {
-      return (status == napi_ok) ? napi_generic_failure : status;
-    }
-  } else {
-    status = napi_create_object(env, &console_obj);
-    if (status != napi_ok || console_obj == nullptr) {
-      return (status == napi_ok) ? napi_generic_failure : status;
-    }
-  }
-  napi_value log_fn = nullptr;
-  status = napi_create_function(env, "log", NAPI_AUTO_LENGTH, ConsoleLogCallback, nullptr, &log_fn);
-  if (status != napi_ok || log_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, console_obj, "log", log_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  return napi_set_named_property(env, global, "console", console_obj);
-}
-
-napi_status UnodeInstallForceGc(napi_env env) {
-  if (!CheckEnv(env)) {
-    return napi_invalid_arg;
-  }
-  napi_value global = nullptr;
-  napi_status status = napi_get_global(env, &global);
-  if (status != napi_ok || global == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value gc_fn = nullptr;
-  status = napi_create_function(
-      env, "__napi_force_gc", NAPI_AUTO_LENGTH, ForceGcCallback, nullptr, &gc_fn);
-  if (status != napi_ok || gc_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  return napi_set_named_property(env, global, "__napi_force_gc", gc_fn);
-}
-
-napi_status UnodePerformMicrotaskCheckpoint(napi_env env) {
-  if (!CheckEnv(env)) {
-    return napi_invalid_arg;
-  }
-  env->isolate->PerformMicrotaskCheckpoint();
-  return napi_ok;
-}
-
-napi_status UnodeForceGc(napi_env env) {
-  if (!CheckEnv(env)) {
-    return napi_invalid_arg;
-  }
-  env->isolate->LowMemoryNotification();
-  env->isolate->PerformMicrotaskCheckpoint();
-  return napi_ok;
-}
 
 void napi_v8_run_async_cleanup_hooks(napi_env env) {
   if (!CheckEnv(env)) return;

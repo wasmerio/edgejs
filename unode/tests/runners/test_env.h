@@ -4,37 +4,14 @@
 #include <memory>
 
 #include <gtest/gtest.h>
-#include <libplatform/libplatform.h>
-#include <v8.h>
 
-#include "napi_v8_platform.h"
+#include "../../src/unode_node_api.h"
+#include "napi_v8_unofficial_testing.h"
 
 class V8Runtime {
  public:
-  V8Runtime() {
-    v8::V8::InitializeICUDefaultLocation("");
-    v8::V8::InitializeExternalStartupData("");
-    platform_ = v8::platform::NewDefaultPlatform();
-    v8::V8::InitializePlatform(platform_.get());
-    v8::V8::Initialize();
-
-    params_.array_buffer_allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
-    isolate_ = v8::Isolate::New(params_);
-  }
-
-  ~V8Runtime() {
-    isolate_->Dispose();
-    delete params_.array_buffer_allocator;
-    v8::V8::Dispose();
-    v8::V8::DisposePlatform();
-  }
-
-  v8::Isolate* isolate() const { return isolate_; }
-
- private:
-  std::unique_ptr<v8::Platform> platform_;
-  v8::Isolate::CreateParams params_{};
-  v8::Isolate* isolate_ = nullptr;
+  V8Runtime() = default;
+  ~V8Runtime() = default;
 };
 
 class FixtureTestBase : public ::testing::Test {
@@ -47,28 +24,82 @@ class FixtureTestBase : public ::testing::Test {
 inline std::unique_ptr<V8Runtime> FixtureTestBase::runtime_;
 
 struct EnvScope {
-  explicit EnvScope(V8Runtime* runtime)
-      : isolate(runtime->isolate()),
-        isolate_scope(isolate),
-        handle_scope(isolate),
-        context(v8::Context::New(isolate)),
-        context_scope(context) {
-    EXPECT_EQ(napi_v8_create_env(context, 8, &env), napi_ok);
+  struct IsolateShim {
+    explicit IsolateShim(napi_env env_in) : env(env_in) {}
+    napi_env env = nullptr;
+  };
+
+  explicit EnvScope(V8Runtime* runtime) {
+    (void)runtime;
+    EXPECT_EQ(unofficial_napi_v8_open_env_scope(8, &env, &scope), napi_ok);
     EXPECT_NE(env, nullptr);
+    isolate = std::make_unique<IsolateShim>(env);
   }
 
   ~EnvScope() {
+    isolate.reset();
     if (env != nullptr) {
-      EXPECT_EQ(napi_v8_destroy_env(env), napi_ok);
+      EXPECT_EQ(unofficial_napi_v8_close_env_scope(scope), napi_ok);
       env = nullptr;
+      scope = nullptr;
     }
   }
 
-  v8::Isolate* isolate;
-  v8::Isolate::Scope isolate_scope;
-  v8::HandleScope handle_scope;
-  v8::Local<v8::Context> context;
-  v8::Context::Scope context_scope;
+  std::unique_ptr<IsolateShim> isolate;
+  void* scope = nullptr;
+  napi_env env = nullptr;
+};
+
+#endif  // NAPI_V8_TEST_ENV_H_
+#ifndef NAPI_V8_TEST_ENV_H_
+#define NAPI_V8_TEST_ENV_H_
+
+#include <memory>
+
+#include <gtest/gtest.h>
+
+#include "napi_v8_unofficial_testing.h"
+#include "../../src/unode_node_api.h"
+
+class V8Runtime {
+ public:
+  V8Runtime() = default;
+  ~V8Runtime() = default;
+};
+
+class FixtureTestBase : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() { runtime_ = std::make_unique<V8Runtime>(); }
+  static void TearDownTestSuite() { runtime_.reset(); }
+  static std::unique_ptr<V8Runtime> runtime_;
+};
+
+inline std::unique_ptr<V8Runtime> FixtureTestBase::runtime_;
+
+struct EnvScope {
+  struct IsolateShim {
+    explicit IsolateShim(napi_env env_in) : env(env_in) {}
+    napi_env env = nullptr;
+  };
+
+  explicit EnvScope(V8Runtime* runtime) {
+    (void)runtime;
+    EXPECT_EQ(unofficial_napi_v8_open_env_scope(8, &env, &scope), napi_ok);
+    EXPECT_NE(env, nullptr);
+    isolate = std::make_unique<IsolateShim>(env);
+  }
+
+  ~EnvScope() {
+    isolate.reset();
+    if (env != nullptr) {
+      EXPECT_EQ(unofficial_napi_v8_close_env_scope(scope), napi_ok);
+      env = nullptr;
+      scope = nullptr;
+    }
+  }
+
+  std::unique_ptr<IsolateShim> isolate;
+  void* scope = nullptr;
   napi_env env = nullptr;
 };
 

@@ -30,6 +30,7 @@ set(NAPI_V8_UV_INCLUDE_DIR "${NAPI_V8_NODE_ROOT}/deps/uv/include")
 add_library(napi_v8 STATIC
   src/js_native_api_v8.cc
   src/napi_v8_platform.cc
+  src/unofficial_napi_v8_test_env.cc
   src/unofficial_napi_request_gc_for_testing.cc
 )
 

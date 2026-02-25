@@ -53,6 +53,7 @@ find_library(UNODE_UV_LIB NAMES uv libuv HINTS /opt/homebrew/lib /usr/local/lib)
 
 add_library(unode_node_api STATIC
   src/node_api.cc
+  src/unode_node_api.cc
   src/unofficial_napi_testing_until_gc.cc
 )
 
