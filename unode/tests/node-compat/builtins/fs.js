@@ -549,12 +549,46 @@ function close(fd, callback) {
 }
 
 function readFileSync(path, options) {
-  options = getOptions(options, { flag: 'r', encoding: 'utf8' });
-  if (options.encoding === 'utf8' || options.encoding === 'utf-8' || options.encoding === undefined) {
-    path = getValidatedPath(path);
-    return binding.readFileUtf8(path, stringToFlags(options.flag));
+  options = getOptions(options, { flag: 'r' });
+  const encoding = options.encoding;
+  path = getValidatedPath(path);
+  const flags = stringToFlags(options.flag);
+  if (encoding === undefined || encoding === 'buffer') {
+    const fd = openSync(path, options.flag || 'r');
+    const chunks = [];
+    const buf = new Uint8Array(8192);
+    let n;
+    try {
+      while ((n = binding.readSync(fd, buf, 0, buf.length, -1)) > 0) {
+        chunks.push(buf.slice(0, n));
+      }
+    } finally {
+      closeSync(fd);
+    }
+    const total = chunks.reduce((acc, c) => acc + c.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      out.set(c, off);
+      off += c.length;
+    }
+    out.equals = function (b) {
+      if (this === b) return true;
+      const other = b && (typeof b.length === 'number' && b.byteLength !== undefined)
+        ? b
+        : (b && typeof b === 'object' && b.length !== undefined ? new Uint8Array(b) : null);
+      if (!other || this.length !== other.length) return false;
+      for (let i = 0; i < this.length; i++) {
+        if (this[i] !== other[i]) return false;
+      }
+      return true;
+    };
+    return out;
   }
-  throw new Error('Only utf8 encoding is supported in this build');
+  if (encoding === 'utf8' || encoding === 'utf-8') {
+    return binding.readFileUtf8(path, flags);
+  }
+  throw new Error('Only utf8 and buffer encoding are supported in this build');
 }
 
 function writeFileSync(path, data, options) {
@@ -588,6 +622,84 @@ function rmSync(path, options) {
   const opts = validateRmOptionsSync(path, options);
   path = getValidatedPath(path);
   binding.rmSync(path, opts.maxRetries, opts.recursive, opts.retryDelay);
+}
+
+function renameSync(oldPath, newPath) {
+  const oldP = getValidatedPath(oldPath);
+  const newP = getValidatedPath(newPath);
+  binding.rename(oldP, newP);
+}
+
+function unlinkSync(path) {
+  path = getValidatedPath(path);
+  binding.unlink(path);
+}
+
+function rmdirSync(path, options) {
+  path = getValidatedPath(path);
+  if (options && options.recursive) {
+    binding.rmSync(path, 0, true, 100);
+    return;
+  }
+  binding.rmdir(path);
+}
+
+function truncateSync(path, len) {
+  const length = len === undefined || len === null ? 0 : Number(len);
+  const fd = openSync(path, 'r+');
+  try {
+    binding.ftruncate(fd, length);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function ftruncateSync(fd, len) {
+  if (typeof fd !== 'number' || Number.isNaN(fd)) {
+    const err = new TypeError('The "fd" argument must be of type number. Received ' + String(fd));
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  const length = len === undefined || len === null ? 0 : Number(len);
+  binding.ftruncate(fd, length);
+}
+
+function copyFileSync(src, dest, mode) {
+  const srcPath = getValidatedPath(src);
+  const destPath = getValidatedPath(dest);
+  const flags = mode === undefined || mode === null ? 0 : mode;
+  binding.copyFile(srcPath, destPath, flags);
+}
+
+function isBufferLike(value) {
+  if (value == null || typeof value !== 'object') return false;
+  if (typeof ArrayBuffer !== 'undefined' && typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(value)) return true;
+  return typeof value.byteLength === 'number' ||
+    (value.constructor && (value.constructor.name === 'Buffer' || value.constructor.name === 'Uint8Array'));
+}
+
+function appendFileSync(path, data, options) {
+  options = getOptions(options, { encoding: 'utf8', mode: 0o666, flag: 'a' });
+  path = getValidatedPath(path);
+  const fd = openSync(path, options.flag || 'a', options.mode);
+  try {
+    if (typeof data === 'string' && (options.encoding === 'utf8' || options.encoding === 'utf-8')) {
+      binding.writeSyncString(fd, data);
+    } else if (isBufferLike(data)) {
+      const len = data.byteLength ?? data.length;
+      binding.writeSync(fd, data, 0, len, -1);
+    } else if (data != null && typeof data === 'object' && typeof data.length === 'number' && data.length >= 0) {
+      const u8 = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) u8[i] = data[i];
+      binding.writeSync(fd, u8, 0, u8.length, -1);
+    } else {
+      const err = new TypeError('The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ' + (data === null ? 'null' : typeof data));
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function readdir(path, options, callback) {
@@ -673,6 +785,13 @@ module.exports = {
   read,
   open,
   close,
+  renameSync,
+  unlinkSync,
+  rmdirSync,
+  truncateSync,
+  ftruncateSync,
+  copyFileSync,
+  appendFileSync,
   constants,
   Dirent,
   Stats,

@@ -168,7 +168,8 @@ Location: `node/test/parallel/test-fs-*.js`.
 
 **Tests to run**
 
-- test-fs-rename.js, test-fs-unlink.js, test-fs-rmdir*.js, test-fs-truncate-sync.js, test-fs-copyfile-sync.js, test-fs-append-file-sync.js (or equivalent).
+- **Subset (green):** `unode/tests/node-compat/parallel/test-fs-phase-c-subset.js` – covers truncateSync, renameSync, unlinkSync, copyFileSync, appendFileSync (string + buffer), rmdirSync. Run via `FsPhaseCSubsetTest`.
+- **Raw Node:** `test-fs-truncate-sync.js` passes. `test-fs-rename-type-check.js` / `test-fs-unlink-type-check.js` need Node `common.invalidArgTypeHelper` and (for unlink) async `fs.unlink`. `test-fs-copyfile.js` needs `internal/test/binding`. `test-fs-append-file-sync.js` needs `common/fixtures` (utf8TestText) to resolve when running raw.
 
 ---
 

@@ -945,6 +945,109 @@ napi_value BindingWriteSyncString(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value BindingRename(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2) {
+    return nullptr;
+  }
+  std::string old_path = PathFromValue(env, argv[0]);
+  std::string new_path = PathFromValue(env, argv[1]);
+  if (old_path.empty() || new_path.empty()) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_rename(nullptr, &req, old_path.c_str(), new_path.c_str(), nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "rename", old_path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingUnlink(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 1) {
+    return nullptr;
+  }
+  std::string path = PathFromValue(env, argv[0]);
+  if (path.empty()) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_unlink(nullptr, &req, path.c_str(), nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "unlink", path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingRmdir(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 1) {
+    return nullptr;
+  }
+  std::string path = PathFromValue(env, argv[0]);
+  if (path.empty()) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_rmdir(nullptr, &req, path.c_str(), nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "rmdir", path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingFtruncate(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2) {
+    return nullptr;
+  }
+  int32_t fd = 0;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok) return nullptr;
+  int64_t len = 0;
+  if (napi_get_value_int64(env, argv[1], &len) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_ftruncate(nullptr, &req, fd, len, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "ftruncate", nullptr);
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingCopyFile(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2) {
+    return nullptr;
+  }
+  std::string src = PathFromValue(env, argv[0]);
+  std::string dest = PathFromValue(env, argv[1]);
+  if (src.empty() || dest.empty()) return nullptr;
+  int32_t flags = 0;
+  if (argc >= 3 && argv[2] != nullptr) {
+    if (napi_get_value_int32(env, argv[2], &flags) != napi_ok) return nullptr;
+  }
+  uv_fs_t req;
+  int err = uv_fs_copyfile(nullptr, &req, src.c_str(), dest.c_str(), flags, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "copyfile", src.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
 void SetMethod(napi_env env, napi_value obj, const char* name,
                napi_callback cb) {
   napi_value fn = nullptr;
@@ -986,6 +1089,11 @@ void UnodeInstallFsBinding(napi_env env) {
   SetMethod(env, binding, "readSync", BindingReadSync);
   SetMethod(env, binding, "writeSync", BindingWriteSync);
   SetMethod(env, binding, "writeSyncString", BindingWriteSyncString);
+  SetMethod(env, binding, "rename", BindingRename);
+  SetMethod(env, binding, "unlink", BindingUnlink);
+  SetMethod(env, binding, "rmdir", BindingRmdir);
+  SetMethod(env, binding, "ftruncate", BindingFtruncate);
+  SetMethod(env, binding, "copyFile", BindingCopyFile);
 
   SetInt32Constant(env, binding, "O_RDONLY", UV_FS_O_RDONLY);
   SetInt32Constant(env, binding, "O_WRONLY", UV_FS_O_WRONLY);
@@ -1025,6 +1133,7 @@ void UnodeInstallFsBinding(napi_env env) {
   SetInt32Constant(env, binding, "S_IFLNK", 0120000);
   SetInt32Constant(env, binding, "S_IFIFO", 0010000);
   SetInt32Constant(env, binding, "S_IFSOCK", 0140000);
+  SetInt32Constant(env, binding, "COPYFILE_EXCL", UV_FS_COPYFILE_EXCL);
 
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) {

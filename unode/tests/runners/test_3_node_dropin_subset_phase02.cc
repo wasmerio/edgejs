@@ -107,6 +107,14 @@ TEST_F(Test3NodeDropinSubsetPhase02, ModuleLoadingSubsetTest) {
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
 
+TEST_F(Test3NodeDropinSubsetPhase02, FsPhaseCSubsetTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-fs-phase-c-subset.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
 #ifdef NAPI_V8_NODE_ROOT_PATH
 TEST_F(Test3NodeDropinSubsetPhase02, RawRequireCacheFromNodeTest) {
   EnvScope s(runtime_.get());
@@ -176,6 +184,46 @@ TEST_F(Test3NodeDropinSubsetPhase02, RawFsReaddirFromNodeTest) {
   EnvScope s(runtime_.get());
   std::string error;
   const int exit_code = RunRawNodeTestScript(s.env, "test-fs-readdir.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsRenameFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-rename-type-check.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsUnlinkFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-unlink-type-check.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsTruncateSyncFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-truncate-sync.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsCopyfileSyncFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-copyfile.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsAppendFileSyncFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-append-file-sync.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
