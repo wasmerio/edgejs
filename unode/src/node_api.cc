@@ -1,6 +1,6 @@
 #include "internal/napi_v8_env.h"
-#include "node_api.h"
-#include "node_api_types.h"
+#include "../../node/src/node_api.h"
+#include "../../node/src/node_api_types.h"
 
 #include <atomic>
 #include <new>
