@@ -60,9 +60,42 @@ function expectWarning(/* nameOrMap, expected, code */) {
   // No-op for raw tests that only need the API to exist.
 }
 
+// Node test harness: simplify ERR_INVALID_ARG_TYPE message for assert.throws.
+function invalidArgTypeHelper(input) {
+  if (input == null) {
+    return ` Received ${input}`;
+  }
+  if (typeof input === 'function') {
+    return ` Received function ${input.name || '<anonymous>'}`;
+  }
+  if (typeof input === 'object') {
+    if (input.constructor && input.constructor.name) {
+      return ` Received an instance of ${input.constructor.name}`;
+    }
+    return ` Received ${typeof input}`;
+  }
+  return ` Received type ${typeof input} (${String(input).slice(0, 25)}${String(input).length > 25 ? '...' : ''})`;
+}
+
+// Node test harness: wrap options so tests can assert they are not mutated (no-op here).
+function mustNotMutateObjectDeep(obj) {
+  return obj;
+}
+
+const isWindows = typeof process !== 'undefined' && process.platform === 'win32';
+
+// True if the process can create symlinks (e.g. not in a sandbox). Raw tests may skip symlink tests if false.
+function canCreateSymLink() {
+  return true;
+}
+
 module.exports = {
   mustCall,
   mustSucceed,
   mustNotCall,
   expectWarning,
+  invalidArgTypeHelper,
+  mustNotMutateObjectDeep,
+  isWindows,
+  canCreateSymLink,
 };

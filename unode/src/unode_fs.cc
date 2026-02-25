@@ -18,6 +18,9 @@
 
 namespace {
 
+void ThrowUVExceptionCopyFile(napi_env env, int errorno, const char* src,
+                              const char* dest);
+
 std::string PathFromValue(napi_env env, napi_value value) {
   size_t length = 0;
   if (napi_get_value_string_utf8(env, value, nullptr, 0, &length) != napi_ok) {
@@ -77,6 +80,64 @@ void ThrowUVException(napi_env env, int errorno, const char* syscall,
     if (napi_create_string_utf8(env, path, NAPI_AUTO_LENGTH, &path_val) ==
         napi_ok) {
       napi_set_named_property(env, error, "path", path_val);
+    }
+  }
+  napi_throw(env, error);
+}
+
+void ThrowUVExceptionCopyFile(napi_env env, int errorno, const char* src,
+                              const char* dest) {
+  const char* code = uv_err_name(errorno);
+  const char* msg = uv_strerror(errorno);
+  if (code == nullptr) code = "UNKNOWN";
+  if (msg == nullptr) msg = "unknown error";
+  std::string message = std::string(code) + ": " + msg + ", copyfile ";
+  if (src != nullptr && src[0] != '\0') {
+    message += "'";
+    message += src;
+    message += "'";
+    if (dest != nullptr && dest[0] != '\0') {
+      message += " -> '";
+      message += dest;
+      message += "'";
+    }
+  }
+  napi_value msg_val = nullptr;
+  if (napi_create_string_utf8(env, message.c_str(), NAPI_AUTO_LENGTH,
+                               &msg_val) != napi_ok || msg_val == nullptr) {
+    return;
+  }
+  napi_value error = nullptr;
+  if (napi_create_error(env, nullptr, msg_val, &error) != napi_ok ||
+      error == nullptr) {
+    return;
+  }
+  napi_value code_val = nullptr;
+  if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_val) ==
+      napi_ok) {
+    napi_set_named_property(env, error, "code", code_val);
+  }
+  napi_value errno_val = nullptr;
+  if (napi_create_int32(env, errorno, &errno_val) == napi_ok) {
+    napi_set_named_property(env, error, "errno", errno_val);
+  }
+  napi_value syscall_val = nullptr;
+  if (napi_create_string_utf8(env, "copyfile", NAPI_AUTO_LENGTH, &syscall_val) ==
+      napi_ok) {
+    napi_set_named_property(env, error, "syscall", syscall_val);
+  }
+  if (src != nullptr && src[0] != '\0') {
+    napi_value path_val = nullptr;
+    if (napi_create_string_utf8(env, src, NAPI_AUTO_LENGTH, &path_val) ==
+        napi_ok) {
+      napi_set_named_property(env, error, "path", path_val);
+    }
+  }
+  if (dest != nullptr && dest[0] != '\0') {
+    napi_value dest_val = nullptr;
+    if (napi_create_string_utf8(env, dest, NAPI_AUTO_LENGTH, &dest_val) ==
+        napi_ok) {
+      napi_set_named_property(env, error, "dest", dest_val);
     }
   }
   napi_throw(env, error);
@@ -1042,10 +1103,220 @@ napi_value BindingCopyFile(napi_env env, napi_callback_info info) {
   int err = uv_fs_copyfile(nullptr, &req, src.c_str(), dest.c_str(), flags, nullptr);
   uv_fs_req_cleanup(&req);
   if (err < 0) {
-    ThrowUVException(env, err, "copyfile", src.c_str());
+    ThrowUVExceptionCopyFile(env, err, src.c_str(), dest.c_str());
     return nullptr;
   }
   return nullptr;
+}
+
+napi_value BindingReadlink(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 1) {
+    return nullptr;
+  }
+  std::string path = PathFromValue(env, argv[0]);
+  if (path.empty()) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_readlink(nullptr, &req, path.c_str(), nullptr);
+  if (err < 0) {
+    uv_fs_req_cleanup(&req);
+    ThrowUVException(env, err, "readlink", path.c_str());
+    return nullptr;
+  }
+  const char* link_path = static_cast<const char*>(req.ptr);
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, link_path ? link_path : "", NAPI_AUTO_LENGTH, &out) != napi_ok) {
+    uv_fs_req_cleanup(&req);
+    return nullptr;
+  }
+  uv_fs_req_cleanup(&req);
+  return out;
+}
+
+napi_value BindingSymlink(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2) {
+    return nullptr;
+  }
+  std::string target = PathFromValue(env, argv[0]);
+  std::string path = PathFromValue(env, argv[1]);
+  if (target.empty() || path.empty()) return nullptr;
+  int32_t flags = 0;
+  if (argc >= 3 && argv[2] != nullptr) {
+    if (napi_get_value_int32(env, argv[2], &flags) != napi_ok) return nullptr;
+  }
+  uv_fs_t req;
+  int err = uv_fs_symlink(nullptr, &req, target.c_str(), path.c_str(), flags, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "symlink", path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingChmod(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2) {
+    return nullptr;
+  }
+  std::string path = PathFromValue(env, argv[0]);
+  if (path.empty()) return nullptr;
+  int32_t mode = 0;
+  if (napi_get_value_int32(env, argv[1], &mode) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_chmod(nullptr, &req, path.c_str(), mode, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "chmod", path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingFchmod(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 2) {
+    return nullptr;
+  }
+  int32_t fd = 0;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok) return nullptr;
+  int32_t mode = 0;
+  if (napi_get_value_int32(env, argv[1], &mode) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_fchmod(nullptr, &req, fd, mode, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "fchmod", nullptr);
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingUtimes(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 3) {
+    return nullptr;
+  }
+  std::string path = PathFromValue(env, argv[0]);
+  if (path.empty()) return nullptr;
+  double atime = 0, mtime = 0;
+  if (napi_get_value_double(env, argv[1], &atime) != napi_ok) return nullptr;
+  if (napi_get_value_double(env, argv[2], &mtime) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_utime(nullptr, &req, path.c_str(), atime, mtime, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "utime", path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingFutimes(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 3) {
+    return nullptr;
+  }
+  int32_t fd = 0;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok) return nullptr;
+  double atime = 0, mtime = 0;
+  if (napi_get_value_double(env, argv[1], &atime) != napi_ok) return nullptr;
+  if (napi_get_value_double(env, argv[2], &mtime) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_futime(nullptr, &req, fd, atime, mtime, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "futime", nullptr);
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingLutimes(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 3) {
+    return nullptr;
+  }
+  std::string path = PathFromValue(env, argv[0]);
+  if (path.empty()) return nullptr;
+  double atime = 0, mtime = 0;
+  if (napi_get_value_double(env, argv[1], &atime) != napi_ok) return nullptr;
+  if (napi_get_value_double(env, argv[2], &mtime) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_lutime(nullptr, &req, path.c_str(), atime, mtime, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "lutime", path.c_str());
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingFsync(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 1) {
+    return nullptr;
+  }
+  int32_t fd = 0;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok) return nullptr;
+  uv_fs_t req;
+  int err = uv_fs_fsync(nullptr, &req, fd, nullptr);
+  uv_fs_req_cleanup(&req);
+  if (err < 0) {
+    ThrowUVException(env, err, "fsync", nullptr);
+    return nullptr;
+  }
+  return nullptr;
+}
+
+napi_value BindingMkdtemp(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok ||
+      argc < 1) {
+    return nullptr;
+  }
+  std::string tmpl = PathFromValue(env, argv[0]);
+  if (tmpl.empty()) return nullptr;
+  // Ensure template ends with exactly 6 X's so result basename length matches (e.g. Node test).
+  const char* suffix = "XXXXXX";
+  const size_t suffix_len = 6;
+  while (tmpl.size() > suffix_len && tmpl.back() == 'X') {
+    tmpl.pop_back();
+  }
+  tmpl.append(suffix);
+  uv_fs_t req;
+  int err = uv_fs_mkdtemp(nullptr, &req, tmpl.c_str(), nullptr);
+  if (err < 0) {
+    uv_fs_req_cleanup(&req);
+    ThrowUVException(env, err, "mkdtemp", tmpl.c_str());
+    return nullptr;
+  }
+  const char* path = req.path;
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, path ? path : tmpl.c_str(), NAPI_AUTO_LENGTH, &out) != napi_ok) {
+    uv_fs_req_cleanup(&req);
+    return nullptr;
+  }
+  uv_fs_req_cleanup(&req);
+  return out;
 }
 
 void SetMethod(napi_env env, napi_value obj, const char* name,
@@ -1094,6 +1365,15 @@ void UnodeInstallFsBinding(napi_env env) {
   SetMethod(env, binding, "rmdir", BindingRmdir);
   SetMethod(env, binding, "ftruncate", BindingFtruncate);
   SetMethod(env, binding, "copyFile", BindingCopyFile);
+  SetMethod(env, binding, "readlink", BindingReadlink);
+  SetMethod(env, binding, "symlink", BindingSymlink);
+  SetMethod(env, binding, "chmod", BindingChmod);
+  SetMethod(env, binding, "fchmod", BindingFchmod);
+  SetMethod(env, binding, "utimes", BindingUtimes);
+  SetMethod(env, binding, "futimes", BindingFutimes);
+  SetMethod(env, binding, "lutimes", BindingLutimes);
+  SetMethod(env, binding, "fsync", BindingFsync);
+  SetMethod(env, binding, "mkdtemp", BindingMkdtemp);
 
   SetInt32Constant(env, binding, "O_RDONLY", UV_FS_O_RDONLY);
   SetInt32Constant(env, binding, "O_WRONLY", UV_FS_O_WRONLY);
@@ -1134,6 +1414,13 @@ void UnodeInstallFsBinding(napi_env env) {
   SetInt32Constant(env, binding, "S_IFIFO", 0010000);
   SetInt32Constant(env, binding, "S_IFSOCK", 0140000);
   SetInt32Constant(env, binding, "COPYFILE_EXCL", UV_FS_COPYFILE_EXCL);
+  SetInt32Constant(env, binding, "COPYFILE_FICLONE", UV_FS_COPYFILE_FICLONE);
+  SetInt32Constant(env, binding, "COPYFILE_FICLONE_FORCE", UV_FS_COPYFILE_FICLONE_FORCE);
+  SetInt32Constant(env, binding, "UV_FS_COPYFILE_EXCL", UV_FS_COPYFILE_EXCL);
+  SetInt32Constant(env, binding, "UV_FS_COPYFILE_FICLONE", UV_FS_COPYFILE_FICLONE);
+  SetInt32Constant(env, binding, "UV_FS_COPYFILE_FICLONE_FORCE", UV_FS_COPYFILE_FICLONE_FORCE);
+  SetInt32Constant(env, binding, "UV_FS_SYMLINK_DIR", UV_FS_SYMLINK_DIR);
+  SetInt32Constant(env, binding, "UV_FS_SYMLINK_JUNCTION", UV_FS_SYMLINK_JUNCTION);
 
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) {

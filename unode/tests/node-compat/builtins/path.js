@@ -31,4 +31,19 @@ function relative(from, to) {
   return segs.join('/');
 }
 
-module.exports = { join, resolve, relative };
+function dirname(p) {
+  p = String(p);
+  const last = p.lastIndexOf('/');
+  if (last <= 0) return last === 0 ? '/' : '.';
+  return p.slice(0, last) || '/';
+}
+
+function basename(p, ext) {
+  p = String(p);
+  let last = p.lastIndexOf('/');
+  let name = last === -1 ? p : p.slice(last + 1);
+  if (ext !== undefined && ext !== '' && name.endsWith(ext)) name = name.slice(0, name.length - String(ext).length);
+  return name || (last === 0 ? '' : (last === -1 ? p : ''));
+}
+
+module.exports = { join, resolve, relative, dirname, basename };

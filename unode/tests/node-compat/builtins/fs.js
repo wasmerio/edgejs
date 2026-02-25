@@ -11,20 +11,46 @@ function pathTypeError(path) {
   return err;
 }
 
-function getValidatedPath(path) {
+// Minimal helper for Node test message format (oldPath/newPath)
+function invalidArgTypeHelper(input) {
+  if (input == null) return ` Received ${input}`;
+  if (typeof input === 'function') return ` Received function ${input.name || '<anonymous>'}`;
+  if (typeof input === 'object') {
+    if (input.constructor && input.constructor.name) return ` Received an instance of ${input.constructor.name}`;
+    return ` Received ${typeof input}`;
+  }
+  const s = String(input);
+  return ` Received type ${typeof input} (${s.length > 25 ? s.slice(0, 25) + '...' : s})`;
+}
+
+function getValidatedPath(path, argName) {
   if (path == null) {
-    throw pathTypeError(path);
+    const type = 'of type string or an instance of Buffer or URL.' + invalidArgTypeHelper(path);
+    const err = new TypeError(argName ? `The "${argName}" argument must be ${type}` : 'path must be a string, Buffer, or URL. Received ' + (path === null ? 'null' : typeof path));
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
   }
   if (typeof path === 'object' && path && path.href !== undefined) {
     path = path.pathname || path.href;
+    if (typeof path === 'string' && path.startsWith('file://')) path = path.slice(7) || '/';
+  } else if (typeof path === 'object' && path && typeof path.byteLength === 'number') {
+    path = typeof TextDecoder !== 'undefined' ? new TextDecoder().decode(path) : String.fromCharCode.apply(null, new Uint8Array(path.buffer || path));
+  } else if (typeof path === 'object' && path && typeof path.length === 'number' && path.toString && path.constructor && path.constructor.name === 'Buffer') {
+    path = path.toString();
   } else if (typeof path === 'object' && path) {
-    throw pathTypeError(path);
+    const type = 'of type string or an instance of Buffer or URL.' + invalidArgTypeHelper(path);
+    const err = new TypeError(argName ? `The "${argName}" argument must be ${type}` : 'path must be a string, Buffer, or URL. Received ' + typeof path);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
   }
   if (typeof path !== 'string' && typeof path === 'object' && path && path.toString) {
     path = path.toString();
   }
   if (typeof path !== 'string') {
-    throw pathTypeError(path);
+    const type = 'of type string or an instance of Buffer or URL.' + invalidArgTypeHelper(path);
+    const err = new TypeError(argName ? `The "${argName}" argument must be ${type}` : 'path must be a string, Buffer, or URL. Received ' + typeof path);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
   }
   if (path.includes('\u0000')) {
     throw new Error('path must be a string without null bytes');
@@ -625,14 +651,52 @@ function rmSync(path, options) {
 }
 
 function renameSync(oldPath, newPath) {
-  const oldP = getValidatedPath(oldPath);
-  const newP = getValidatedPath(newPath);
+  const oldP = getValidatedPath(oldPath, 'oldPath');
+  const newP = getValidatedPath(newPath, 'newPath');
   binding.rename(oldP, newP);
+}
+
+function rename(oldPath, newPath, callback) {
+  callback = makeCallback(callback);
+  let oldP;
+  let newP;
+  try {
+    oldP = getValidatedPath(oldPath, 'oldPath');
+    newP = getValidatedPath(newPath, 'newPath');
+  } catch (e) {
+    throw e;
+  }
+  setImmediateOrSync(() => {
+    try {
+      binding.rename(oldP, newP);
+      callback(null);
+    } catch (e) {
+      callback(e);
+    }
+  });
 }
 
 function unlinkSync(path) {
   path = getValidatedPath(path);
   binding.unlink(path);
+}
+
+function unlink(path, callback) {
+  callback = makeCallback(callback);
+  let p;
+  try {
+    p = getValidatedPath(path);
+  } catch (e) {
+    throw e;
+  }
+  setImmediateOrSync(() => {
+    try {
+      binding.unlink(p);
+      callback(null);
+    } catch (e) {
+      callback(e);
+    }
+  });
 }
 
 function rmdirSync(path, options) {
@@ -664,11 +728,53 @@ function ftruncateSync(fd, len) {
   binding.ftruncate(fd, length);
 }
 
+// Valid copyfile flags: 0 or bitmask of COPYFILE_EXCL(1), FICLONE(2), FICLONE_FORCE(4) -> 0-7
+function validateCopyFileMode(mode) {
+  if (mode === undefined || mode === null) return 0;
+  if (typeof mode !== 'number') {
+    const err = new TypeError('The "mode" argument must be of type number. Received ' + (mode === null ? 'null' : typeof mode));
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  if (Number.isNaN(mode) || mode < 0 || mode > 7 || Math.floor(mode) !== mode) {
+    const err = new RangeError('The value of "mode" is out of range. It must be >= 0 && <= 7. Received ' + mode);
+    err.code = 'ERR_OUT_OF_RANGE';
+    throw err;
+  }
+  return mode;
+}
+
 function copyFileSync(src, dest, mode) {
-  const srcPath = getValidatedPath(src);
-  const destPath = getValidatedPath(dest);
-  const flags = mode === undefined || mode === null ? 0 : mode;
+  const srcPath = getValidatedPath(src, 'src');
+  const destPath = getValidatedPath(dest, 'dest');
+  const flags = validateCopyFileMode(mode);
   binding.copyFile(srcPath, destPath, flags);
+}
+
+function copyFile(src, dest, flagsOrCallback, callback) {
+  let flags = 0;
+  if (typeof flagsOrCallback === 'function') {
+    callback = flagsOrCallback;
+    flags = 0;
+  } else {
+    flags = validateCopyFileMode(flagsOrCallback);
+    if (typeof callback !== 'function') {
+      const err = new TypeError('The "callback" argument must be of type Function. Received ' + (callback === null ? 'null' : typeof callback));
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+  }
+  callback = makeCallback(callback);
+  const srcPath = getValidatedPath(src, 'src');
+  const destPath = getValidatedPath(dest, 'dest');
+  setImmediateOrSync(() => {
+    try {
+      binding.copyFile(srcPath, destPath, flags);
+      callback(null);
+    } catch (e) {
+      callback(e);
+    }
+  });
 }
 
 function isBufferLike(value) {
@@ -678,27 +784,35 @@ function isBufferLike(value) {
     (value.constructor && (value.constructor.name === 'Buffer' || value.constructor.name === 'Uint8Array'));
 }
 
-function appendFileSync(path, data, options) {
+function appendFileSync(pathOrFd, data, options) {
   options = getOptions(options, { encoding: 'utf8', mode: 0o666, flag: 'a' });
-  path = getValidatedPath(path);
-  const fd = openSync(path, options.flag || 'a', options.mode);
+  const isFd = typeof pathOrFd === 'number' && !Number.isNaN(pathOrFd);
+  const validData = typeof data === 'string' || isBufferLike(data);
+  if (!validData) {
+    const err = new TypeError('The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ' + (data === null ? 'null' : typeof data));
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  let fd;
+  if (isFd) {
+    fd = pathOrFd;
+  } else {
+    pathOrFd = getValidatedPath(pathOrFd);
+    fd = openSync(pathOrFd, options.flag || 'a', options.mode);
+  }
   try {
     if (typeof data === 'string' && (options.encoding === 'utf8' || options.encoding === 'utf-8')) {
       binding.writeSyncString(fd, data);
     } else if (isBufferLike(data)) {
       const len = data.byteLength ?? data.length;
       binding.writeSync(fd, data, 0, len, -1);
-    } else if (data != null && typeof data === 'object' && typeof data.length === 'number' && data.length >= 0) {
-      const u8 = new Uint8Array(data.length);
-      for (let i = 0; i < data.length; i++) u8[i] = data[i];
-      binding.writeSync(fd, u8, 0, u8.length, -1);
     } else {
       const err = new TypeError('The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ' + (data === null ? 'null' : typeof data));
       err.code = 'ERR_INVALID_ARG_TYPE';
       throw err;
     }
   } finally {
-    closeSync(fd);
+    if (!isFd) closeSync(fd);
   }
 }
 
@@ -753,6 +867,288 @@ function realpathSync(path, options) {
 }
 realpathSync.native = realpathSync;
 
+function readlinkSync(path, options) {
+  options = getOptions(options, { encoding: 'utf8' });
+  path = getValidatedPath(path);
+  return binding.readlink(path);
+}
+
+function readlink(path, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  callback = makeCallback(callback);
+  path = getValidatedPath(path);
+  setImmediateOrSync(() => {
+    try {
+      const linkString = binding.readlink(path);
+      callback(null, linkString);
+    } catch (e) {
+      callback(e);
+    }
+  });
+}
+
+function symlinkTypeToFlags(type) {
+  if (type === undefined || type === null || type === 'file') return 0;
+  if (type === 'dir') return binding.UV_FS_SYMLINK_DIR;
+  if (type === 'junction') return binding.UV_FS_SYMLINK_JUNCTION;
+  const err = new TypeError('The "type" argument must be one of type string or undefined. Received \'' + type + '\'');
+  err.code = 'ERR_INVALID_ARG_VALUE';
+  throw err;
+}
+
+function symlinkSync(target, path, type) {
+  const targetPath = getValidatedPath(target, 'target');
+  const pathPath = getValidatedPath(path, 'path');
+  const flags = symlinkTypeToFlags(type);
+  binding.symlink(targetPath, pathPath, flags);
+}
+
+function symlink(target, path, type, callback) {
+  if (typeof type === 'function') {
+    callback = type;
+    type = undefined;
+  }
+  callback = makeCallback(callback);
+  const targetPath = getValidatedPath(target, 'target');
+  const pathPath = getValidatedPath(path, 'path');
+  const flags = symlinkTypeToFlags(type);
+  setImmediateOrSync(() => {
+    try {
+      binding.symlink(targetPath, pathPath, flags);
+      callback(null);
+    } catch (e) {
+      callback(e);
+    }
+  });
+}
+
+function chmodSync(path, mode) {
+  path = getValidatedPath(path, 'path');
+  const modeNum = typeof mode === 'number' ? mode : parseInt(String(mode), 8);
+  if (Number.isNaN(modeNum)) {
+    const err = new TypeError('The "mode" argument must be valid. Received ' + mode);
+    err.code = 'ERR_INVALID_ARG_VALUE';
+    throw err;
+  }
+  binding.chmod(path, modeNum);
+}
+
+function fchmodSync(fd, mode) {
+  if (typeof fd !== 'number' || Number.isNaN(fd)) {
+    const err = new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  const modeNum = typeof mode === 'number' ? mode : parseInt(String(mode), 8);
+  if (Number.isNaN(modeNum)) {
+    const err = new TypeError('The "mode" argument must be valid. Received ' + mode);
+    err.code = 'ERR_INVALID_ARG_VALUE';
+    throw err;
+  }
+  binding.fchmod(fd, modeNum);
+}
+
+function chmod(path, mode, callback) {
+  if (typeof callback !== 'function') {
+    const err = new TypeError('The "callback" argument must be of type Function. Received ' + typeof callback);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  callback = makeCallback(callback);
+  path = getValidatedPath(path, 'path');
+  const modeNum = typeof mode === 'number' ? mode : parseInt(String(mode), 8);
+  if (Number.isNaN(modeNum)) {
+    const err = new TypeError('The "mode" argument must be valid. Received ' + mode);
+    err.code = 'ERR_INVALID_ARG_VALUE';
+    throw err;
+  }
+  setImmediateOrSync(() => {
+    try {
+      binding.chmod(path, modeNum);
+      callback(null);
+    } catch (e) {
+      callback(e);
+    }
+  });
+}
+
+function utimes(path, atime, mtime, callback) {
+  if (typeof callback !== 'function') {
+    const err = new TypeError('The "callback" argument must be of type Function. Received ' + typeof callback);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  callback = makeCallback(callback);
+  path = getValidatedPath(path);
+  setImmediateOrSync(() => {
+    try {
+      binding.utimes(path, toUnixTimestamp(atime), toUnixTimestamp(mtime));
+      callback(null);
+    } catch (e) {
+      if (e && !e.code) e.code = 'ENOSYS';
+      callback(e);
+    }
+  });
+}
+
+function fchmod(fd, mode, callback) {
+  if (typeof callback !== 'function') {
+    const err = new TypeError('The "callback" argument must be of type Function. Received ' + typeof callback);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  callback = makeCallback(callback);
+  if (typeof fd !== 'number' || Number.isNaN(fd)) {
+    const err = new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  const modeNum = typeof mode === 'number' ? mode : parseInt(String(mode), 8);
+  if (Number.isNaN(modeNum)) {
+    const err = new TypeError('The "mode" argument must be valid. Received ' + mode);
+    err.code = 'ERR_INVALID_ARG_VALUE';
+    throw err;
+  }
+  setImmediateOrSync(() => {
+    try {
+      binding.fchmod(fd, modeNum);
+      callback(null);
+    } catch (e) {
+      callback(e);
+    }
+  });
+}
+
+function toUnixTimestamp(time) {
+  if (typeof time === 'number' && !Number.isNaN(time)) {
+    if (time < 0) return Date.now() / 1000;
+    return time;
+  }
+  if (time instanceof Date) return time.getTime() / 1000;
+  if (typeof time === 'string' && +time === +time) return +time;
+  throw new TypeError('atime or mtime must be a number or Date');
+}
+
+function utimesSync(path, atime, mtime) {
+  path = getValidatedPath(path);
+  binding.utimes(path, toUnixTimestamp(atime), toUnixTimestamp(mtime));
+}
+
+function futimesSync(fd, atime, mtime) {
+  if (typeof fd !== 'number' || Number.isNaN(fd)) {
+    const err = new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  if (fd < 0 || fd > 2147483647) {
+    const err = new RangeError('The value of "fd" is out of range. It must be >= 0 && <= 2147483647. Received ' + fd);
+    err.code = 'ERR_OUT_OF_RANGE';
+    throw err;
+  }
+  binding.futimes(fd, toUnixTimestamp(atime), toUnixTimestamp(mtime));
+}
+
+function futimes(fd, atime, mtime, callback) {
+  if (typeof callback !== 'function') {
+    const err = new TypeError('The "callback" argument must be of type Function. Received ' + typeof callback);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  callback = makeCallback(callback);
+  if (typeof fd !== 'number' || Number.isNaN(fd)) {
+    const err = new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  if (fd < 0 || fd > 2147483647) {
+    const err = new RangeError('The value of "fd" is out of range. It must be >= 0 && <= 2147483647. Received ' + fd);
+    err.code = 'ERR_OUT_OF_RANGE';
+    throw err;
+  }
+  const at = toUnixTimestamp(atime);
+  const mt = toUnixTimestamp(mtime);
+  setImmediateOrSync(() => {
+    try {
+      binding.futimes(fd, at, mt);
+      callback(null);
+    } catch (e) {
+      if (e && !e.code) e.code = 'ENOSYS';
+      callback(e);
+    }
+  });
+}
+
+function lutimesSync(path, atime, mtime) {
+  path = getValidatedPath(path);
+  try {
+    binding.lutimes(path, toUnixTimestamp(atime), toUnixTimestamp(mtime));
+  } catch (e) {
+    if (e) e.code = (e.code && e.code === 'ENOSYS') ? e.code : 'ENOSYS';
+    throw e;
+  }
+}
+
+function lutimes(path, atime, mtime, callback) {
+  if (typeof callback !== 'function') {
+    const err = new TypeError('The "callback" argument must be of type Function. Received ' + typeof callback);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  callback = makeCallback(callback);
+  path = getValidatedPath(path);
+  const at = toUnixTimestamp(atime);
+  const mt = toUnixTimestamp(mtime);
+  setImmediateOrSync(() => {
+    try {
+      binding.lutimes(path, at, mt);
+      callback(null);
+    } catch (e) {
+      if (e) e.code = (e.code && e.code === 'ENOSYS') ? e.code : 'ENOSYS';
+      callback(e);
+    }
+  });
+}
+
+function fsyncSync(fd) {
+  if (typeof fd !== 'number' || Number.isNaN(fd)) {
+    const err = new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  binding.fsync(fd);
+}
+
+function mkdtempSync(prefix, options) {
+  options = getOptions(options, { encoding: 'utf8' });
+  prefix = getValidatedPath(prefix, 'prefix');
+  const suffix = 'XXXXXX';
+  let template = String(prefix).endsWith(suffix) ? prefix : prefix.replace(/X+$/, '') + suffix;
+  return binding.mkdtemp(template);
+}
+
+function mkdtemp(prefix, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  callback = makeCallback(callback);
+  options = getOptions(options, { encoding: 'utf8' });
+  prefix = getValidatedPath(prefix, 'prefix');
+  const suffix = 'XXXXXX';
+  let template = String(prefix).endsWith(suffix) ? prefix : prefix.replace(/X+$/, '') + suffix;
+  setImmediateOrSync(() => {
+    try {
+      const path = binding.mkdtemp(template);
+      callback(null, path);
+    } catch (e) {
+      callback(e);
+    }
+  });
+}
+
 const constants = binding;
 
 function Dir() {
@@ -769,6 +1165,8 @@ module.exports = {
   readdir,
   readdirSync,
   realpathSync,
+  readlinkSync,
+  readlink,
   statSync,
   lstatSync,
   fstatSync,
@@ -786,14 +1184,33 @@ module.exports = {
   open,
   close,
   renameSync,
+  unlink,
   unlinkSync,
   rmdirSync,
   truncateSync,
   ftruncateSync,
+  copyFile,
   copyFileSync,
   appendFileSync,
+  symlinkSync,
+  symlink,
+  chmodSync,
+  chmod,
+  fchmodSync,
+  fchmod,
+  utimesSync,
+  utimes,
+  futimesSync,
+  futimes,
+  lutimesSync,
+  lutimes,
+  fsyncSync,
+  mkdtempSync,
+  mkdtemp,
+  _toUnixTimestamp: toUnixTimestamp,
   constants,
   Dirent,
   Stats,
   Dir,
 };
+module.exports.rename = rename;

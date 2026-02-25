@@ -169,26 +169,40 @@ Location: `node/test/parallel/test-fs-*.js`.
 **Tests to run**
 
 - **Subset (green):** `unode/tests/node-compat/parallel/test-fs-phase-c-subset.js` – covers truncateSync, renameSync, unlinkSync, copyFileSync, appendFileSync (string + buffer), rmdirSync. Run via `FsPhaseCSubsetTest`.
-- **Raw Node:** `test-fs-truncate-sync.js` passes. `test-fs-rename-type-check.js` / `test-fs-unlink-type-check.js` need Node `common.invalidArgTypeHelper` and (for unlink) async `fs.unlink`. `test-fs-copyfile.js` needs `internal/test/binding`. `test-fs-append-file-sync.js` needs `common/fixtures` (utf8TestText) to resolve when running raw.
+- **Raw Node tests (all passing):** The following Node tests from `node/test/parallel/` are run unchanged by the phase02 runner (when `NAPI_V8_NODE_ROOT_PATH` is set). Common, fixtures, and builtins were extended so they all pass.
+  - **test-fs-rename-type-check.js** – `RawFsRenameFromNodeTest`.
+  - **test-fs-unlink-type-check.js** – `RawFsUnlinkFromNodeTest`.
+  - **test-fs-truncate-sync.js** – `RawFsTruncateSyncFromNodeTest`.
+  - **test-fs-copyfile.js** – `RawFsCopyfileSyncFromNodeTest` (internal/test/binding stub, copyfile constants and error path/dest in C++, copyFile/copyFileSync validation in fs.js).
+  - **test-fs-append-file-sync.js** – `RawFsAppendFileSyncFromNodeTest` (fixtures.utf8TestText, appendFileSync data validation and fd support in fs.js).
+- **Not yet in runner:** No raw test for rmdir (Node has `test-fs-rmdir-type-check.js` and recursive variants; rmdirSync is covered by the Phase C subset test only).
 
 ---
 
 ### Phase D: Symlinks, chmod, utimes, mkdtemp (optional)
 
-**C++**
+**C++ (implemented)**
 
-- readlinkSync, symlinkSync (and optionally lchown/chown if needed for tests we care about).
-- chmodSync, fchmodSync.
-- utimesSync, futimesSync (and lutimesSync if needed).
-- mkdtempSync.
+- `readlink`, `symlink` (with UV_FS_SYMLINK_DIR / UV_FS_SYMLINK_JUNCTION constants), `chmod`, `fchmod`, `utimes`, `futimes`, `mkdtemp` in `unode_fs.cc`; all use libuv sync API and throw via `ThrowUVException` on error.
 
-**JS**
+**JS (implemented)**
 
-- Wrappers for the above; Stats from lstat for symlinks.
+- `readlinkSync`, `readlink`, `symlinkSync`, `symlink`, `chmodSync`, `chmod`, `fchmodSync`, `fchmod`, `utimesSync`, `utimes`, `futimesSync`, `mkdtempSync`, `mkdtemp`; `_toUnixTimestamp` for tests; symlink type → flags via `symlinkTypeToFlags`; mkdtemp appends `XXXXXX` if missing.
+- Path builtin: `dirname`, `basename` added for Phase D tests.
+- Common: `canCreateSymLink()` added (returns true).
+- `getValidatedPath` accepts Buffer-like / Uint8Array and file URL (strip `file://`).
 
-**Tests**
+**Raw Node tests in runner**
 
-- test-fs-symlink.js, test-fs-readlink.js, test-fs-chmod.js, test-fs-utimes.js, test-fs-mkdtemp.js.
+- `RawFsMkdtempFromNodeTest` (test-fs-mkdtemp.js) – may fail on basename length assertion (14 vs 12) due to platform.
+- `RawFsReadlinkTypeCheckFromNodeTest` (test-fs-readlink-type-check.js) – **passing**.
+- `RawFsSymlinkFromNodeTest` (test-fs-symlink.js) – needs `assert.rejects` in assert builtin.
+- `RawFsChmodFromNodeTest` (test-fs-chmod.js) – needs error message shape (path argument name).
+- `RawFsUtimesFromNodeTest` (test-fs-utimes.js) – needs `util.inspect` in util builtin.
+
+**Tests (Node)**
+
+- test-fs-symlink.js, test-fs-readlink-type-check.js, test-fs-chmod.js, test-fs-utimes.js, test-fs-mkdtemp.js.
 
 ---
 
@@ -224,7 +238,7 @@ Location: `node/test/parallel/test-fs-*.js`.
 
 1. **Phase A** – Implement stat/lstat/fstat (C++), Stats (JS), existsSync, accessSync. Add RawFsExistsFromNodeTest and RawFsStatFromNodeTest.
 2. **Phase B** – Implement openSync, closeSync, readSync, writeSync (C++ + JS). Add RawFsWriteSyncFromNodeTest, RawFsReaddirFromNodeTest.
-3. **Phase C** – Implement renameSync, unlinkSync, rmdirSync, truncateSync, ftruncateSync, copyFileSync, appendFileSync. Add raw tests for corresponding Node tests.
+3. **Phase C** – Implement renameSync, unlinkSync, rmdirSync, truncateSync, ftruncateSync, copyFileSync, appendFileSync. All Phase C raw tests in the runner pass (rename, unlink, truncate, copyfile, append-file-sync); rmdir has no raw test in the runner yet.
 4. **Phase D/E** – As needed for additional Node tests or compatibility.
 
 This plan gets you to a fully tested, Node-aligned fs implementation in stages, with clear reference to Node’s implementation and tests.

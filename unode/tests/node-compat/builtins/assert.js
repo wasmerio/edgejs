@@ -83,6 +83,25 @@ function throws(fn, expected) {
   }
 }
 
+function rejects(asyncFn, expected) {
+  return Promise.resolve().then(function () {
+    const p = typeof asyncFn === 'function' ? asyncFn() : asyncFn;
+    if (p == null || typeof p.then !== 'function') {
+      return Promise.reject(new AssertionError('Expected asyncFn to return a Promise'));
+    }
+    return p.then(
+      function () {
+        throw new AssertionError('Expected asyncFn to reject');
+      },
+      function (err) {
+        if (!matchesExpected(err, expected)) {
+          throw new AssertionError('Function rejected with unexpected error shape: ' + String(err && err.message));
+        }
+      }
+    );
+  });
+}
+
 // Node's assert is callable: assert(value, msg) === assert.ok(value, msg)
 function assert(value, message) {
   return ok(value, message);
@@ -95,5 +114,6 @@ assert.notStrictEqual = notStrictEqual;
 assert.ifError = ifError;
 assert.fail = fail;
 assert.throws = throws;
+assert.rejects = rejects;
 
 module.exports = assert;

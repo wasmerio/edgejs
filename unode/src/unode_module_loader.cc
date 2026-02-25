@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+static std::string g_fallback_builtins_override;
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -219,11 +221,38 @@ bool ResolveBuiltinPath(const std::string& specifier, const std::string& base_di
   if (id.size() > 5 && id.compare(0, 5, "node:") == 0) {
     id = id.substr(5);
   }
-  if (id.empty() || id.find('/') != std::string::npos ||
-      id.rfind(".", 0) == 0) {
+  if (id.empty() || id.rfind(".", 0) == 0) {
     return false;
   }
-  const char* fallback = std::getenv("UNODE_FALLBACK_BUILTINS_DIR");
+  const char* fallback = !g_fallback_builtins_override.empty()
+                             ? g_fallback_builtins_override.c_str()
+                             : std::getenv("UNODE_FALLBACK_BUILTINS_DIR");
+  // When fallback is set, allow "internal/..." specifiers (e.g. internal/test/binding) for raw Node tests.
+  // Match prefix "internal" (8 chars). Must not use "internal/" here: compare(0, 8, "internal/") compares
+  // 8 chars of id with the full 9-char literal and never matches.
+  static const char kInternalPrefix[] = "internal";
+  if (fallback != nullptr && fallback[0] != '\0' && id.size() > 8 &&
+      id.compare(0, sizeof(kInternalPrefix) - 1, kInternalPrefix) == 0) {
+    fs::path fallback_path = fs::absolute(fs::path(fallback));
+    fs::path resolved;
+    std::string flat;
+    for (char c : id) {
+      flat += (c == '/') ? '_' : c;
+    }
+    fs::path candidate = fallback_path / (flat + ".js");
+    if (ResolveAsFile(candidate, &resolved)) {
+      *out = resolved.lexically_normal();
+      return true;
+    }
+    candidate = fallback_path / (id + ".js");
+    if (ResolveAsFile(candidate, &resolved)) {
+      *out = resolved.lexically_normal();
+      return true;
+    }
+  }
+  if (id.find('/') != std::string::npos) {
+    return false;
+  }
   // When UNODE_FALLBACK_BUILTINS_DIR is set (e.g. raw Node tests), try it first
   // so we always load unode's builtins (fs, assert, path) instead of node's or stubs.
   if (fallback != nullptr && fallback[0] != '\0') {
@@ -369,7 +398,9 @@ napi_value CreateResolvedPathString(napi_env env, const fs::path& resolved_path)
 // common shims so Node's heavy common/index.js is not loaded.
 static bool ApplyNodeTestCommonRedirect(ModuleLoaderState* state, fs::path* resolved_path) {
   if (state == nullptr || state->entry_dir.empty()) return false;
-  const char* fallback = std::getenv("UNODE_FALLBACK_BUILTINS_DIR");
+  const char* fallback = !g_fallback_builtins_override.empty()
+                             ? g_fallback_builtins_override.c_str()
+                             : std::getenv("UNODE_FALLBACK_BUILTINS_DIR");
   if (fallback == nullptr || fallback[0] == '\0') return false;
 
   fs::path entry_dir = fs::path(state->entry_dir).lexically_normal();
@@ -585,7 +616,6 @@ napi_value RequireCallback(napi_env env, napi_callback_info info) {
     ThrowLoaderError(env, "Empty module specifier");
     return nullptr;
   }
-
   napi_value from_js_cache = GetCachedExportsFromJsCache(env, context->state, specifier);
   if (from_js_cache != nullptr) {
     return from_js_cache;
@@ -759,6 +789,10 @@ bool LoadResolvedModule(napi_env env, ModuleLoaderState* state, const fs::path& 
 }
 
 }  // namespace
+
+void UnodeSetFallbackBuiltinsDir(const char* path) {
+  g_fallback_builtins_override = (path != nullptr && path[0] != '\0') ? path : "";
+}
 
 napi_status UnodeInstallModuleLoader(napi_env env, const char* entry_script_path) {
   if (env == nullptr) {

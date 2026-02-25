@@ -3,6 +3,7 @@
 #include <string>
 
 #include "test_env.h"
+#include "unode_module_loader.h"
 #include "unode_runtime.h"
 
 class Test3NodeDropinSubsetPhase02 : public FixtureTestBase {};
@@ -69,7 +70,9 @@ int RunRawNodeTestScript(napi_env env, const char* node_test_relative_path, std:
   const std::string node_test_dir = (node_root_path / "test").string();
   setenv("UNODE_FALLBACK_BUILTINS_DIR", fallback_builtins.c_str(), 1);
   setenv("NODE_TEST_DIR", node_test_dir.c_str(), 1);
+  UnodeSetFallbackBuiltinsDir(fallback_builtins.c_str());
   const int exit_code = UnodeRunScriptFile(env, script_path_absolute.c_str(), error_out);
+  UnodeSetFallbackBuiltinsDir(nullptr);
   unsetenv("UNODE_FALLBACK_BUILTINS_DIR");
   unsetenv("NODE_TEST_DIR");
   return exit_code;
@@ -224,6 +227,46 @@ TEST_F(Test3NodeDropinSubsetPhase02, RawFsAppendFileSyncFromNodeTest) {
   EnvScope s(runtime_.get());
   std::string error;
   const int exit_code = RunRawNodeTestScript(s.env, "test-fs-append-file-sync.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsMkdtempFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-mkdtemp.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsReadlinkTypeCheckFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-readlink-type-check.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsSymlinkFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-symlink.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsChmodFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-chmod.js", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
+
+TEST_F(Test3NodeDropinSubsetPhase02, RawFsUtimesFromNodeTest) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, "test-fs-utimes.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
