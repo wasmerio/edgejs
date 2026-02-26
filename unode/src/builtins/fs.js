@@ -3,6 +3,8 @@
 const binding = globalThis.__unode_fs;
 const encodingBinding = globalThis.__unode_encoding || null;
 let warnedInvalidExistsSyncPath = false;
+const activeRequests = globalThis.__unode_active_requests || [];
+globalThis.__unode_active_requests = activeRequests;
 if (!binding) {
   throw new Error('fs builtin requires __unode_fs binding');
 }
@@ -619,6 +621,8 @@ function open(path, flags, mode, callback) {
   if (arguments.length < 3) { callback = flags; flags = 'r'; mode = 0o666; }
   else if (typeof mode === 'function') { callback = mode; mode = 0o666; }
   callback = makeCallback(callback);
+  const req = { type: 'FSReqCallback', syscall: 'open' };
+  activeRequests.push(req);
   setImmediateOrSync(() => {
     try {
       const p = getValidatedPath(path);
@@ -628,6 +632,16 @@ function open(path, flags, mode, callback) {
       callback(null, fd);
     } catch (e) {
       callback(e);
+    } finally {
+      const drop = () => {
+        const i = activeRequests.indexOf(req);
+        if (i >= 0) activeRequests.splice(i, 1);
+      };
+      if (typeof process === 'object' && process && typeof process.nextTick === 'function') {
+        process.nextTick(drop);
+      } else {
+        drop();
+      }
     }
   });
 }

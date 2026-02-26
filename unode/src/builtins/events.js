@@ -89,7 +89,13 @@ if (typeof process === 'object' && process != null && !process.__unode_nexttick_
   process.__unode_nexttick_patched = true;
   const origNextTick = process.nextTick;
   const patchedNextTick = function patchedNextTick(fn, ...args) {
-    if (typeof fn !== 'function') return undefined;
+    if (typeof fn !== 'function') {
+      const err = new TypeError(
+        `The "callback" argument must be of type function. Received type ${typeof fn} (${String(fn)})`,
+      );
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
     if (origNextTick && origNextTick !== process.nextTick) {
       Promise.resolve().then(() => fn(...args));
       return undefined;

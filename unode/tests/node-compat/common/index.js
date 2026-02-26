@@ -150,6 +150,12 @@ function skipIf32Bits() {
   }
 }
 
+function skipIfInspectorDisabled() {
+  if (!process.features || process.features.inspector !== true) {
+    skip('Inspector is disabled');
+  }
+}
+
 function spawnPromisified(cmd, args, options) {
   return new Promise((resolve) => {
     const child = childProcess.spawn(cmd, args, options);
@@ -199,6 +205,7 @@ module.exports = {
   printSkipMessage,
   skip,
   skipIf32Bits,
+  skipIfInspectorDisabled,
   spawnPromisified,
   getArrayBufferViews,
   getTTYfd,

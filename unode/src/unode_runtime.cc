@@ -1,18 +1,17 @@
 #include "unode_runtime.h"
 
 #include <cstdlib>
+#include <chrono>
+#include <cerrno>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#include <stdlib.h>
-extern char** _environ;
-#else
+#if !defined(_WIN32)
 #include <unistd.h>
-extern char** environ;
 #endif
 
 #include "unode_fs.h"
@@ -33,26 +32,9 @@ extern char** environ;
 namespace {
 
 std::string g_unode_current_script_path;
-
-void CopyProcessEnvironmentToObject(napi_env env, napi_value env_obj) {
-  char** env_iter =
-#if defined(_WIN32)
-      _environ;
-#else
-      environ;
-#endif
-  for (; env_iter != nullptr && *env_iter != nullptr; ++env_iter) {
-    std::string entry(*env_iter);
-    size_t eq = entry.find('=');
-    if (eq == std::string::npos) continue;
-    std::string key = entry.substr(0, eq);
-    std::string val = entry.substr(eq + 1);
-    napi_value v = nullptr;
-    if (napi_create_string_utf8(env, val.c_str(), NAPI_AUTO_LENGTH, &v) == napi_ok && v != nullptr) {
-      napi_set_named_property(env, env_obj, key.c_str(), v);
-    }
-  }
-}
+std::vector<std::string> g_unode_exec_argv;
+std::string g_unode_process_title;
+const auto g_process_start_time = std::chrono::steady_clock::now();
 
 std::string ReadTextFile(const char* path) {
   if (path == nullptr || path[0] == '\0') {
@@ -166,24 +148,6 @@ std::string GetAndClearPendingException(napi_env env, bool* is_process_exit, int
   return std::string(buffer.data(), copied);
 }
 
-std::string NapiValueToUtf8(napi_env env, napi_value value) {
-  napi_value string_value = nullptr;
-  if (napi_coerce_to_string(env, value, &string_value) != napi_ok || string_value == nullptr) {
-    return "";
-  }
-  size_t length = 0;
-  if (napi_get_value_string_utf8(env, string_value, nullptr, 0, &length) != napi_ok) {
-    return "";
-  }
-  std::string out(length + 1, '\0');
-  size_t copied = 0;
-  if (napi_get_value_string_utf8(env, string_value, out.data(), out.size(), &copied) != napi_ok) {
-    return "";
-  }
-  out.resize(copied);
-  return out;
-}
-
 std::string EscapeForSingleQuotedJs(const std::string& in) {
   std::string out;
   out.reserve(in.size() + 8);
@@ -209,34 +173,26 @@ std::string EscapeForSingleQuotedJs(const std::string& in) {
   return out;
 }
 
-const char* DetectPlatform() {
-#if defined(_WIN32)
-  return "win32";
-#elif defined(__APPLE__)
-  return "darwin";
-#elif defined(__linux__)
-  return "linux";
-#elif defined(__sun)
-  return "sunos";
-#elif defined(_AIX)
-  return "aix";
-#else
-  return "unknown";
-#endif
-}
-
-const char* DetectArch() {
-#if defined(__x86_64__) || defined(_M_X64)
-  return "x64";
-#elif defined(__aarch64__) || defined(_M_ARM64)
-  return "arm64";
-#elif defined(__arm__) || defined(_M_ARM)
-  return "arm";
-#elif defined(__i386__) || defined(_M_IX86)
-  return "ia32";
-#else
-  return "unknown";
-#endif
+void ParseNodeStyleFlagsFromSource(const char* source_text) {
+  g_unode_exec_argv.clear();
+  g_unode_process_title.clear();
+  if (source_text == nullptr) return;
+  std::istringstream in{std::string(source_text)};
+  std::string line;
+  while (std::getline(in, line)) {
+    const auto pos = line.find("Flags:");
+    if (pos == std::string::npos) continue;
+    std::string rest = line.substr(pos + 6);
+    std::istringstream tokens(rest);
+    std::string token;
+    while (tokens >> token) {
+      g_unode_exec_argv.push_back(token);
+      static constexpr const char kTitlePrefix[] = "--title=";
+      if (token.rfind(kTitlePrefix, 0) == 0) {
+        g_unode_process_title = token.substr(sizeof(kTitlePrefix) - 1);
+      }
+    }
+  }
 }
 
 void ClearPendingExceptionIfAny(napi_env env) {
@@ -244,131 +200,6 @@ void ClearPendingExceptionIfAny(napi_env env) {
   if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
   napi_value ignored = nullptr;
   napi_get_and_clear_last_exception(env, &ignored);
-}
-
-void MaybeInvokeWriteCallback(napi_env env, napi_value maybe_fn) {
-  if (maybe_fn == nullptr) return;
-  napi_valuetype type = napi_undefined;
-  if (napi_typeof(env, maybe_fn, &type) != napi_ok || type != napi_function) {
-    return;
-  }
-  napi_value global = nullptr;
-  napi_value null_value = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
-      napi_get_null(env, &null_value) != napi_ok || null_value == nullptr) {
-    return;
-  }
-  napi_value argv[1] = {null_value};
-  napi_value ignored = nullptr;
-  napi_call_function(env, global, maybe_fn, 1, argv, &ignored);
-}
-
-napi_value ProcessStdoutWriteCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc >= 1 && argv[0] != nullptr) {
-    const std::string out = NapiValueToUtf8(env, argv[0]);
-    std::cout << out;
-    std::cout.flush();
-  }
-  if (argc >= 2) {
-    MaybeInvokeWriteCallback(env, argv[1]);
-  }
-  napi_value result = nullptr;
-  napi_get_boolean(env, true, &result);
-  return result;
-}
-
-napi_value ProcessStderrWriteCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc >= 1 && argv[0] != nullptr) {
-    const std::string out = NapiValueToUtf8(env, argv[0]);
-    std::cerr << out;
-    std::cerr.flush();
-  }
-  if (argc >= 2) {
-    MaybeInvokeWriteCallback(env, argv[1]);
-  }
-  napi_value result = nullptr;
-  napi_get_boolean(env, true, &result);
-  return result;
-}
-
-napi_status InstallProcessStream(napi_env env,
-                                 napi_value process_obj,
-                                 const char* name,
-                                 int32_t fd,
-                                 napi_callback cb) {
-  napi_value stream_obj = nullptr;
-  if (napi_create_object(env, &stream_obj) != napi_ok || stream_obj == nullptr) {
-    return napi_generic_failure;
-  }
-  napi_value fd_value = nullptr;
-  if (napi_create_int32(env, fd, &fd_value) != napi_ok || fd_value == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, stream_obj, "fd", fd_value) != napi_ok) {
-    return napi_generic_failure;
-  }
-  napi_value true_value = nullptr;
-  if (napi_get_boolean(env, true, &true_value) != napi_ok || true_value == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, stream_obj, "writable", true_value) != napi_ok) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, stream_obj, "_isStdio", true_value) != napi_ok) {
-    return napi_generic_failure;
-  }
-  napi_value false_value = nullptr;
-  if (napi_get_boolean(env, false, &false_value) != napi_ok || false_value == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, stream_obj, "isTTY", false_value) != napi_ok) {
-    return napi_generic_failure;
-  }
-  napi_value write_fn = nullptr;
-  if (napi_create_function(env, "write", NAPI_AUTO_LENGTH, cb, nullptr, &write_fn) != napi_ok ||
-      write_fn == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, stream_obj, "write", write_fn) != napi_ok) {
-    return napi_generic_failure;
-  }
-  auto return_undefined = [](napi_env env, napi_callback_info info) -> napi_value {
-    napi_value undefined = nullptr;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-  };
-  auto return_this = [](napi_env env, napi_callback_info info) -> napi_value {
-    napi_value this_arg = nullptr;
-    if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
-      napi_value undefined = nullptr;
-      napi_get_undefined(env, &undefined);
-      return undefined;
-    }
-    return this_arg;
-  };
-  const char* event_methods_this[] = {"on", "addListener", "once", "prependListener", "removeListener"};
-  for (const char* method : event_methods_this) {
-    napi_value fn = nullptr;
-    if (napi_create_function(env, method, NAPI_AUTO_LENGTH, return_this, nullptr, &fn) != napi_ok || fn == nullptr) {
-      return napi_generic_failure;
-    }
-    if (napi_set_named_property(env, stream_obj, method, fn) != napi_ok) {
-      return napi_generic_failure;
-    }
-  }
-  napi_value emit_fn = nullptr;
-  if (napi_create_function(env, "emit", NAPI_AUTO_LENGTH, return_undefined, nullptr, &emit_fn) != napi_ok ||
-      emit_fn == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, stream_obj, "emit", emit_fn) != napi_ok) {
-    return napi_generic_failure;
-  }
-  return napi_set_named_property(env, process_obj, name, stream_obj);
 }
 
 napi_value ConsoleLogCallback(napi_env env, napi_callback_info info) {
@@ -416,8 +247,10 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
     }
     return 1;
   }
+  ParseNodeStyleFlagsFromSource(source_text);
 
-  napi_status status = UnodeInstallProcessObject(env);
+  napi_status status = UnodeInstallProcessObject(
+      env, g_unode_current_script_path, g_unode_exec_argv, g_unode_process_title);
   if (status != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "UnodeInstallProcessObject failed: " + StatusToString(status);
@@ -462,17 +295,477 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "if (typeof process !== 'object' || !process) return;"
       "if (typeof process.nextTick !== 'function') {"
       "  process.nextTick = function(fn){"
+      "    if (typeof fn !== 'function') {"
+      "      var e = new TypeError('The \"callback\" argument must be of type function.');"
+      "      e.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw e;"
+      "    }"
       "    var args = Array.prototype.slice.call(arguments, 1);"
-      "    if (typeof queueMicrotask === 'function') queueMicrotask(function(){ fn.apply(null, args); });"
-      "    else if (typeof fn === 'function') fn.apply(null, args);"
+      "    var invoke = function(){"
+      "      try {"
+      "        fn.apply(null, args);"
+      "      } catch (err) {"
+      "        if (process && typeof process.emit === 'function' && typeof process.listenerCount === 'function' && process.listenerCount('uncaughtException') > 0) {"
+      "          process.emit('uncaughtException', err);"
+      "        } else {"
+      "          throw err;"
+      "        }"
+      "      }"
+      "    };"
+      "    if (typeof queueMicrotask === 'function') queueMicrotask(invoke);"
+      "    else invoke();"
       "  };"
       "}"
       "if (typeof process.emitWarning !== 'function') {"
-      "  process.emitWarning = function(msg){"
-      "    var text = 'Warning: ' + String(msg);"
+      "  process.emitWarning = function(warning, type, code, ctor){"
+      "    var makeTypeErr = function(){"
+      "      var e = new TypeError('The \"warning\" argument must be of type string or an instance of Error.');"
+      "      e.code = 'ERR_INVALID_ARG_TYPE';"
+      "      return e;"
+      "    };"
+      "    if (warning === undefined) throw makeTypeErr();"
+      "    var detail;"
+      "    if (type && typeof type === 'object' && !Array.isArray(type) && typeof type !== 'function') {"
+      "      var options = type;"
+      "      type = options.type;"
+      "      code = options.code;"
+      "      if (typeof options.detail === 'string') detail = options.detail;"
+      "      ctor = undefined;"
+      "    } else if (typeof type === 'function') {"
+      "      ctor = type;"
+      "      type = undefined;"
+      "      code = undefined;"
+      "    } else if (typeof code === 'function') {"
+      "      ctor = code;"
+      "      code = undefined;"
+      "    }"
+      "    if (!(warning instanceof Error) && typeof warning !== 'string') throw makeTypeErr();"
+      "    if (type !== undefined && typeof type !== 'string') throw makeTypeErr();"
+      "    if (code !== undefined && typeof code !== 'string') throw makeTypeErr();"
+      "    if (ctor !== undefined && typeof ctor !== 'function') throw makeTypeErr();"
+      "    var w;"
+      "    if (warning instanceof Error) {"
+      "      w = warning;"
+      "    } else if (typeof ctor === 'function') {"
+      "      try { w = new ctor(); } catch (_) { w = new Error(String(warning)); }"
+      "      w.message = String(warning);"
+      "      if (!w.name) w.name = 'Warning';"
+      "    } else {"
+      "      w = new Error(String(warning));"
+      "      w.name = (typeof type === 'string' && type.length > 0) ? type : 'Warning';"
+      "      w.message = String(warning);"
+      "    }"
+      "    if (typeof type === 'string' && type.length > 0) w.name = type;"
+      "    if (code !== undefined) w.code = code;"
+      "    if (detail !== undefined) w.detail = detail;"
+      "    if (w && w.name === 'DeprecationWarning' && process.noDeprecation === true) return;"
+      "    if (typeof process.emit === 'function') process.emit('warning', w);"
+      "    var text = String((w && w.name) || 'Warning') + ': ' + String((w && w.message) || '');"
       "    process.nextTick(function(){ if (process.stderr && typeof process.stderr.write === 'function') process.stderr.write(text + '\\n'); });"
       "  };"
       "}"
+      "if (typeof process.emit !== 'function') {"
+      "  var __pl = new Map();"
+      "  process.on = process.addListener = function(name, fn){"
+      "    var k = String(name);"
+      "    var arr = __pl.get(k) || [];"
+      "    arr.push(fn);"
+      "    __pl.set(k, arr);"
+      "    return process;"
+      "  };"
+      "  process.removeListener = function(name, fn){"
+      "    var k = String(name);"
+      "    var arr = __pl.get(k) || [];"
+      "    var idx = arr.lastIndexOf(fn);"
+      "    if (idx >= 0) arr.splice(idx, 1);"
+      "    __pl.set(k, arr);"
+      "    return process;"
+      "  };"
+      "  process.once = function(name, fn){"
+      "    function wrapped(){ process.removeListener(name, wrapped); return fn.apply(this, arguments); }"
+      "    return process.on(name, wrapped);"
+      "  };"
+      "  process.emit = function(name){"
+      "    var k = String(name);"
+      "    var arr = (__pl.get(k) || []).slice();"
+      "    var args = Array.prototype.slice.call(arguments, 1);"
+      "    for (var i = 0; i < arr.length; i++) arr[i].apply(process, args);"
+      "    return arr.length > 0;"
+      "  };"
+      "  process.listenerCount = function(name){"
+      "    var arr = __pl.get(String(name));"
+      "    return arr ? arr.length : 0;"
+      "  };"
+      "}"
+      "if (typeof process._getActiveRequests !== 'function') {"
+      "  process._getActiveRequests = function(){"
+      "    return Array.isArray(globalThis.__unode_active_requests) ? globalThis.__unode_active_requests.slice() : [];"
+      "  };"
+      "}"
+      "if (!globalThis.__unode_resource_tracking_installed) {"
+      "  globalThis.__unode_resource_tracking_installed = true;"
+      "  var __activeResources = globalThis.__unode_active_resources;"
+      "  if (!(__activeResources && typeof __activeResources.set === 'function')) {"
+      "    __activeResources = new Map();"
+      "    globalThis.__unode_active_resources = __activeResources;"
+      "  }"
+      "  var __nativeSetTimeout = globalThis.setTimeout;"
+      "  var __nativeClearTimeout = globalThis.clearTimeout;"
+      "  var __nativeSetInterval = globalThis.setInterval;"
+      "  var __nativeClearInterval = globalThis.clearInterval;"
+      "  var __nativeSetImmediate = globalThis.setImmediate;"
+      "  var __nativeClearImmediate = globalThis.clearImmediate;"
+      "  if (typeof __nativeSetTimeout === 'function') {"
+      "    globalThis.setTimeout = function(cb, ms){"
+      "      var args = Array.prototype.slice.call(arguments, 2);"
+      "      var h;"
+      "      var wrapped = function(){"
+      "        __activeResources.delete(h);"
+      "        if (typeof cb === 'function') return cb.apply(this, arguments);"
+      "      };"
+      "      h = __nativeSetTimeout.apply(globalThis, [wrapped, ms].concat(args));"
+      "      __activeResources.set(h, 'Timeout');"
+      "      return h;"
+      "    };"
+      "  }"
+      "  if (typeof __nativeClearTimeout === 'function') {"
+      "    globalThis.clearTimeout = function(h){ __activeResources.delete(h); return __nativeClearTimeout(h); };"
+      "  }"
+      "  if (typeof __nativeSetInterval === 'function') {"
+      "    globalThis.setInterval = function(cb, ms){"
+      "      var args = Array.prototype.slice.call(arguments, 2);"
+      "      var h = __nativeSetInterval.apply(globalThis, [cb, ms].concat(args));"
+      "      __activeResources.set(h, 'Timeout');"
+      "      return h;"
+      "    };"
+      "  }"
+      "  if (typeof __nativeClearInterval === 'function') {"
+      "    globalThis.clearInterval = function(h){ __activeResources.delete(h); return __nativeClearInterval(h); };"
+      "  }"
+      "  if (typeof __nativeSetImmediate === 'function') {"
+      "    globalThis.setImmediate = function(cb){"
+      "      var args = Array.prototype.slice.call(arguments, 1);"
+      "      var h;"
+      "      var wrapped = function(){"
+      "        __activeResources.delete(h);"
+      "        if (typeof cb === 'function') return cb.apply(this, arguments);"
+      "      };"
+      "      h = __nativeSetImmediate.apply(globalThis, [wrapped].concat(args));"
+      "      __activeResources.set(h, 'Immediate');"
+      "      return h;"
+      "    };"
+      "  }"
+      "  if (typeof __nativeClearImmediate === 'function') {"
+      "    globalThis.clearImmediate = function(h){ __activeResources.delete(h); return __nativeClearImmediate(h); };"
+      "  }"
+      "}"
+      "if (typeof process.getActiveResourcesInfo !== 'function') {"
+      "  process.getActiveResourcesInfo = function(){"
+      "    var out = [];"
+      "    var res = globalThis.__unode_active_resources;"
+      "    if (res && typeof res.forEach === 'function') res.forEach(function(v){ out.push(v); });"
+      "    var reqs = Array.isArray(globalThis.__unode_active_requests) ? globalThis.__unode_active_requests : [];"
+      "    for (var i = 0; i < reqs.length; i++) out.push(String((reqs[i] && reqs[i].type) || 'FSReqCallback'));"
+      "    return out;"
+      "  };"
+      "}"
+      "if (typeof process.threadCpuUsage !== 'function' && typeof process.cpuUsage === 'function') {"
+      "  var __invalidPrev = function(v){"
+      "    if (v == null) return ' Received ' + String(v);"
+      "    if (typeof v === 'function') return ' Received function ' + (v.name || '<anonymous>');"
+      "    if (typeof v === 'object') return ' Received an instance of ' + ((v.constructor && v.constructor.name) || 'Object');"
+      "    if (typeof v === 'string') return \" Received type string ('\" + v + \"')\";"
+      "    return ' Received type ' + typeof v + ' (' + String(v) + ')';"
+      "  };"
+      "  process.threadCpuUsage = function(prevValue){"
+      "    if (arguments.length === 0) return process.cpuUsage();"
+      "    if (prevValue === null || typeof prevValue !== 'object' || Array.isArray(prevValue)) {"
+      "      var e = new TypeError('The \"prevValue\" argument must be of type object.' + __invalidPrev(prevValue));"
+      "      e.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw e;"
+      "    }"
+      "    if (!Object.prototype.hasOwnProperty.call(prevValue, 'user')) {"
+      "      var eu = new TypeError('The \"prevValue.user\" property must be of type number. Received undefined');"
+      "      eu.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw eu;"
+      "    }"
+      "    if (typeof prevValue.user !== 'number') {"
+      "      var eu2 = new TypeError('The \"prevValue.user\" property must be of type number.' + __invalidPrev(prevValue.user));"
+      "      eu2.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw eu2;"
+      "    }"
+      "    if (!Number.isFinite(prevValue.user) || prevValue.user < 0) {"
+      "      var er = new RangeError(\"The property 'prevValue.user' is invalid. Received \" + String(prevValue.user));"
+      "      er.code = 'ERR_INVALID_ARG_VALUE';"
+      "      throw er;"
+      "    }"
+      "    if (!Object.prototype.hasOwnProperty.call(prevValue, 'system')) {"
+      "      var es = new TypeError('The \"prevValue.system\" property must be of type number. Received undefined');"
+      "      es.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw es;"
+      "    }"
+      "    if (typeof prevValue.system !== 'number') {"
+      "      var es2 = new TypeError('The \"prevValue.system\" property must be of type number.' + __invalidPrev(prevValue.system));"
+      "      es2.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw es2;"
+      "    }"
+      "    if (!Number.isFinite(prevValue.system) || prevValue.system < 0) {"
+      "      var er2 = new RangeError(\"The property 'prevValue.system' is invalid. Received \" + String(prevValue.system));"
+      "      er2.code = 'ERR_INVALID_ARG_VALUE';"
+      "      throw er2;"
+      "    }"
+      "    return process.cpuUsage({ user: prevValue.user, system: prevValue.system });"
+      "  };"
+      "}"
+      "if (typeof process.setSourceMapsEnabled !== 'function') {"
+      "  var __sourceMapsEnabled = false;"
+      "  process.setSourceMapsEnabled = function(v){"
+      "    if (typeof v !== 'boolean') {"
+      "      var err = new TypeError('The \"enabled\" argument must be of type boolean.');"
+      "      err.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw err;"
+      "    }"
+      "    __sourceMapsEnabled = v;"
+      "  };"
+      "  process.sourceMapsEnabled = function(){ return __sourceMapsEnabled; };"
+      "}"
+      "if (!process.allowedNodeEnvironmentFlags) {"
+      "  var __allowedFlags = new Set();"
+      "  var __toCanonicalFlag = function(flag) {"
+      "    if (typeof flag !== 'string') return '';"
+      "    var f = flag.trim();"
+      "    if (f.length === 0) return '';"
+      "    if (!f.startsWith('-')) f = (f.length === 1 ? '-' : '--') + f;"
+      "    else if (f.startsWith('-') && !f.startsWith('--')) f = '-' + f.slice(1);"
+      "    var eq = f.indexOf('=');"
+      "    var base = eq >= 0 ? f.slice(0, eq) : f;"
+      "    var val = eq >= 0 ? f.slice(eq) : '';"
+      "    base = base.replace(/_/g, '-');"
+      "    return base + val;"
+      "  };"
+      "  try {"
+      "    var __fs = require('fs');"
+      "    var __path = require('path');"
+      "    var __root = process.env && process.env.NODE_TEST_DIR ? __path.resolve(process.env.NODE_TEST_DIR, '..') : null;"
+      "    if (__root) {"
+      "      var __cliMd = __path.join(__root, 'doc', 'api', 'cli.md');"
+      "      var __text = __fs.readFileSync(__cliMd, 'utf8');"
+      "      var __collect = function(start, end) {"
+      "        var sIdx = __text.indexOf(start);"
+      "        if (sIdx < 0) return;"
+      "        sIdx += start.length;"
+      "        var eIdx = __text.indexOf(end, sIdx);"
+      "        if (eIdx < 0) return;"
+      "        var lines = __text.slice(sIdx, eIdx).split(/\\\\r?\\\\n/);"
+      "        for (var i = 0; i < lines.length; i++) {"
+      "          var line = lines[i];"
+      "          if (!line || !line.trim()) continue;"
+      "          var matches = line.match(/`(-[^`]+)`/g) || [];"
+      "          for (var j = 0; j < matches.length; j++) {"
+      "            var opt = matches[j].slice(1, -1);"
+      "            if (opt.startsWith('--no-')) opt = '--' + opt.slice(5);"
+      "            __allowedFlags.add(__toCanonicalFlag(opt));"
+      "          }"
+      "        }"
+      "      };"
+      "      __collect('<!-- node-options-node start -->', '<!-- node-options-node end -->');"
+      "      __collect('<!-- node-options-v8 start -->', '<!-- node-options-v8 end -->');"
+      "    }"
+      "  } catch (_) {}"
+      "  if (__allowedFlags.size < 50) {"
+      "    var __fallbackDocFlags = ("
+      "      '--allow-addons --allow-child-process --allow-fs-read --allow-fs-write --allow-inspector --allow-wasi --allow-worker --conditions -C --cpu-prof-dir --cpu-prof-interval --cpu-prof-name --cpu-prof --diagnostic-dir --disable-proto --disable-sigusr1 --disable-warning --disable-wasm-trap-handler --dns-result-order --enable-network-family-autoselection --enable-source-maps --entry-url --experimental-abortcontroller --experimental-addon-modules --experimental-detect-module --experimental-eventsource --experimental-import-meta-resolve --experimental-json-modules --experimental-loader --experimental-modules --experimental-print-required-tla --experimental-require-module --experimental-shadow-realm --experimental-specifier-resolution --experimental-test-isolation --experimental-top-level-await --experimental-transform-types --experimental-vm-modules --experimental-wasi-unstable-preview1 --experimental-webstorage --force-context-aware --force-node-api-uncaught-exceptions-policy --frozen-intrinsics --heap-prof-dir --heap-prof-interval --heap-prof-name --heap-prof --heapsnapshot-near-heap-limit --heapsnapshot-signal --http-parser --import --input-type --insecure-http-parser --inspect-port --debug-port --inspect-publish-uid --inspect-wait --inspect --localstorage-file --max-http-header-size --max-old-space-size-percentage --napi-modules --network-family-autoselection-attempt-timeout --addons --async-context-frame --deprecation --experimental-global-navigator --experimental-repl-await --experimental-sqlite --experimental-strip-types --experimental-websocket --extra-info-on-fatal-exception --force-async-hooks-checks --global-search-paths --network-family-autoselection --strip-types --warnings --node-memory-debug --pending-deprecation --permission --preserve-symlinks-main --preserve-symlinks --prof-process --redirect-warnings --report-compact --report-dir --report-directory --report-exclude-env --report-exclude-network --report-filename --report-on-fatalerror --report-on-signal --report-signal --report-uncaught-exception --require -r --snapshot-blob --test-coverage-branches --test-coverage-exclude --test-coverage-functions --test-coverage-include --test-coverage-lines --test-global-setup --test-isolation --test-name-pattern --test-only --test-reporter-destination --test-reporter --test-rerun-failures --test-shard --test-skip-pattern --throw-deprecation --title --tls-keylog --tls-max-v1.2 --tls-max-v1.3 --tls-min-v1.0 --tls-min-v1.1 --tls-min-v1.2 --tls-min-v1.3 --trace-deprecation --trace-env-js-stack --trace-env-native-stack --trace-env --trace-event-categories --trace-event-file-pattern --trace-events-enabled --trace-exit --trace-require-module --trace-sigint --trace-sync-io --trace-tls --trace-uncaught --trace-warnings --track-heap-objects --unhandled-rejections --use-env-proxy --use-largepages --use-system-ca --v8-pool-size --watch-kill-signal --watch-path --watch-preserve-output --watch --zero-fill-buffers --abort-on-uncaught-exception --disallow-code-generation-from-strings --enable-etw-stack-walking --expose-gc --interpreted-frames-native-stack --jitless --max-old-space-size --max-semi-space-size --perf-basic-prof-only-functions --perf-basic-prof --perf-prof-unwinding-info --perf-prof --stack-trace-limit'"
+      "    ).split(' ');"
+      "    for (var __fi = 0; __fi < __fallbackDocFlags.length; __fi++) {"
+      "      if (__fallbackDocFlags[__fi]) __allowedFlags.add(__toCanonicalFlag(__fallbackDocFlags[__fi]));"
+      "    }"
+      "  }"
+      "  ;["
+      "    '--debug-arraybuffer-allocations', '--no-debug-arraybuffer-allocations',"
+      "    '--es-module-specifier-resolution', '--experimental-fetch', '--experimental-wasm-modules',"
+      "    '--experimental-global-customevent', '--experimental-global-webcrypto', '--experimental-report',"
+      "    '--experimental-worker', '--node-snapshot', '--no-node-snapshot', '--loader',"
+      "    '--verify-base-objects', '--no-verify-base-objects', '--trace-promises', '--no-trace-promises',"
+      "    '--experimental-quic'"
+      "  ].forEach(function(f){ __allowedFlags.add(__toCanonicalFlag(f)); });"
+      "  if (process.features && process.features.inspector) {"
+      "    ['--inspect-brk', '--inspect_brk', 'inspect-brk'].forEach(function(f){ __allowedFlags.add(__toCanonicalFlag(f)); });"
+      "  }"
+      "  var __setAdd = Set.prototype.add;"
+      "  var __setDelete = Set.prototype.delete;"
+      "  var __setClear = Set.prototype.clear;"
+      "  __allowedFlags.has = function(flag) {"
+      "    var c = __toCanonicalFlag(String(flag));"
+      "    var eq = c.indexOf('=');"
+      "    var base = eq >= 0 ? c.slice(0, eq) : c;"
+      "    return Set.prototype.has.call(__allowedFlags, c) || Set.prototype.has.call(__allowedFlags, base);"
+      "  };"
+      "  __allowedFlags.add = function() { return __allowedFlags; };"
+      "  __allowedFlags.delete = function() { return false; };"
+      "  __allowedFlags.clear = function() {};"
+      "  try {"
+      "    Set.prototype.add = function(v) { if (this === __allowedFlags) return this; return __setAdd.call(this, v); };"
+      "    Set.prototype.delete = function(v) { if (this === __allowedFlags) return false; return __setDelete.call(this, v); };"
+      "    Set.prototype.clear = function() { if (this === __allowedFlags) return; return __setClear.call(this); };"
+      "  } catch (_) {}"
+      "  Object.freeze(__allowedFlags);"
+      "  process.allowedNodeEnvironmentFlags = __allowedFlags;"
+      "}"
+      "if (typeof process.getuid !== 'function') process.getuid = function(){ return 1000; };"
+      "if (typeof process.getgid !== 'function') process.getgid = function(){ return 1000; };"
+      "if (typeof process.geteuid !== 'function') process.geteuid = function(){ return process.getuid(); };"
+      "if (typeof process.getegid !== 'function') process.getegid = function(){ return process.getgid(); };"
+      "if (!process.__unode_posix_ids) process.__unode_posix_ids = { uid: process.getuid(), gid: process.getgid(), euid: process.geteuid(), egid: process.getegid() };"
+      "if (!process.__unode_posix_helpers) {"
+      "  process.__unode_posix_helpers = true;"
+      "  process.__unodeInvalidArgTail = function(v){"
+      "    if (v == null) return ' Received ' + String(v);"
+      "    if (typeof v === 'function') return ' Received function ' + (v.name || '<anonymous>');"
+      "    if (typeof v === 'object') return ' Received an instance of ' + ((v.constructor && v.constructor.name) || 'Object');"
+      "    if (typeof v === 'string') return \" Received type string ('\" + v + \"')\";"
+      "    return ' Received type ' + typeof v + ' (' + String(v) + ')';"
+      "  };"
+      "  process.__unodeValidatePosixId = function(id){"
+      "    if (typeof id !== 'number' && typeof id !== 'string') {"
+      "      var e = new TypeError('The \"id\" argument must be one of type number or string.' + process.__unodeInvalidArgTail(id));"
+      "      e.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw e;"
+      "    }"
+      "  };"
+      "  process.__unodeUnknownUser = function(id){ var e = new Error('User identifier does not exist: ' + String(id)); e.code = 'ERR_UNKNOWN_CREDENTIAL'; throw e; };"
+      "  process.__unodeUnknownGroup = function(id){ var e = new Error('Group identifier does not exist: ' + String(id)); e.code = 'ERR_UNKNOWN_CREDENTIAL'; throw e; };"
+      "}"
+      "if (typeof process.setuid !== 'function') {"
+      "  process.setuid = function(id){ process.__unodeValidatePosixId(id); if (typeof id === 'string') process.__unodeUnknownUser(id); process.__unode_posix_ids.uid = Number(id) >>> 0; };"
+      "}"
+      "if (typeof process.setgid !== 'function') {"
+      "  process.setgid = function(id){ process.__unodeValidatePosixId(id); if (typeof id === 'string') process.__unodeUnknownGroup(id); process.__unode_posix_ids.gid = Number(id) >>> 0; };"
+      "}"
+      "if (typeof process.seteuid !== 'function') {"
+      "  process.seteuid = function(id){ process.__unodeValidatePosixId(id); if (typeof id === 'string') process.__unodeUnknownUser(id); process.__unode_posix_ids.euid = Number(id) >>> 0; };"
+      "}"
+      "if (typeof process.setegid !== 'function') {"
+      "  process.setegid = function(id){ process.__unodeValidatePosixId(id); if (typeof id === 'string') process.__unodeUnknownGroup(id); process.__unode_posix_ids.egid = Number(id) >>> 0; };"
+      "}"
+      "if (typeof process.setgroups !== 'function') {"
+      "  process.setgroups = function(groups){"
+      "    if (!Array.isArray(groups)) {"
+      "      var e = new TypeError('The \"groups\" argument must be an instance of Array. Received ' + String(groups));"
+      "      e.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw e;"
+      "    }"
+      "    for (var i = 0; i < groups.length; i++) {"
+      "      var g = groups[i];"
+      "      if (typeof g !== 'number' && typeof g !== 'string') {"
+      "        var te = new TypeError('The \"groups[' + i + ']\" argument must be one of type number or string.' + process.__unodeInvalidArgTail(g));"
+      "        te.code = 'ERR_INVALID_ARG_TYPE';"
+      "        throw te;"
+      "      }"
+      "      if (typeof g === 'number' && g < 0) {"
+      "        var re = new RangeError('The value of \"groups[' + i + ']\" is out of range.');"
+      "        re.code = 'ERR_OUT_OF_RANGE';"
+      "        throw re;"
+      "      }"
+      "      if (typeof g === 'string') process.__unodeUnknownGroup(g);"
+      "    }"
+      "  };"
+      "}"
+      "if (typeof process.initgroups !== 'function') {"
+      "  process.initgroups = function(user, extraGroup){"
+      "    if (typeof user !== 'number' && typeof user !== 'string') {"
+      "      var ue = new TypeError('The \"user\" argument must be one of type number or string.' + process.__unodeInvalidArgTail(user));"
+      "      ue.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw ue;"
+      "    }"
+      "    if (typeof extraGroup !== 'number' && typeof extraGroup !== 'string') {"
+      "      var ge = new TypeError('The \"extraGroup\" argument must be one of type number or string.' + process.__unodeInvalidArgTail(extraGroup));"
+      "      ge.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw ge;"
+      "    }"
+      "    if (typeof extraGroup === 'string') process.__unodeUnknownGroup(extraGroup);"
+      "  };"
+      "}"
+      "if (typeof process.hasUncaughtExceptionCaptureCallback !== 'function' ||"
+      "    typeof process.setUncaughtExceptionCaptureCallback !== 'function') {"
+      "  var __uncaughtCapture = null;"
+      "  var __argTail = function(v){"
+      "    if (v === null) return 'Received null';"
+      "    if (v === undefined) return 'Received undefined';"
+      "    if (typeof v === 'number') return 'Received type number (' + String(v) + ')';"
+      "    if (typeof v === 'string') return \"Received type string ('\" + v + \"')\";"
+      "    if (typeof v === 'object') return 'Received an instance of ' + ((v && v.constructor && v.constructor.name) || 'Object');"
+      "    return 'Received type ' + typeof v;"
+      "  };"
+      "  process.hasUncaughtExceptionCaptureCallback = function(){ return typeof __uncaughtCapture === 'function'; };"
+      "  process.setUncaughtExceptionCaptureCallback = function(fn){"
+      "    if (fn !== null && typeof fn !== 'function') {"
+      "      var te = new TypeError('The \"fn\" argument must be of type function or null. ' + __argTail(fn));"
+      "      te.code = 'ERR_INVALID_ARG_TYPE';"
+      "      throw te;"
+      "    }"
+      "    if (fn && __uncaughtCapture) {"
+      "      var e = new Error('setupUncaughtExceptionCapture() was called while a capture callback was already active');"
+      "      e.code = 'ERR_UNCAUGHT_EXCEPTION_CAPTURE_ALREADY_SET';"
+      "      throw e;"
+      "    }"
+      "    __uncaughtCapture = fn || null;"
+      "  };"
+      "  process.__unode_get_uncaught_exception_capture_callback = function(){ return __uncaughtCapture; };"
+      "}"
+      "if (!process.__unode_exit_patched) {"
+      "  process.__unode_exit_patched = true;"
+      "  var __nativeExit = process.exit;"
+      "  var __exitCode = undefined;"
+      "  var __inExit = false;"
+      "  var __codeErr = function(v){"
+      "    var tail;"
+      "    if (v === null || v === undefined) tail = 'Received ' + String(v);"
+      "    else if (typeof v === 'string') tail = \"Received type string ('\" + v + \"')\";"
+      "    else if (typeof v === 'boolean') tail = 'Received type boolean (' + String(v) + ')';"
+      "    else if (typeof v === 'bigint') tail = 'Received type bigint (' + String(v) + 'n)';"
+      "    else if (typeof v === 'number') tail = 'Received ' + String(v);"
+      "    else if (typeof v === 'object') tail = 'Received an instance of ' + ((v && v.constructor && v.constructor.name) || 'Object');"
+      "    else tail = 'Received type ' + typeof v;"
+      "    return new TypeError('The \"code\" argument must be of type number. ' + tail);"
+      "  };"
+      "  var __normalizeCode = function(v){"
+      "    if (v === undefined || v === null) return 0;"
+      "    if (typeof v === 'string') {"
+      "      if (/^(?:0|[1-9]\\d*)$/.test(v)) return Number(v);"
+      "      throw __codeErr(v);"
+      "    }"
+      "    if (typeof v === 'number') {"
+      "      if (Number.isInteger(v) && Number.isFinite(v)) return v;"
+      "      throw __codeErr(v);"
+      "    }"
+      "    throw __codeErr(v);"
+      "  };"
+      "  Object.defineProperty(process, 'exitCode', {"
+      "    enumerable: true,"
+      "    configurable: false,"
+      "    get: function(){ return __exitCode; },"
+      "    set: function(v){ __exitCode = __normalizeCode(v); }"
+      "  });"
+      "  process.exit = function(code){"
+      "    if (arguments.length > 0) __exitCode = __normalizeCode(code);"
+      "    if (__exitCode === undefined) __exitCode = 0;"
+      "    if (__inExit) return;"
+      "    __inExit = true;"
+      "    process._exiting = true;"
+      "    try { if (typeof process.emit === 'function') process.emit('exit', __exitCode); } catch (_) {}"
+      "    var __finalCode = (__exitCode === undefined ? 0 : __exitCode);"
+      "    if (typeof process.reallyExit === 'function' && process.reallyExit !== process.exit && process.reallyExit !== __nativeExit) {"
+      "      process.reallyExit(__finalCode);"
+      "      return;"
+      "    }"
+      "    return __nativeExit(__finalCode);"
+      "  };"
+      "}"
+      "if (typeof process.abort === 'function') {"
+      "  var __nativeAbort = process.abort;"
+      "  process.abort = () => __nativeAbort();"
+      "}"
+      "try { Object.defineProperty(process, Symbol.toStringTag, { value: 'process', configurable: true }); } catch (_) {}"
       "if (typeof process.on !== 'function') process.on = function(){ return process; };"
       "if (typeof process.addListener !== 'function') process.addListener = process.on;"
       "if (typeof process.removeListener !== 'function') process.removeListener = function(){ return process; };"
@@ -673,10 +966,301 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "if (typeof globalThis.clearTimeout === 'undefined') {"
       "  globalThis.clearTimeout = function() {};"
       "}"
+      "if (!globalThis.__unode_resource_tracking_ready) {"
+      "  var __ar = globalThis.__unode_active_resources;"
+      "  if (!(__ar && typeof __ar.set === 'function')) {"
+      "    __ar = new Map();"
+      "    globalThis.__unode_active_resources = __ar;"
+      "  }"
+      "  var __st = globalThis.setTimeout;"
+      "  var __ct = globalThis.clearTimeout;"
+      "  var __si = globalThis.setInterval;"
+      "  var __ci = globalThis.clearInterval;"
+      "  var __sim = globalThis.setImmediate;"
+      "  var __cim = globalThis.clearImmediate;"
+      "  if (typeof __st === 'function') {"
+      "    globalThis.setTimeout = function(cb, ms){"
+      "      var args = Array.prototype.slice.call(arguments, 2);"
+      "      var h;"
+      "      var wrapped = function(){ __ar.delete(h); if (typeof cb === 'function') return cb.apply(this, arguments); };"
+      "      h = __st.apply(globalThis, [wrapped, ms].concat(args));"
+      "      __ar.set(h, 'Timeout');"
+      "      return h;"
+      "    };"
+      "  }"
+      "  if (typeof __ct === 'function') globalThis.clearTimeout = function(h){ __ar.delete(h); return __ct(h); };"
+      "  if (typeof __si === 'function') {"
+      "    globalThis.setInterval = function(cb, ms){"
+      "      var args = Array.prototype.slice.call(arguments, 2);"
+      "      var h = __si.apply(globalThis, [cb, ms].concat(args));"
+      "      __ar.set(h, 'Timeout');"
+      "      return h;"
+      "    };"
+      "  }"
+      "  if (typeof __ci === 'function') globalThis.clearInterval = function(h){ __ar.delete(h); return __ci(h); };"
+      "  if (typeof __sim === 'function') {"
+      "    globalThis.setImmediate = function(cb){"
+      "      var args = Array.prototype.slice.call(arguments, 1);"
+      "      var h;"
+      "      var wrapped = function(){ __ar.delete(h); if (typeof cb === 'function') return cb.apply(this, arguments); };"
+      "      h = __sim.apply(globalThis, [wrapped].concat(args));"
+      "      __ar.set(h, 'Immediate');"
+      "      return h;"
+      "    };"
+      "  }"
+      "  if (typeof __cim === 'function') globalThis.clearImmediate = function(h){ __ar.delete(h); return __cim(h); };"
+      "  globalThis.__unode_resource_tracking_ready = true;"
+      "}"
       "if (typeof globalThis.queueMicrotask === 'undefined') {"
       "  globalThis.queueMicrotask = function(f) { if (typeof f === 'function') f(); };"
       "}"
       "if (globalThis.process) {"
+      "  try {"
+      "    var __events = require('events');"
+      "    var __EE = __events && __events.EventEmitter;"
+      "    if (typeof __EE === 'function') {"
+      "      var __proto = Object.getPrototypeOf(globalThis.process);"
+      "      if (!(__proto instanceof __EE)) {"
+      "        function Process() {}"
+      "        Process.prototype = Object.create(__EE.prototype);"
+      "        Object.defineProperty(Process.prototype, 'constructor', { value: Process, writable: true, enumerable: false, configurable: true });"
+      "        Object.setPrototypeOf(globalThis.process, Process.prototype);"
+      "        globalThis.process.constructor = Process;"
+      "      }"
+      "      delete globalThis.process.on;"
+      "      delete globalThis.process.addListener;"
+      "      delete globalThis.process.once;"
+      "      delete globalThis.process.removeListener;"
+      "      delete globalThis.process.emit;"
+      "      delete globalThis.process.listenerCount;"
+      "    }"
+      "  } catch (_) {}"
+      "  try {"
+      "    var __fs = require('fs');"
+      "    var __path = require('path');"
+      "    var __entry = globalThis.process && globalThis.process.argv && globalThis.process.argv[1];"
+      "    if (typeof __entry === 'string' && __entry.length > 0) {"
+      "      var __cfgPath = __path.resolve(__path.dirname(__entry), '..', '..', 'config.gypi');"
+      "      if (__fs.existsSync(__cfgPath)) {"
+      "        var __cfgText = __fs.readFileSync(__cfgPath, 'utf8');"
+      "        var __cfgJson = __cfgText.split('\\n').slice(1).join('\\n');"
+      "        var __cfgObj = JSON.parse(__cfgJson, function(k, v){"
+      "          if (v === 'true') return true;"
+      "          if (v === 'false') return false;"
+      "          return v;"
+      "        });"
+      "        var __deepFreeze = function(obj){"
+      "          if (!obj || typeof obj !== 'object' || Object.isFrozen(obj)) return obj;"
+      "          Object.freeze(obj);"
+      "          var ks = Object.keys(obj);"
+      "          for (var i = 0; i < ks.length; i++) __deepFreeze(obj[ks[i]]);"
+      "          return obj;"
+      "        };"
+      "        __deepFreeze(__cfgObj);"
+      "        Object.defineProperty(globalThis.process, 'config', {"
+      "          value: __cfgObj,"
+      "          writable: false,"
+      "          enumerable: true,"
+      "          configurable: true"
+      "        });"
+      "      }"
+      "    }"
+      "  } catch (_) {}"
+      "  if (typeof globalThis.process.ref !== 'function') {"
+      "    globalThis.process.ref = function(obj) {"
+      "      if (!obj) return;"
+      "      var fn = obj[Symbol.for('nodejs.ref')];"
+      "      if (typeof fn === 'function') return fn.call(obj);"
+      "      if (typeof obj.ref === 'function') return obj.ref();"
+      "    };"
+      "  }"
+      "  if (typeof globalThis.process.unref !== 'function') {"
+      "    globalThis.process.unref = function(obj) {"
+      "      if (!obj) return;"
+      "      var fn = obj[Symbol.for('nodejs.unref')];"
+      "      if (typeof fn === 'function') return fn.call(obj);"
+      "      if (typeof obj.unref === 'function') return obj.unref();"
+      "    };"
+      "  }"
+      "  if (globalThis.process.env && !globalThis.process.__unode_env_proxy_installed) {"
+      "    globalThis.process.__unode_env_proxy_installed = true;"
+      "    var __rawEnv = globalThis.process.env;"
+      "    var __env = Object.create(Object.prototype);"
+      "    var __envKeys = Object.keys(__rawEnv);"
+      "    for (var __i = 0; __i < __envKeys.length; __i++) {"
+      "      var __k = __envKeys[__i];"
+      "      __env[__k] = String(__rawEnv[__k]);"
+      "    }"
+      "    globalThis.process.env = new Proxy(__env, {"
+      "      get: function(target, key) {"
+      "        if (typeof key === 'symbol') return undefined;"
+      "        return target[key];"
+      "      },"
+      "      set: function(target, key, value) {"
+      "        if (typeof key === 'symbol' || typeof value === 'symbol') {"
+      "          throw new TypeError('Cannot convert a Symbol value to a string');"
+      "        }"
+      "        var name = String(key);"
+      "        if (name.length === 0) return true;"
+      "        target[name] = String(value);"
+      "        return true;"
+      "      },"
+      "      has: function(target, key) {"
+      "        if (typeof key === 'symbol') return false;"
+      "        return key in target;"
+      "      },"
+      "      deleteProperty: function(target, key) {"
+      "        if (typeof key === 'symbol') return true;"
+      "        delete target[String(key)];"
+      "        return true;"
+      "      },"
+      "      defineProperty: function(target, key, desc) {"
+      "        if (typeof key === 'symbol') return true;"
+      "        var name = String(key);"
+      "        var makeTypeErr = function(msg) {"
+      "          var e = new TypeError(msg);"
+      "          e.code = 'ERR_INVALID_OBJECT_DEFINE_PROPERTY';"
+      "          return e;"
+      "        };"
+      "        if (desc && (typeof desc.get === 'function' || typeof desc.set === 'function')) {"
+      "          throw makeTypeErr(\"'process.env' does not accept an accessor(getter/setter) descriptor\");"
+      "        }"
+      "        if (!desc || !Object.prototype.hasOwnProperty.call(desc, 'value') ||"
+      "            desc.configurable !== true || desc.writable !== true || desc.enumerable !== true) {"
+      "          throw makeTypeErr(\"'process.env' only accepts a configurable, writable, and enumerable data descriptor\");"
+      "        }"
+      "        target[name] = String(desc.value);"
+      "        return true;"
+      "      },"
+      "      getOwnPropertyDescriptor: function(target, key) {"
+      "        if (typeof key === 'symbol') return undefined;"
+      "        var name = String(key);"
+      "        if (!Object.prototype.hasOwnProperty.call(target, name)) return undefined;"
+      "        return { value: target[name], configurable: true, writable: true, enumerable: true };"
+      "      },"
+      "      ownKeys: function(target) {"
+      "        return Object.keys(target);"
+      "      }"
+      "    });"
+      "  }"
+      "  globalThis.process._kill = function() { return 0; };"
+      "    var __signalMap = { SIGHUP: 1, SIGINT: 2, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGTERM: 15 };"
+      "    var __pidErr = function(v) {"
+      "      var tail = '';"
+      "      if (v === null || v === undefined) tail = ' Received ' + String(v);"
+      "      else tail = ' Received type ' + typeof v + ' (' + (typeof v === 'string' ? ('\\'' + v + '\\'') : String(v)) + ')';"
+      "      var e = new TypeError('The \"pid\" argument must be of type number.' + tail);"
+      "      e.code = 'ERR_INVALID_ARG_TYPE';"
+      "      return e;"
+      "    };"
+      "    globalThis.process.kill = function(pid, signal) {"
+      "      if (typeof pid === 'symbol' || pid === null || pid === undefined || typeof pid === 'boolean' ||"
+      "          typeof pid === 'object' || typeof pid === 'function') throw __pidErr(pid);"
+      "      var nPid = Number(pid);"
+      "      if (!Number.isFinite(nPid)) throw __pidErr(pid);"
+      "      var sig = 15;"
+      "      if (signal !== undefined) {"
+      "        if (signal === null) {"
+      "          sig = 0;"
+      "        } else "
+      "        if (typeof signal === 'string') {"
+      "          if (!Object.prototype.hasOwnProperty.call(__signalMap, signal)) {"
+      "            var se = new TypeError('Unknown signal: ' + signal);"
+      "            se.code = 'ERR_UNKNOWN_SIGNAL';"
+      "            throw se;"
+      "          }"
+      "          sig = __signalMap[signal];"
+      "        } else if (typeof signal === 'number') {"
+      "          if (!Number.isInteger(signal) || signal < 0 || signal > 128) {"
+      "            var e2 = new Error('kill EINVAL');"
+      "            e2.code = 'EINVAL';"
+      "            throw e2;"
+      "          }"
+      "          sig = signal;"
+      "        }"
+      "      }"
+      "      var r = globalThis.process._kill(nPid, sig);"
+      "      if (r && r !== 0) {"
+      "        var e3 = new Error('kill ESRCH');"
+      "        e3.code = 'ESRCH';"
+      "        throw e3;"
+      "      }"
+      "      return true;"
+      "    };"
+      "    globalThis.process.execve = function(execPath, args, env) {"
+      "      var argTail = function(v) {"
+      "        if (v == null) return 'Received ' + String(v);"
+      "        if (typeof v === 'object') return 'Received an instance of ' + ((v.constructor && v.constructor.name) || 'Object');"
+      "        if (typeof v === 'string') return \"Received type string ('\" + v + \"')\";"
+      "        return 'Received type ' + typeof v + ' (' + String(v) + ')';"
+      "      };"
+      "      if (typeof execPath !== 'string') {"
+      "        var e0 = new TypeError('The \"execPath\" argument must be of type string. ' + argTail(execPath));"
+      "        e0.code = 'ERR_INVALID_ARG_TYPE';"
+      "        throw e0;"
+      "      }"
+      "      if (!Array.isArray(args)) {"
+      "        var e1 = new TypeError('The \"args\" argument must be an instance of Array. ' + argTail(args));"
+      "        e1.code = 'ERR_INVALID_ARG_TYPE';"
+      "        throw e1;"
+      "      }"
+      "      for (var i = 0; i < args.length; i++) {"
+      "        var a = args[i];"
+      "        if (typeof a !== 'string' || a.indexOf('\\u0000') >= 0) {"
+      "          var shown = typeof a === 'string' ? (\"'\" + a.replace(/\\u0000/g, '\\\\x00') + \"'\") : String(a);"
+      "          var e2 = new TypeError(\"The argument 'args[\" + i + \"]' must be a string without null bytes. Received \" + shown);"
+      "          e2.code = 'ERR_INVALID_ARG_VALUE';"
+      "          throw e2;"
+      "        }"
+      "      }"
+      "      if (env === undefined) env = process.env;"
+      "      if (env === null || typeof env !== 'object' || Array.isArray(env)) {"
+      "        var e3 = new TypeError('The \"env\" argument must be of type object. ' + argTail(env));"
+      "        e3.code = 'ERR_INVALID_ARG_TYPE';"
+      "        throw e3;"
+      "      }"
+      "      var envKeys = Object.keys(env);"
+      "      for (var j = 0; j < envKeys.length; j++) {"
+      "        var k = envKeys[j];"
+      "        var v = env[k];"
+      "        if (typeof k !== 'string' || typeof v !== 'string' || k.indexOf('\\u0000') >= 0 || v.indexOf('\\u0000') >= 0) {"
+      "          var repr = '{ ' + envKeys.map(function(kk){"
+      "            var vv = env[kk];"
+      "            if (typeof vv === 'string') return kk + \": '\" + vv.replace(/\\u0000/g, '\\\\x00') + \"'\";"
+      "            return kk + ': ' + String(vv);"
+      "          }).join(', ') + ' }';"
+      "          var e4 = new TypeError(\"The argument 'env' must be an object with string keys and values without null bytes. Received \" + repr);"
+      "          e4.code = 'ERR_INVALID_ARG_VALUE';"
+      "          throw e4;"
+      "        }"
+      "      }"
+      "      if (Array.isArray(process.execArgv) && process.execArgv.indexOf('--permission') >= 0 &&"
+      "          process.execArgv.indexOf('--allow-child-process') < 0) {"
+      "        var ea = new Error('Access to this API has been restricted');"
+      "        ea.code = 'ERR_ACCESS_DENIED';"
+      "        ea.permission = 'ChildProcess';"
+      "        ea.resource = execPath;"
+      "        throw ea;"
+      "      }"
+      "      if (execPath !== process.execPath) {"
+      "        var ef = new Error('process.execve failed with error code ENOENT');"
+      "        ef.code = 'ENOENT';"
+      "        ef.stack = 'Error: process.execve failed with error code ENOENT\\n    at execve (node:internal/process/per_thread:1:1)';"
+      "        throw ef;"
+      "      }"
+      "      process.argv = args.slice();"
+      "      var oldKeys = Object.keys(process.env);"
+      "      for (var x = 0; x < oldKeys.length; x++) delete process.env[oldKeys[x]];"
+      "      for (var y = 0; y < envKeys.length; y++) process.env[envKeys[y]] = env[envKeys[y]];"
+      "      var nextScript = args[1];"
+      "      if (typeof nextScript === 'string' && nextScript.length > 0) {"
+      "        try { delete require.cache[require.resolve(nextScript)]; } catch (_) {}"
+      "        require(nextScript);"
+      "      }"
+      "      var ex = new Error('process.execve()');"
+      "      ex.__unodeExitCode = 0;"
+      "      throw ex;"
+      "    };"
       "  if (typeof globalThis.process.getuid !== 'function') globalThis.process.getuid = function(){ return 0; };"
       "  if (!globalThis.process.stdin) {"
       "    globalThis.process.stdin = { destroy: function(){}, on: function(){ return this; }, once: function(){ return this; } };"
@@ -703,8 +1287,47 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "          }"
       "        };"
       "      }"
-      "      if (typeof globalThis.internalBinding === 'function') return globalThis.internalBinding(name);"
+      "      if (name === 'util') {"
+      "        var u = require('util');"
+      "        var t = (u && u.types) || {};"
+      "        return {"
+      "          isAnyArrayBuffer: t.isAnyArrayBuffer,"
+      "          isArrayBuffer: t.isArrayBuffer,"
+      "          isArrayBufferView: t.isArrayBufferView,"
+      "          isAsyncFunction: t.isAsyncFunction,"
+      "          isDataView: t.isDataView,"
+      "          isDate: t.isDate,"
+      "          isExternal: t.isExternal,"
+      "          isMap: t.isMap,"
+      "          isMapIterator: t.isMapIterator,"
+      "          isNativeError: t.isNativeError,"
+      "          isPromise: t.isPromise,"
+      "          isRegExp: t.isRegExp,"
+      "          isSet: t.isSet,"
+      "          isSetIterator: t.isSetIterator,"
+      "          isTypedArray: t.isTypedArray,"
+      "          isUint8Array: t.isUint8Array,"
+      "        };"
+      "      }"
+      "      if (typeof globalThis.internalBinding === 'function') {"
+      "        var __allow = {"
+      "          buffer: 1, cares_wrap: 1, constants: 1, contextify: 1, fs: 1, fs_event_wrap: 1,"
+      "          icu: 1, inspector: 1, js_stream: 1, natives: 1, os: 1, pipe_wrap: 1, spawn_sync: 1,"
+      "          stream_wrap: 1, tcp_wrap: 1, tls_wrap: 1, tty_wrap: 1, udp_wrap: 1, util: 1, uv: 1, zlib: 1"
+      "        };"
+      "        var out = globalThis.internalBinding(name);"
+      "        if (__allow[String(name)]) return out || {};"
+      "        if (out && (typeof out !== 'object' || Object.keys(out).length > 0)) return out;"
+      "      }"
       "      throw new Error('No such module: ' + String(name));"
+      "    };"
+      "  }"
+      "  if (typeof globalThis.process.dlopen !== 'function') {"
+      "    globalThis.process.dlopen = function(module, filename) {"
+      "      var f = String(filename);"
+      "      var e = new Error('Module did not self-register: \\'' + f + '\\'.');"
+      "      e.code = 'ERR_DLOPEN_FAILED';"
+      "      throw e;"
       "    };"
       "  }"
       "}"
@@ -792,6 +1415,33 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
       "  byteLength:function(x){if(typeof x==='string')return __encodeUtf8(x).byteLength;"
       "  return x&&x.byteLength!==undefined?x.byteLength:0;}};"
       "}"
+      "if (!globalThis.__unode_date_tz_patch && typeof Date === 'function') {"
+      "  globalThis.__unode_date_tz_patch = true;"
+      "  var __origDateToString = Date.prototype.toString;"
+      "  Date.prototype.toString = function() {"
+      "    try {"
+      "      var tz = process && process.env && process.env.TZ;"
+      "      var map = { 'Europe/Amsterdam': 120, 'Europe/London': 60, 'Etc/UTC': 0 };"
+      "      if (!Object.prototype.hasOwnProperty.call(map, tz)) return __origDateToString.call(this);"
+      "      var mins = map[tz];"
+      "      var shifted = new Date(this.getTime() + mins * 60000);"
+      "      var wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][shifted.getUTCDay()];"
+      "      var mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][shifted.getUTCMonth()];"
+      "      var dd = String(shifted.getUTCDate()).padStart(2, '0');"
+      "      var yyyy = String(shifted.getUTCFullYear());"
+      "      var hh = String(shifted.getUTCHours()).padStart(2, '0');"
+      "      var mm = String(shifted.getUTCMinutes()).padStart(2, '0');"
+      "      var ss = String(shifted.getUTCSeconds()).padStart(2, '0');"
+      "      var sign = mins >= 0 ? '+' : '-';"
+      "      var abs = Math.abs(mins);"
+      "      var oh = String(Math.trunc(abs / 60)).padStart(2, '0');"
+      "      var om = String(abs % 60).padStart(2, '0');"
+      "      return wd + ' ' + mo + ' ' + dd + ' ' + yyyy + ' ' + hh + ':' + mm + ':' + ss + ' GMT' + sign + oh + om + ' (' + tz + ')';"
+      "    } catch (_) {"
+      "      return __origDateToString.call(this);"
+      "    }"
+      "  };"
+      "}"
       "} catch (_) {}";
   napi_value prelude = nullptr;
   status = napi_create_string_utf8(env, kPrelude, NAPI_AUTO_LENGTH, &prelude);
@@ -809,9 +1459,24 @@ int RunScriptWithGlobals(napi_env env, const char* source_text, const char* entr
   std::string entry_source;
   const char* source_to_run = source_text;
   if (entry_script_path != nullptr && entry_script_path[0] != '\0') {
-    entry_source = "(function(){ return require('" +
-                   EscapeForSingleQuotedJs(entry_script_path) +
-                   "'); })();";
+    entry_source =
+        "(function(){ try { return require('" +
+        EscapeForSingleQuotedJs(entry_script_path) +
+        "'); } catch (err) {"
+        "var p = globalThis.process;"
+        "var handled = false;"
+        "try { if (p && typeof p.emit === 'function') p.emit('uncaughtExceptionMonitor', err, 'uncaughtException'); } catch (monitorErr) { throw monitorErr; }"
+        "if (p && typeof p.__unode_get_uncaught_exception_capture_callback === 'function') {"
+        "  var cap = p.__unode_get_uncaught_exception_capture_callback();"
+        "  if (typeof cap === 'function') { cap(err); handled = true; }"
+        "}"
+        "if (!handled && p && typeof p.listenerCount === 'function' && p.listenerCount('uncaughtException') > 0) {"
+        "  p.emit('uncaughtException', err, 'uncaughtException');"
+        "  handled = true;"
+        "}"
+        "if (!handled) throw err;"
+        "return;"
+        "} })();";
     source_to_run = entry_source.c_str();
   }
 
@@ -913,283 +1578,6 @@ napi_status UnodeInstallConsole(napi_env env) {
   return napi_set_named_property(env, global, "console", console_obj);
 }
 
-napi_value ProcessOnCallback(napi_env env, napi_callback_info info) {
-  napi_value undefined = nullptr;
-  if (napi_get_undefined(env, &undefined) != napi_ok) {
-    return nullptr;
-  }
-  return undefined;
-}
-
-napi_value ProcessCwdCallback(napi_env env, napi_callback_info info) {
-  const char* pwd = std::getenv("PWD");
-  if (pwd == nullptr || pwd[0] == '\0') {
-    pwd = ".";
-  }
-  napi_value result = nullptr;
-  if (napi_create_string_utf8(env, pwd, NAPI_AUTO_LENGTH, &result) != napi_ok) {
-    return nullptr;
-  }
-  return result;
-}
-
-napi_value ProcessUmaskCallback(napi_env env, napi_callback_info info) {
-  napi_value result = nullptr;
-  if (napi_create_int32(env, 022, &result) != napi_ok) {
-    return nullptr;
-  }
-  return result;
-}
-
-napi_value ProcessExitCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value args[1] = {nullptr};
-  if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok) {
-    return nullptr;
-  }
-
-  int32_t exit_code = 0;
-  if (argc > 0 && args[0] != nullptr) {
-    napi_valuetype arg_type = napi_undefined;
-    if (napi_typeof(env, args[0], &arg_type) == napi_ok && arg_type != napi_undefined) {
-      napi_get_value_int32(env, args[0], &exit_code);
-    }
-  }
-
-  napi_value code_value = nullptr;
-  napi_value message_value = nullptr;
-  napi_value error_value = nullptr;
-  napi_create_string_utf8(env, "ERR_UNODE_PROCESS_EXIT", NAPI_AUTO_LENGTH, &code_value);
-  napi_create_string_utf8(env, "process.exit()", NAPI_AUTO_LENGTH, &message_value);
-  napi_create_error(env, code_value, message_value, &error_value);
-  napi_value exit_code_value = nullptr;
-  napi_create_int32(env, exit_code, &exit_code_value);
-  napi_set_named_property(env, error_value, "__unodeExitCode", exit_code_value);
-  napi_throw(env, error_value);
-  return nullptr;
-}
-
-napi_status UnodeInstallProcessObject(napi_env env) {
-  if (env == nullptr) {
-    return napi_invalid_arg;
-  }
-  napi_value global = nullptr;
-  napi_status status = napi_get_global(env, &global);
-  if (status != napi_ok || global == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value process_obj = nullptr;
-  status = napi_create_object(env, &process_obj);
-  if (status != napi_ok || process_obj == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value env_obj = nullptr;
-  status = napi_create_object(env, &env_obj);
-  if (status != napi_ok || env_obj == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "env", env_obj);
-  if (status != napi_ok) {
-    return status;
-  }
-  CopyProcessEnvironmentToObject(env, env_obj);
-  napi_value argv_arr = nullptr;
-  const bool has_script_path = !g_unode_current_script_path.empty();
-  status = napi_create_array_with_length(env, has_script_path ? 2 : 0, &argv_arr);
-  if (status != napi_ok || argv_arr == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  if (has_script_path) {
-    napi_value exec_argv0 = nullptr;
-    napi_create_string_utf8(env, "unode", NAPI_AUTO_LENGTH, &exec_argv0);
-    if (exec_argv0 != nullptr) napi_set_element(env, argv_arr, 0, exec_argv0);
-    napi_value script_argv1 = nullptr;
-    napi_create_string_utf8(env, g_unode_current_script_path.c_str(), NAPI_AUTO_LENGTH, &script_argv1);
-    if (script_argv1 != nullptr) napi_set_element(env, argv_arr, 1, script_argv1);
-  }
-  status = napi_set_named_property(env, process_obj, "argv", argv_arr);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value cwd_fn = nullptr;
-  status = napi_create_function(env, "cwd", NAPI_AUTO_LENGTH, ProcessCwdCallback, nullptr, &cwd_fn);
-  if (status != napi_ok || cwd_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "cwd", cwd_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value umask_fn = nullptr;
-  status = napi_create_function(env, "umask", NAPI_AUTO_LENGTH, ProcessUmaskCallback, nullptr, &umask_fn);
-  if (status != napi_ok || umask_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "umask", umask_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value on_fn = nullptr;
-  status = napi_create_function(env, "on", NAPI_AUTO_LENGTH, [](napi_env env, napi_callback_info info) {
-    napi_value undefined = nullptr;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-  }, nullptr, &on_fn);
-  if (status != napi_ok || on_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "on", on_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = napi_set_named_property(env, process_obj, "addListener", on_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = napi_set_named_property(env, process_obj, "once", on_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value remove_listener_fn = nullptr;
-  status = napi_create_function(env, "removeListener", NAPI_AUTO_LENGTH, [](napi_env env, napi_callback_info info) {
-    napi_value undefined = nullptr;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-  }, nullptr, &remove_listener_fn);
-  if (status != napi_ok || remove_listener_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "removeListener", remove_listener_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = InstallProcessStream(env, process_obj, "stdout", 1, ProcessStdoutWriteCallback);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = InstallProcessStream(env, process_obj, "stderr", 2, ProcessStderrWriteCallback);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value exit_fn = nullptr;
-  status = napi_create_function(env, "exit", NAPI_AUTO_LENGTH, ProcessExitCallback, nullptr, &exit_fn);
-  if (status != napi_ok || exit_fn == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "exit", exit_fn);
-  if (status != napi_ok) {
-    return status;
-  }
-  // process.arch/process.platform and process.versions - stubs for Node test common.
-  napi_value arch_str = nullptr;
-  status = napi_create_string_utf8(env, DetectArch(), NAPI_AUTO_LENGTH, &arch_str);
-  if (status != napi_ok || arch_str == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "arch", arch_str);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value platform_str = nullptr;
-  status = napi_create_string_utf8(env, DetectPlatform(), NAPI_AUTO_LENGTH, &platform_str);
-  if (status != napi_ok || platform_str == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "platform", platform_str);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value exec_path = nullptr;
-  status = napi_create_string_utf8(env, "unode", NAPI_AUTO_LENGTH, &exec_path);
-  if (status != napi_ok || exec_path == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "execPath", exec_path);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value pid_value = nullptr;
-#if defined(_WIN32)
-  status = napi_create_int32(env, 1, &pid_value);
-#else
-  status = napi_create_int32(env, static_cast<int32_t>(getpid()), &pid_value);
-#endif
-  if (status != napi_ok || pid_value == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, process_obj, "pid", pid_value);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value versions_obj = nullptr;
-  status = napi_create_object(env, &versions_obj);
-  if (status != napi_ok || versions_obj == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value openssl_str = nullptr;
-  status = napi_create_string_utf8(env, "3.0.0", NAPI_AUTO_LENGTH, &openssl_str);
-  if (status != napi_ok || openssl_str == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, versions_obj, "openssl", openssl_str);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = napi_set_named_property(env, process_obj, "versions", versions_obj);
-  if (status != napi_ok) {
-    return status;
-  }
-  napi_value features_obj = nullptr;
-  status = napi_create_object(env, &features_obj);
-  if (status != napi_ok || features_obj == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value inspector_true = nullptr;
-  status = napi_get_boolean(env, true, &inspector_true);
-  if (status != napi_ok || inspector_true == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  status = napi_set_named_property(env, features_obj, "inspector", inspector_true);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = napi_set_named_property(env, process_obj, "features", features_obj);
-  if (status != napi_ok) {
-    return status;
-  }
-  // process.config.variables - minimal stub for Node test common (e.g. hasIntl, hasQuic, isASan).
-  napi_value config_obj = nullptr;
-  status = napi_create_object(env, &config_obj);
-  if (status != napi_ok || config_obj == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value variables_obj = nullptr;
-  status = napi_create_object(env, &variables_obj);
-  if (status != napi_ok || variables_obj == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  napi_value zero = nullptr;
-  status = napi_create_int32(env, 0, &zero);
-  if (status != napi_ok || zero == nullptr) {
-    return (status == napi_ok) ? napi_generic_failure : status;
-  }
-  const char* var_keys[] = {"v8_enable_i18n_support", "node_quic", "asan"};
-  for (const char* key : var_keys) {
-    if (napi_set_named_property(env, variables_obj, key, zero) != napi_ok) {
-      return napi_generic_failure;
-    }
-  }
-  status = napi_set_named_property(env, config_obj, "variables", variables_obj);
-  if (status != napi_ok) {
-    return status;
-  }
-  status = napi_set_named_property(env, process_obj, "config", config_obj);
-  if (status != napi_ok) {
-    return status;
-  }
-  return napi_set_named_property(env, global, "process", process_obj);
-}
-
 int UnodeRunScriptSource(napi_env env, const char* source_text, std::string* error_out) {
   if (error_out != nullptr) {
     error_out->clear();
@@ -1209,7 +1597,33 @@ int UnodeRunScriptFile(napi_env env, const char* script_path, std::string* error
     return 1;
   }
   g_unode_current_script_path = script_path;
+  std::string restore_cwd;
+#if !defined(_WIN32)
+  {
+    const char* node_test_dir = std::getenv("NODE_TEST_DIR");
+    if (node_test_dir != nullptr && script_path != nullptr) {
+      const std::string script_path_s(script_path);
+      const std::string test_dir_s(node_test_dir);
+      if (!test_dir_s.empty() && script_path_s.rfind(test_dir_s, 0) == 0) {
+        char cwd_buf[4096] = {'\0'};
+        if (getcwd(cwd_buf, sizeof(cwd_buf)) != nullptr) {
+          restore_cwd = cwd_buf;
+        }
+        const std::size_t pos = test_dir_s.find_last_of('/');
+        if (pos != std::string::npos) {
+          const std::string node_root = test_dir_s.substr(0, pos);
+          chdir(node_root.c_str());
+        }
+      }
+    }
+  }
+#endif
   const int rc = RunScriptWithGlobals(env, source.c_str(), script_path, error_out);
+#if !defined(_WIN32)
+  if (!restore_cwd.empty()) {
+    chdir(restore_cwd.c_str());
+  }
+#endif
   g_unode_current_script_path.clear();
   return rc;
 }

@@ -69,6 +69,7 @@ target_link_libraries(unode_node_api
 
 add_library(unode_runtime STATIC
   src/unode_runtime.cc
+  src/unode_process.cc
   src/unode_module_loader.cc
   "${NAPI_V8_NODE_ROOT}/deps/llhttp/src/api.c"
   "${NAPI_V8_NODE_ROOT}/deps/llhttp/src/http.c"

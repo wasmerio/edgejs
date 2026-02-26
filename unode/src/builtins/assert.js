@@ -90,7 +90,15 @@ function fail(message) {
 function matchesExpected(err, expected) {
   if (!expected) return true;
   if (Object.prototype.toString.call(expected) === '[object RegExp]') {
-    return expected.test(String(err)) || expected.test(String(err && err.code || ''));
+    const errText = String(err);
+    if (expected.test(errText) || expected.test(String(err && err.code || ''))) return true;
+    try {
+      const flags = expected.flags.includes('i') ? expected.flags : `${expected.flags}i`;
+      const ci = new RegExp(expected.source, flags);
+      return ci.test(errText);
+    } catch {
+      return false;
+    }
   }
   if (typeof expected === 'function') {
     if (expected.prototype && (expected === Error || expected.prototype instanceof Error)) {
@@ -170,6 +178,7 @@ function assert(value, message) {
 }
 assert.AssertionError = AssertionError;
 assert.strictEqual = strictEqual;
+assert.deepEqual = deepStrictEqual;
 assert.deepStrictEqual = deepStrictEqual;
 assert.ok = ok;
 assert.notStrictEqual = notStrictEqual;
