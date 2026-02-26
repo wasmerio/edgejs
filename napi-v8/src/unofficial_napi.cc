@@ -158,4 +158,12 @@ napi_status NAPI_CDECL unofficial_napi_request_gc_for_testing(napi_env env) {
   return napi_ok;
 }
 
+napi_status NAPI_CDECL unofficial_napi_process_microtasks(napi_env env) {
+  if (env == nullptr || env->isolate == nullptr) return napi_invalid_arg;
+  // Keep this helper engine-agnostic in behavior: flush microtasks only.
+  // Foreground task pumping is owned by higher-level runtime loop policy.
+  env->isolate->PerformMicrotaskCheckpoint();
+  return napi_ok;
+}
+
 }  // extern "C"

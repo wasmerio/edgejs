@@ -23,6 +23,7 @@
 #include "unode_module_loader.h"
 #include "unode_os.h"
 #include "unode_pipe_wrap.h"
+#include "unode_runtime_platform.h"
 #include "unode_stream_wrap.h"
 #include "unode_string_decoder.h"
 #include "unode_tcp_wrap.h"
@@ -265,6 +266,8 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
   }
   while (true) {
     uv_run(loop, UV_RUN_DEFAULT);
+    // Node drains platform tasks between libuv turns; mirror that behavior.
+    (void)UnodeRuntimePlatformDrainTasks(env);
 
     int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
     if (async_status >= 0) {
@@ -278,6 +281,7 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
 
     const int before_exit_code = GetProcessExitCodeOrZero(env);
     EmitProcessLifecycleEvent(env, "beforeExit", before_exit_code);
+    (void)UnodeRuntimePlatformDrainTasks(env);
 
     async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
     if (async_status >= 0) {
