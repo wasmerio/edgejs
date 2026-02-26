@@ -564,6 +564,22 @@ function writeSync(fd, buffer, offsetOrOptions, length, position) {
 
 const setImmediateOrSync = globalThis.setImmediate || function (fn) { fn(); };
 
+function createReadStream(filePath, options) {
+  const EventEmitter = require('events');
+  const stream = new EventEmitter();
+  setImmediateOrSync(() => {
+    try {
+      const data = readFileSync(filePath, options);
+      stream.emit('data', data);
+      stream.emit('close');
+      stream.emit('end');
+    } catch (err) {
+      stream.emit('error', err);
+    }
+  });
+  return stream;
+}
+
 function makeCallback(cb) {
   if (typeof cb !== 'function') return () => {};
   return function (err) {
@@ -666,34 +682,16 @@ function readFileSync(path, options) {
   if (encoding === undefined || encoding === 'buffer') {
     const fd = openSync(path, options.flag || 'r');
     const chunks = [];
-    const buf = new Uint8Array(8192);
+    const buf = Buffer.allocUnsafe(8192);
     let n;
     try {
       while ((n = binding.readSync(fd, buf, 0, buf.length, -1)) > 0) {
-        chunks.push(buf.slice(0, n));
+        chunks.push(Buffer.from(buf.subarray(0, n)));
       }
     } finally {
       closeSync(fd);
     }
-    const total = chunks.reduce((acc, c) => acc + c.length, 0);
-    const out = new Uint8Array(total);
-    let off = 0;
-    for (const c of chunks) {
-      out.set(c, off);
-      off += c.length;
-    }
-    out.equals = function (b) {
-      if (this === b) return true;
-      const other = b && (typeof b.length === 'number' && b.byteLength !== undefined)
-        ? b
-        : (b && typeof b === 'object' && b.length !== undefined ? new Uint8Array(b) : null);
-      if (!other || this.length !== other.length) return false;
-      for (let i = 0; i < this.length; i++) {
-        if (this[i] !== other[i]) return false;
-      }
-      return true;
-    };
-    return out;
+    return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
   }
   if (encoding === 'utf8' || encoding === 'utf-8') {
     return binding.readFileUtf8(path, flags);
@@ -1263,6 +1261,7 @@ module.exports = {
   readSync,
   writeSync,
   read,
+  createReadStream,
   open,
   close,
   renameSync,

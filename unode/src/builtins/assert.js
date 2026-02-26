@@ -78,7 +78,9 @@ function match(actual, regexp, message) {
 }
 
 function doesNotMatch(actual, regexp, message) {
-  if (Object.prototype.toString.call(regexp) !== '[object RegExp]') {
+  if (regexp == null ||
+      (Object.prototype.toString.call(regexp) !== '[object RegExp]' &&
+       typeof regexp.test !== 'function')) {
     throw new AssertionError('The "regexp" argument must be a RegExp');
   }
   if (regexp.test(String(actual))) {
@@ -155,8 +157,14 @@ function throws(fn, expected) {
   }
 }
 
+function isRegExpLike(value) {
+  return value != null &&
+    (Object.prototype.toString.call(value) === '[object RegExp]' ||
+     typeof value.test === 'function');
+}
+
 function match(actual, regexp, message) {
-  if (Object.prototype.toString.call(regexp) !== '[object RegExp]') {
+  if (!isRegExpLike(regexp)) {
     throw new AssertionError('The "regexp" argument must be a RegExp');
   }
   if (!regexp.test(String(actual))) {

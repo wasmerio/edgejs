@@ -422,6 +422,9 @@ function internalBinding(name) {
   }
   if (name === 'os') return globalThis.__unode_os || {};
   if (name === 'buffer') return globalThis.__unode_buffer || {};
+  if (name === 'crypto') {
+    return globalThis.__unode_crypto_binding || globalThis.__unode_crypto || {};
+  }
   if (name === 'http_parser') return globalThis.__unode_http_parser || {};
   if (name === 'stream_wrap') return globalThis.__unode_stream_wrap || {};
   if (name === 'js_stream') {

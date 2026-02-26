@@ -43,10 +43,22 @@ if(NAPI_V8_V8_LIBRARY)
     if(NAPI_V8_V8_DEFINES)
       target_compile_definitions(${target_name} PRIVATE ${NAPI_V8_V8_DEFINES})
     endif()
+    # Keep a stable path to the generated CTest manifest for this target.
+    set(_gtest_tests_manifest "${CMAKE_CURRENT_BINARY_DIR}/${target_name}[1]_tests.cmake")
     gtest_discover_tests(
       ${target_name}
       DISCOVERY_TIMEOUT 30
       TEST_PREFIX "unode.${target_name}."
+    )
+    # CMake 3.31 can emit duplicated add_test entries for very large gtest lists.
+    # Deduplicate generated manifest entries so each gtest runs once in ctest.
+    add_custom_command(
+      TARGET ${target_name}
+      POST_BUILD
+      COMMAND /usr/bin/env python3
+              ${UNODE_ROOT}/tests/cmake/dedupe_gtest_manifest.py
+              ${_gtest_tests_manifest}
+      VERBATIM
     )
   endfunction()
 

@@ -239,6 +239,18 @@ bool ResolveBuiltinPath(const std::string& specifier, const std::string& base_di
       return true;
     }
   }
+  // Resolve critical internal util modules directly to upstream node/lib paths.
+  // This avoids an extra shim layer that can expose partially initialized wrapper
+  // exports during circular loads (e.g. events <-> internal/util call paths).
+  if (id == "internal/util" || id == "internal/util/inspect") {
+    static const fs::path upstream_node_lib_dir =
+        fs::absolute(fs::path(__FILE__).parent_path() / ".." / ".." / "node" / "lib").lexically_normal();
+    fs::path upstream_candidate = upstream_node_lib_dir / (id + ".js");
+    if (ResolveAsFile(upstream_candidate, &resolved)) {
+      *out = resolved.lexically_normal();
+      return true;
+    }
+  }
   fs::path candidate = runtime_builtins_dir / (id + ".js");
   if (ResolveAsFile(candidate, &resolved)) {
     *out = resolved.lexically_normal();
@@ -703,6 +715,7 @@ napi_value RequireCallback(napi_env env, napi_callback_info info) {
     }
     resolved_path = fs::path(resolved_key);
   }
+
 
   from_js_cache = GetCachedExportsFromJsCache(env, context->state, resolved_key);
   if (from_js_cache != nullptr) {

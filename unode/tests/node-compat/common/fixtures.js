@@ -18,8 +18,19 @@ function fixturesFileURL(...args) {
 }
 
 function readFixtureSync(args, enc) {
-  if (Array.isArray(args)) return fs.readFileSync(fixturesPath(...args), enc);
-  return fs.readFileSync(fixturesPath(args), enc);
+  const p = Array.isArray(args) ? fixturesPath(...args) : fixturesPath(args);
+  if (enc == null) return fs.readFileSync(p);
+  return Buffer.from(fs.readFileSync(p)).toString(enc);
+}
+
+function readKey(...args) {
+  let encoding;
+  if (args.length > 1 && typeof args[args.length - 1] === 'string') {
+    encoding = args.pop();
+  }
+  const keyPathParts = args[0] && String(args[0]).includes('/') ? args : ['keys', ...args];
+  const b = fs.readFileSync(fixturesPath(...keyPathParts));
+  return encoding ? Buffer.from(b).toString(encoding) : b;
 }
 
 // Same string as Node test/fixtures/utf8_test_text.txt (used by test-fs-append-file-sync etc.)
@@ -42,6 +53,7 @@ module.exports = {
   path: fixturesPath,
   fileURL: fixturesFileURL,
   readSync: readFixtureSync,
+  readKey,
   utf8TestText,
   get utf8TestTextPath() {
     return fixturesPath('utf8_test_text.txt');

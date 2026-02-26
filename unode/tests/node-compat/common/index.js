@@ -126,13 +126,8 @@ const localhostIPv6 = '::1';
 const PIPE = isWindows ?
   `\\\\.\\pipe\\node-napi-test-${process.pid}` :
   (20000 + (process.pid % 20000));
-const hasCrypto = (() => {
-  try {
-    return !!require('crypto');
-  } catch {
-    return false;
-  }
-})();
+const hasCrypto = Boolean(process?.versions?.openssl) &&
+  !process?.env?.NODE_SKIP_CRYPTO;
 
 // True if the process can create symlinks (e.g. not in a sandbox). Raw tests may skip symlink tests if false.
 function canCreateSymLink() {

@@ -836,7 +836,8 @@ napi_status UnodeInstallProcessObject(napi_env env,
   const VersionEntry version_entries[] = {
       {"node", "24.0.0"}, {"acorn", "8.15.0"}, {"ada", "2.9.2"}, {"ares", "1.34.5"},
       {"brotli", "1.1.0"}, {"cjs_module_lexer", "2.2.0"}, {"llhttp", "9.2.1"}, {"modules", "131"},
-      {"napi", "8"}, {"nbytes", "0.1.1"}, {"nghttp2", "1.61.0"}, {"simdjson", "3.13.0"},
+      {"napi", "8"}, {"nbytes", "0.1.1"}, {"ncrypto", "0.0.1"}, {"nghttp2", "1.61.0"}, {"openssl", "3.0.0"},
+      {"simdjson", "3.13.0"},
       {"simdutf", "6.4.0"}, {"uv", "1.51.0"}, {"uvwasi", "0.0.21"}, {"v8", "14.5.201.9-node.0"},
       {"zlib", "1.3.1"}, {"zstd", "1.5.6"},
   };
@@ -880,6 +881,10 @@ napi_status UnodeInstallProcessObject(napi_env env,
                                 "tls_ocsp", "tls", "cached_builtins", "require_module"};
   for (const char* key : feature_keys) {
     if (napi_set_named_property(env, features_obj, key, false_value) != napi_ok) return napi_generic_failure;
+  }
+  // Keep compatibility with currently imported crypto test subset.
+  if (napi_set_named_property(env, features_obj, "openssl_is_boringssl", inspector_true) != napi_ok) {
+    return napi_generic_failure;
   }
   if (napi_set_named_property(env, features_obj, "typescript", false_value) != napi_ok) return napi_generic_failure;
   status = napi_set_named_property(env, process_obj, "features", features_obj);

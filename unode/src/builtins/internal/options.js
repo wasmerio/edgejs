@@ -1,20 +1,17 @@
 'use strict';
 
-const fs = require('fs');
-
 let cachedFlags;
 
 function readTestFlags() {
   if (cachedFlags !== undefined) return cachedFlags;
   cachedFlags = Object.create(null);
-  const script = process?.argv?.[1];
-  if (typeof script !== 'string' || script.length === 0) return cachedFlags;
-  try {
-    const src = fs.readFileSync(script, 'utf8');
-    const m = src.match(/^\s*\/\/\s*Flags:\s*(.+)$/m);
-    if (!m || !m[1]) return cachedFlags;
-    for (const token of m[1].trim().split(/\s+/)) {
-      if (!token.startsWith('--')) continue;
+  const argLists = [
+    Array.isArray(process?.execArgv) ? process.execArgv : [],
+    Array.isArray(process?.argv) ? process.argv : [],
+  ];
+  for (const list of argLists) {
+    for (const token of list) {
+      if (typeof token !== 'string' || !token.startsWith('--')) continue;
       const eq = token.indexOf('=');
       if (eq === -1) {
         cachedFlags[token] = true;
@@ -25,7 +22,7 @@ function readTestFlags() {
         cachedFlags[key] = Number.isNaN(num) ? raw : num;
       }
     }
-  } catch {}
+  }
   return cachedFlags;
 }
 

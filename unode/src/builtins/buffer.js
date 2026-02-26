@@ -106,6 +106,20 @@ if (typeof exported.isAscii === 'function') {
   };
 }
 
+if (typeof Buffer.allocUnsafeSlow === 'function') {
+  const originalAllocUnsafeSlow = Buffer.allocUnsafeSlow;
+  Buffer.allocUnsafeSlow = function allocUnsafeSlow(size) {
+    const n = Number(size);
+    // Avoid fatal OOM on very large requests in constrained test runtime.
+    if (!Number.isFinite(n) || n < 0 || n >= (2 ** 30)) {
+      const err = new RangeError(`The value of "size" is out of range. Received ${size}`);
+      err.code = 'ERR_OUT_OF_RANGE';
+      throw err;
+    }
+    return originalAllocUnsafeSlow(size);
+  };
+}
+
 // Do not override INSPECT_MAX_BYTES; Node's buffer.js uses its own module-scope
 // variable for Buffer's [customInspectSymbol], so the property must remain
 // Node's getter/setter for the inspect test (test-buffer-inspect.js) to pass.

@@ -33,10 +33,25 @@ add_subdirectory("${NAPI_V8_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/napi-v8")
 # Use Node's bundled libuv (same as Node) for consistent behavior (e.g. mkdtemp).
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 add_subdirectory("${NAPI_V8_NODE_ROOT}/deps/uv" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
+find_package(OpenSSL REQUIRED)
 
 add_library(unode_node_api STATIC
   src/node_api.cc
   src/unofficial_napi_testing_until_gc.cc
+)
+
+add_library(unode_ncrypto STATIC
+  "${NAPI_V8_NODE_ROOT}/deps/ncrypto/ncrypto.cc"
+  "${NAPI_V8_NODE_ROOT}/deps/ncrypto/engine.cc"
+)
+target_include_directories(unode_ncrypto
+  PUBLIC
+    "${NAPI_V8_NODE_ROOT}/deps/ncrypto"
+)
+target_link_libraries(unode_ncrypto
+  PUBLIC
+    OpenSSL::Crypto
+    OpenSSL::SSL
 )
 
 add_library(unode_simdutf STATIC
@@ -88,6 +103,8 @@ add_library(unode_runtime STATIC
   src/unode_udp_wrap.cc
   src/unode_url.cc
   src/unode_util.cc
+  src/crypto/unode_crypto_binding.cc
+  src/unode_crypto.cc
 )
 target_include_directories(unode_runtime
   PUBLIC
@@ -95,6 +112,7 @@ target_include_directories(unode_runtime
   PRIVATE
     "${NAPI_V8_ROOT}/include"
     "${NAPI_V8_NODE_ROOT}/deps/llhttp/include"
+    "${NAPI_V8_NODE_ROOT}/deps/ncrypto"
 )
 target_link_libraries(unode_runtime
   PUBLIC
@@ -103,7 +121,9 @@ target_link_libraries(unode_runtime
   PRIVATE
     unode_simdutf
     unode_ada
+    unode_ncrypto
     uv_a
+    OpenSSL::Crypto
 )
 
 add_library(unode_cli STATIC
