@@ -568,18 +568,50 @@ function internalBinding(name) {
         });
       },
       getCallSites(frameCount) {
-        const scriptName = (process && process.argv && process.argv[1]) || '[eval]';
-        const total = 8;
-        const out = Array.from({ length: total }, (_, i) => ({
-          scriptName,
-          scriptId: '0',
-          lineNumber: i + 1,
-          columnNumber: 1,
-          column: 1,
-          functionName: '',
-        }));
-        const n = frameCount == null ? out.length : Math.max(0, Math.trunc(Number(frameCount) || 0));
-        return n === 0 ? [] : out.slice(0, n);
+        const n = frameCount == null ? 8 : Math.max(0, Math.trunc(Number(frameCount) || 0));
+        if (n === 0) return [];
+        const fallbackName = (process && process.argv && process.argv[1]) || '[eval]';
+        const lines = String(new Error().stack || '').split('\n').slice(1);
+        const out = [];
+        for (const raw of lines) {
+          const line = String(raw).trim();
+          let m = /\((.*):(\d+):(\d+)\)$/.exec(line);
+          if (!m) m = /at (.*):(\d+):(\d+)$/.exec(line);
+          if (!m) continue;
+          const scriptName = m[1];
+          if (!scriptName || scriptName.includes('binding_runtime.js')) continue;
+          out.push({
+            scriptName,
+            scriptId: '0',
+            lineNumber: Number(m[2]) || 1,
+            columnNumber: Number(m[3]) || 1,
+            column: Number(m[3]) || 1,
+            functionName: '',
+          });
+          if (out.length >= n) break;
+        }
+        if (out.length === 0) {
+          out.push({
+            scriptName: fallbackName,
+            scriptId: '0',
+            lineNumber: 1,
+            columnNumber: 1,
+            column: 1,
+            functionName: '',
+          });
+        }
+        while (out.length < n) {
+          const last = out[out.length - 1];
+          out.push({
+            scriptName: last.scriptName,
+            scriptId: '0',
+            lineNumber: last.lineNumber,
+            columnNumber: last.columnNumber,
+            column: last.column,
+            functionName: '',
+          });
+        }
+        return out.slice(0, n);
       },
       getConstructorName(value) {
         if (kCtorNameMap.has(value)) return kCtorNameMap.get(value);
@@ -629,7 +661,8 @@ function internalBinding(name) {
         while ((Date.now() - start) < n) {}
       },
       isInsideNodeModules() {
-        return false;
+        const stack = String(new Error().stack || '');
+        return /(^|[\\/])node_modules([\\/]|$)/i.test(stack);
       },
       privateSymbols: {
         untransferable_object_private_symbol: kUntransferable,

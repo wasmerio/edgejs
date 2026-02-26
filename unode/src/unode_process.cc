@@ -256,10 +256,77 @@ napi_status InstallProcessStream(napi_env env,
   if (status != napi_ok || fd_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
   status = napi_set_named_property(env, stream_obj, "fd", fd_value);
   if (status != napi_ok) return status;
+  napi_value true_value = nullptr;
+  status = napi_get_boolean(env, true, &true_value);
+  if (status != napi_ok || true_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+  status = napi_set_named_property(env, stream_obj, "writable", true_value);
+  if (status != napi_ok) return status;
+  status = napi_set_named_property(env, stream_obj, "_isStdio", true_value);
+  if (status != napi_ok) return status;
+  napi_value false_value = nullptr;
+  status = napi_get_boolean(env, false, &false_value);
+  if (status != napi_ok || false_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+  status = napi_set_named_property(env, stream_obj, "isTTY", false_value);
+  if (status != napi_ok) return status;
   napi_value write_fn = nullptr;
   status = napi_create_function(env, "write", NAPI_AUTO_LENGTH, write_cb, nullptr, &write_fn);
   if (status != napi_ok || write_fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
   status = napi_set_named_property(env, stream_obj, "write", write_fn);
+  if (status != napi_ok) return status;
+  napi_value end_fn = nullptr;
+  status = napi_create_function(
+      env,
+      "end",
+      NAPI_AUTO_LENGTH,
+      [](napi_env env, napi_callback_info info) -> napi_value {
+        size_t argc = 1;
+        napi_value argv[1] = {nullptr};
+        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+        if (argc >= 1 && argv[0] != nullptr) {
+          napi_valuetype t = napi_undefined;
+          if (napi_typeof(env, argv[0], &t) == napi_ok && t == napi_function) {
+            napi_value global = nullptr;
+            napi_value ignored = nullptr;
+            if (napi_get_global(env, &global) == napi_ok && global != nullptr) {
+              napi_call_function(env, global, argv[0], 0, nullptr, &ignored);
+            }
+          }
+        }
+        napi_value undefined = nullptr;
+        napi_get_undefined(env, &undefined);
+        return undefined;
+      },
+      nullptr,
+      &end_fn);
+  if (status != napi_ok || end_fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+  status = napi_set_named_property(env, stream_obj, "end", end_fn);
+  if (status != napi_ok) return status;
+  auto return_undefined = [](napi_env env, napi_callback_info info) -> napi_value {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  };
+  auto return_this = [](napi_env env, napi_callback_info info) -> napi_value {
+    napi_value this_arg = nullptr;
+    if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
+      napi_value undefined = nullptr;
+      napi_get_undefined(env, &undefined);
+      return undefined;
+    }
+    return this_arg;
+  };
+  const char* event_methods_this[] = {"on", "addListener", "once", "prependListener", "removeListener"};
+  for (const char* method : event_methods_this) {
+    napi_value fn = nullptr;
+    status = napi_create_function(env, method, NAPI_AUTO_LENGTH, return_this, nullptr, &fn);
+    if (status != napi_ok || fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+    status = napi_set_named_property(env, stream_obj, method, fn);
+    if (status != napi_ok) return status;
+  }
+  napi_value emit_fn = nullptr;
+  status = napi_create_function(env, "emit", NAPI_AUTO_LENGTH, return_undefined, nullptr, &emit_fn);
+  if (status != napi_ok || emit_fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+  status = napi_set_named_property(env, stream_obj, "emit", emit_fn);
   if (status != napi_ok) return status;
   return napi_set_named_property(env, process_obj, name, stream_obj);
 }

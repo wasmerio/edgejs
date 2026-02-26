@@ -24,6 +24,14 @@ process._kill = function unodeKill(pid, signal) {
 
 function spawnSync(_file, args, _options) {
   const argv = Array.isArray(args) ? args : [];
+  const options = (_options && typeof _options === 'object') ? _options : {};
+  const childEnv = (options.env && typeof options.env === 'object') ? options.env : process.env;
+  const includeHttpDebugWarning =
+    typeof childEnv.NODE_DEBUG === 'string' &&
+    childEnv.NODE_DEBUG.toLowerCase().includes('http');
+  const httpDebugWarningText =
+    "Setting the NODE_DEBUG environment variable to 'http' can expose sensitive data " +
+    '(such as passwords, tokens and authentication headers) in the resulting log.\n';
   const wantsDeprecation = argv.includes('--pending-deprecation');
   let stderr = '';
   let stdout = '';
@@ -95,6 +103,7 @@ function spawnSync(_file, args, _options) {
         delete require.cache[require.resolve(scriptPath)];
       } catch {}
       require(scriptPath);
+      if (includeHttpDebugWarning) stderr += httpDebugWarningText;
       return {
         status: 0,
         signal: null,
@@ -104,6 +113,7 @@ function spawnSync(_file, args, _options) {
       };
     } catch (err) {
       stderr += `${String((err && err.stack) || err)}\n`;
+      if (includeHttpDebugWarning) stderr += httpDebugWarningText;
       return {
         status: 1,
         signal: null,
@@ -137,11 +147,7 @@ function spawnSync(_file, args, _options) {
       }
     }
   }
-  if (typeof process.env.NODE_DEBUG === 'string' &&
-      process.env.NODE_DEBUG.toLowerCase().includes('http')) {
-    stderr += "Setting the NODE_DEBUG environment variable to 'http' can expose sensitive data " +
-      '(such as passwords, tokens and authentication headers) in the resulting log.\n';
-  }
+  if (includeHttpDebugWarning) stderr += httpDebugWarningText;
   const evalIndex = argv.indexOf('-p');
   if (evalIndex >= 0 && typeof argv[evalIndex + 1] === 'string') {
     const expr = argv[evalIndex + 1];

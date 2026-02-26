@@ -1,6 +1,6 @@
 'use strict';
 
-function runWithContext(code, context) {
+function runWithContext(code, context, options) {
   const sandbox = context && typeof context === 'object' ? context : {};
   const keys = Object.keys(sandbox);
   const hadOwn = Object.create(null);
@@ -15,7 +15,11 @@ function runWithContext(code, context) {
   }
 
   try {
-    return (0, eval)(String(code));
+    let source = String(code);
+    if (options && typeof options === 'object' && typeof options.filename === 'string' && options.filename.length > 0) {
+      source += `\n//# sourceURL=${options.filename}`;
+    }
+    return (0, eval)(source);
   } finally {
     for (const key of keys) {
       if (hadOwn[key]) {
@@ -27,8 +31,8 @@ function runWithContext(code, context) {
   }
 }
 
-function runInNewContext(code, context) {
-  const result = runWithContext(code, context);
+function runInNewContext(code, context, options) {
+  const result = runWithContext(code, context, options);
   if (typeof result === 'function') {
     const altProto = Object.create(Function.prototype);
     Object.setPrototypeOf(result, altProto);
@@ -36,8 +40,12 @@ function runInNewContext(code, context) {
   return result;
 }
 
-function runInThisContext(code) {
-  return (0, eval)(String(code));
+function runInThisContext(code, options) {
+  let source = String(code);
+  if (options && typeof options === 'object' && typeof options.filename === 'string' && options.filename.length > 0) {
+    source += `\n//# sourceURL=${options.filename}`;
+  }
+  return (0, eval)(source);
 }
 
 module.exports = {
