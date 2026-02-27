@@ -11,6 +11,7 @@
 
 #include <uv.h>
 
+#include "unode_runtime.h"
 #include "unode_stream_wrap.h"
 
 namespace {
@@ -47,6 +48,8 @@ struct PipeWrap {
   napi_ref close_cb_ref = nullptr;
   uv_pipe_t handle{};
   bool closed = false;
+  bool finalized = false;
+  bool delete_on_close = false;
   uint64_t bytes_read = 0;
   uint64_t bytes_written = 0;
   int64_t async_id = 0;
@@ -110,7 +113,7 @@ void InvokeReqOnComplete(napi_env env, napi_value req_obj, int status, napi_valu
   napi_typeof(env, oncomplete, &t);
   if (t != napi_function) return;
   napi_value ignored = nullptr;
-  napi_call_function(env, req_obj, oncomplete, argc, argv, &ignored);
+  UnodeMakeCallback(env, req_obj, oncomplete, argc, argv, &ignored);
 }
 
 void OnWriteDone(uv_write_t* req, int status) {
@@ -185,7 +188,7 @@ void OnRead(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
         napi_get_undefined(wrap->env, &argv[0]);
       }
       napi_value ignored = nullptr;
-      napi_call_function(wrap->env, self, onread, 1, argv, &ignored);
+      UnodeMakeCallback(wrap->env, self, onread, 1, argv, &ignored);
     }
   }
   if (buf && buf->base) free(buf->base);
@@ -195,23 +198,41 @@ void OnClosed(uv_handle_t* h) {
   auto* wrap = static_cast<PipeWrap*>(h->data);
   if (wrap == nullptr) return;
   wrap->closed = true;
-  if (wrap->close_cb_ref) {
+  if (!wrap->finalized && wrap->close_cb_ref) {
     napi_value self = GetRefValue(wrap->env, wrap->wrapper_ref);
     napi_value cb = GetRefValue(wrap->env, wrap->close_cb_ref);
     if (cb) {
       napi_value ignored = nullptr;
-      napi_call_function(wrap->env, self, cb, 0, nullptr, &ignored);
+      UnodeMakeCallback(wrap->env, self, cb, 0, nullptr, &ignored);
     }
     napi_delete_reference(wrap->env, wrap->close_cb_ref);
     wrap->close_cb_ref = nullptr;
+  }
+  if (wrap->delete_on_close || wrap->finalized) {
+    delete wrap;
   }
 }
 
 void PipeFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<PipeWrap*>(data);
   if (!wrap) return;
-  if (wrap->wrapper_ref) napi_delete_reference(env, wrap->wrapper_ref);
-  if (wrap->close_cb_ref) napi_delete_reference(env, wrap->close_cb_ref);
+  wrap->finalized = true;
+  if (wrap->wrapper_ref) {
+    napi_delete_reference(env, wrap->wrapper_ref);
+    wrap->wrapper_ref = nullptr;
+  }
+  if (wrap->close_cb_ref) {
+    napi_delete_reference(env, wrap->close_cb_ref);
+    wrap->close_cb_ref = nullptr;
+  }
+  uv_handle_t* h = reinterpret_cast<uv_handle_t*>(&wrap->handle);
+  if (!wrap->closed) {
+    wrap->delete_on_close = true;
+    if (!uv_is_closing(h)) {
+      uv_close(h, OnClosed);
+    }
+    return;
+  }
   delete wrap;
 }
 
@@ -285,7 +306,7 @@ void OnConnection(uv_stream_t* server, int status) {
     argv[1] = client_obj;
   }
   napi_value ignored = nullptr;
-  napi_call_function(env, server_obj, onconnection, 2, argv, &ignored);
+  UnodeMakeCallback(env, server_obj, onconnection, 2, argv, &ignored);
 }
 
 napi_value PipeListen(napi_env env, napi_callback_info info) {

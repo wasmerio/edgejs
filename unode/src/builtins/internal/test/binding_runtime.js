@@ -603,7 +603,11 @@ function internalBinding(name) {
     return {
       tickInfo: kTickInfo,
       runMicrotasks() {},
-      setTickCallback() {},
+      setTickCallback(fn) {
+        if (process && typeof process === 'object' && typeof fn === 'function') {
+          process._tickCallback = fn;
+        }
+      },
       enqueueMicrotask(fn) {
         if (typeof queueMicrotask === 'function') return queueMicrotask(fn);
         if (typeof fn === 'function') fn();

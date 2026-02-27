@@ -10,6 +10,8 @@
 
 #include <uv.h>
 
+#include "unode_runtime.h"
+
 extern "C" {
 #include "llhttp.h"
 }
@@ -23,6 +25,7 @@ constexpr uint32_t kOnBody = 3;
 constexpr uint32_t kOnMessageComplete = 4;
 constexpr uint32_t kOnExecute = 5;
 constexpr uint32_t kOnTimeout = 6;
+constexpr size_t kMaxHeaderFieldsCount = 32;
 
 constexpr uint32_t kLenientNone = 0;
 constexpr uint32_t kLenientHeaders = 1 << 0;
@@ -85,6 +88,7 @@ T* Unwrap(napi_env env, napi_callback_info info, napi_value* this_arg = nullptr)
 }
 
 napi_value CreateUint8ArrayCopy(napi_env env, const char* data, size_t length);
+int FlushHeadersToJs(Parser* p);
 
 napi_value MakeError(napi_env env,
                      const char* message,
@@ -134,6 +138,21 @@ napi_value CreateUint8ArrayCopy(napi_env env, const char* data, size_t length) {
   return view;
 }
 
+napi_value CreateBufferCopy(napi_env env, const char* data, size_t length) {
+  napi_value view = CreateUint8ArrayCopy(env, data, length);
+  if (view == nullptr) return nullptr;
+  napi_value global = nullptr;
+  napi_value buffer_ctor = nullptr;
+  napi_value from_fn = nullptr;
+  napi_value out = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return view;
+  if (napi_get_named_property(env, global, "Buffer", &buffer_ctor) != napi_ok || buffer_ctor == nullptr) return view;
+  if (napi_get_named_property(env, buffer_ctor, "from", &from_fn) != napi_ok || from_fn == nullptr) return view;
+  napi_value argv[1] = {view};
+  if (napi_call_function(env, buffer_ctor, from_fn, 1, argv, &out) != napi_ok || out == nullptr) return view;
+  return out;
+}
+
 int CallIndexedNoArgs(Parser* p, uint32_t index) {
   napi_value self = GetWrappedObject(p->env, p->wrapper_ref);
   if (self == nullptr) return 0;
@@ -144,7 +163,7 @@ int CallIndexedNoArgs(Parser* p, uint32_t index) {
   if (t != napi_function) return 0;
   napi_value result = nullptr;
   bool has_pending = false;
-  if (napi_call_function(p->env, self, cb, 0, nullptr, &result) != napi_ok ||
+  if (UnodeMakeCallback(p->env, self, cb, 0, nullptr, &result) != napi_ok ||
       (napi_is_exception_pending(p->env, &has_pending) == napi_ok && has_pending)) {
     p->got_exception = true;
     llhttp_set_error_reason(&p->parser, "HPE_JS_EXCEPTION:JS Exception");
@@ -202,6 +221,10 @@ int ParserOnHeaderField(llhttp_t* llp, const char* at, size_t length) {
   Parser* p = static_cast<Parser*>(llp->data);
   if (int rv = TrackHeader(p, length); rv != 0) return rv;
   if (p->fields.empty() || p->last_was_value) {
+    if (p->fields.size() >= kMaxHeaderFieldsCount) {
+      const int flush_rv = FlushHeadersToJs(p);
+      if (flush_rv != 0) return flush_rv;
+    }
     p->fields.emplace_back();
     p->last_was_value = false;
   }
@@ -234,6 +257,35 @@ napi_value BuildHeadersArray(Parser* p) {
   return arr;
 }
 
+int FlushHeadersToJs(Parser* p) {
+  napi_value self = GetWrappedObject(p->env, p->wrapper_ref);
+  if (self == nullptr) return 0;
+  napi_value cb = nullptr;
+  if (napi_get_element(p->env, self, kOnHeaders, &cb) != napi_ok || cb == nullptr) return 0;
+  napi_valuetype t = napi_undefined;
+  napi_typeof(p->env, cb, &t);
+  if (t != napi_function) return 0;
+
+  napi_value headers = BuildHeadersArray(p);
+  napi_value url_v = nullptr;
+  napi_create_string_utf8(p->env, p->url.c_str(), p->url.size(), &url_v);
+  napi_value argv[2] = {headers, url_v};
+  napi_value ignored = nullptr;
+  bool has_pending = false;
+  if (UnodeMakeCallback(p->env, self, cb, 2, argv, &ignored) != napi_ok ||
+      (napi_is_exception_pending(p->env, &has_pending) == napi_ok && has_pending)) {
+    p->got_exception = true;
+    llhttp_set_error_reason(&p->parser, "HPE_JS_EXCEPTION:JS Exception");
+    return HPE_USER;
+  }
+
+  p->have_flushed = true;
+  p->fields.clear();
+  p->values.clear();
+  p->url.clear();
+  return 0;
+}
+
 int ParserOnHeadersComplete(llhttp_t* llp) {
   Parser* p = static_cast<Parser*>(llp->data);
   p->headers_completed = true;
@@ -253,20 +305,30 @@ int ParserOnHeadersComplete(llhttp_t* llp) {
 
   napi_create_uint32(p->env, llhttp_get_http_major(llp), &argv[0]);
   napi_create_uint32(p->env, llhttp_get_http_minor(llp), &argv[1]);
-  argv[2] = BuildHeadersArray(p);
+  if (p->have_flushed) {
+    if (FlushHeadersToJs(p) != 0) return HPE_USER;
+  } else {
+    argv[2] = BuildHeadersArray(p);
+    if (llhttp_get_type(llp) == HTTP_REQUEST) {
+      napi_create_string_utf8(p->env, p->url.c_str(), p->url.size(), &argv[4]);
+    }
+  }
   if (llhttp_get_type(llp) == HTTP_REQUEST) {
     napi_create_uint32(p->env, llhttp_get_method(llp), &argv[3]);
-    napi_create_string_utf8(p->env, p->url.c_str(), p->url.size(), &argv[4]);
   } else {
     napi_create_int32(p->env, llhttp_get_status_code(llp), &argv[5]);
     napi_create_string_utf8(p->env, p->status_message.c_str(), p->status_message.size(), &argv[6]);
   }
+  p->fields.clear();
+  p->values.clear();
+  p->url.clear();
+  p->status_message.clear();
   napi_get_boolean(p->env, llhttp_get_upgrade(llp) != 0, &argv[7]);
   napi_get_boolean(p->env, llhttp_should_keep_alive(llp) != 0, &argv[8]);
 
   napi_value result = nullptr;
   bool has_pending = false;
-  if (napi_call_function(p->env, self, cb, 9, argv, &result) != napi_ok ||
+  if (UnodeMakeCallback(p->env, self, cb, 9, argv, &result) != napi_ok ||
       (napi_is_exception_pending(p->env, &has_pending) == napi_ok && has_pending)) {
     p->got_exception = true;
     llhttp_set_error_reason(&p->parser, "HPE_JS_EXCEPTION:JS Exception");
@@ -278,10 +340,6 @@ int ParserOnHeadersComplete(llhttp_t* llp) {
     napi_typeof(p->env, result, &rt);
     if (rt == napi_number) napi_get_value_int32(p->env, result, &rv);
   }
-  p->fields.clear();
-  p->values.clear();
-  p->url.clear();
-  p->status_message.clear();
   return rv;
 }
 
@@ -295,12 +353,11 @@ int ParserOnBody(llhttp_t* llp, const char* at, size_t length) {
   napi_valuetype t = napi_undefined;
   napi_typeof(p->env, cb, &t);
   if (t != napi_function) return 0;
-  napi_value buf = nullptr;
-  napi_create_string_utf8(p->env, at, length, &buf);
+  napi_value buf = CreateBufferCopy(p->env, at, length);
   napi_value argv[1] = {buf};
   napi_value ignored = nullptr;
   bool has_pending = false;
-  if (napi_call_function(p->env, self, cb, 1, argv, &ignored) != napi_ok ||
+  if (UnodeMakeCallback(p->env, self, cb, 1, argv, &ignored) != napi_ok ||
       (napi_is_exception_pending(p->env, &has_pending) == napi_ok && has_pending)) {
     p->got_exception = true;
     llhttp_set_error_reason(&p->parser, "HPE_JS_EXCEPTION:JS Exception");
@@ -613,14 +670,47 @@ napi_value ParserRemove(napi_env env, napi_callback_info info) {
   if (p->list != nullptr) {
     p->list->all.erase(p);
     p->list->active.erase(p);
+    p->list = nullptr;
   }
+  p->last_message_start = 0;
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
 }
 
 napi_value ParserClose(napi_env env, napi_callback_info info) {
-  return ParserRemove(env, info);
+  napi_value self = nullptr;
+  size_t argc = 0;
+  napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
+  if (self == nullptr) return nullptr;
+
+  Parser* p = nullptr;
+  if (napi_unwrap(env, self, reinterpret_cast<void**>(&p)) != napi_ok || p == nullptr) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+
+  if (p->list != nullptr) {
+    p->list->all.erase(p);
+    p->list->active.erase(p);
+    p->list = nullptr;
+  }
+  p->last_message_start = 0;
+
+  void* removed = nullptr;
+  if (napi_remove_wrap(env, self, &removed) == napi_ok && removed != nullptr) {
+    Parser* removed_parser = static_cast<Parser*>(removed);
+    if (removed_parser->wrapper_ref != nullptr) {
+      napi_delete_reference(env, removed_parser->wrapper_ref);
+      removed_parser->wrapper_ref = nullptr;
+    }
+    delete removed_parser;
+  }
+
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
 }
 
 napi_value ParserFree(napi_env env, napi_callback_info info) {

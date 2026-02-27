@@ -513,6 +513,20 @@ int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
   return 1;
 }
 
+void DrainProcessTickCallback(napi_env env) {
+  napi_value global = nullptr;
+  napi_value process = nullptr;
+  napi_value tick_cb = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
+  if (napi_get_named_property(env, global, "process", &process) != napi_ok || process == nullptr) return;
+  if (napi_get_named_property(env, process, "_tickCallback", &tick_cb) != napi_ok || tick_cb == nullptr) return;
+  napi_valuetype type = napi_undefined;
+  napi_typeof(env, tick_cb, &type);
+  if (type != napi_function) return;
+  napi_value ignored = nullptr;
+  (void)napi_call_function(env, process, tick_cb, 0, nullptr, &ignored);
+}
+
 int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
   uv_loop_t* loop = uv_default_loop();
   if (loop == nullptr) {
@@ -523,7 +537,7 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
   }
   while (true) {
     uv_run(loop, UV_RUN_DEFAULT);
-    // Node drains platform tasks between libuv turns; mirror that behavior.
+    // Match Node's event-loop turn: drain platform tasks after libuv run.
     (void)UnodeRuntimePlatformDrainTasks(env);
 
     int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
@@ -1924,6 +1938,33 @@ int RunScriptWithGlobals(napi_env env,
 }
 
 }  // namespace
+
+napi_status UnodeMakeCallback(napi_env env,
+                              napi_value recv,
+                              napi_value callback,
+                              size_t argc,
+                              napi_value* argv,
+                              napi_value* result) {
+  if (env == nullptr || recv == nullptr || callback == nullptr) {
+    return napi_invalid_arg;
+  }
+  thread_local int callback_scope_depth = 0;
+  callback_scope_depth++;
+  napi_status status = napi_call_function(env, recv, callback, argc, argv, result);
+
+  bool has_pending = false;
+  if (status == napi_ok &&
+      callback_scope_depth == 1 &&
+      napi_is_exception_pending(env, &has_pending) == napi_ok &&
+      !has_pending) {
+    // Approximate Node's InternalCallbackScope queue-drain behavior:
+    // drain nextTick/rejection processing at the outermost callback scope.
+    DrainProcessTickCallback(env);
+  }
+
+  callback_scope_depth--;
+  return status;
+}
 
 napi_status UnodeInstallConsole(napi_env env) {
   if (env == nullptr) {

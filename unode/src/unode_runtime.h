@@ -20,5 +20,11 @@ int UnodeRunScriptFileWithLoop(napi_env env,
                                std::string* error_out,
                                bool keep_event_loop_alive);
 void UnodeSetScriptArgv(const std::vector<std::string>& script_argv);
+napi_status UnodeMakeCallback(napi_env env,
+                              napi_value recv,
+                              napi_value callback,
+                              size_t argc,
+                              napi_value* argv,
+                              napi_value* result);
 
 #endif  // UNODE_RUNTIME_H_

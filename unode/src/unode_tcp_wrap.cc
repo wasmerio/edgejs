@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <uv.h>
 
+#include "unode_runtime.h"
 #include "unode_stream_wrap.h"
 
 namespace {
@@ -47,6 +48,8 @@ struct TcpWrap {
   uv_tcp_t handle{};
   bool initialized = false;
   bool closed = false;
+  bool finalized = false;
+  bool delete_on_close = false;
   uint64_t bytes_read = 0;
   uint64_t bytes_written = 0;
   int64_t async_id = 0;
@@ -55,6 +58,8 @@ struct TcpWrap {
 napi_ref g_tcp_ctor_ref = nullptr;
 napi_ref g_connect_wrap_ctor_ref = nullptr;
 int64_t g_next_async_id = 1;
+
+void OnClosed(uv_handle_t* h);
 
 napi_value GetRefValue(napi_env env, napi_ref ref) {
   if (ref == nullptr) return nullptr;
@@ -144,7 +149,7 @@ void InvokeReqOnComplete(napi_env env, napi_value req_obj, int status, napi_valu
     argc = 1;
   }
   napi_value ignored = nullptr;
-  napi_call_function(env, req_obj, oncomplete, argc, local_argv, &ignored);
+  UnodeMakeCallback(env, req_obj, oncomplete, argc, local_argv, &ignored);
 }
 
 void OnWriteDone(uv_write_t* req, int status) {
@@ -217,7 +222,17 @@ void OnRead(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
         napi_get_undefined(wrap->env, &argv[0]);
       }
       napi_value ignored = nullptr;
-      napi_call_function(wrap->env, self, onread, 1, argv, &ignored);
+      UnodeMakeCallback(wrap->env, self, onread, 1, argv, &ignored);
+    }
+  }
+
+  // Safety net: if JS-side teardown is skipped on EOF/error, close the handle
+  // to avoid accumulating half-closed sockets under sustained load.
+  if (nread < 0 && !wrap->closed) {
+    uv_handle_t* h = reinterpret_cast<uv_handle_t*>(&wrap->handle);
+    (void)uv_read_stop(stream);
+    if (!uv_is_closing(h)) {
+      uv_close(h, OnClosed);
     }
   }
 
@@ -228,23 +243,41 @@ void OnClosed(uv_handle_t* h) {
   auto* wrap = static_cast<TcpWrap*>(h->data);
   if (wrap == nullptr) return;
   wrap->closed = true;
-  if (wrap->close_cb_ref != nullptr) {
+  if (!wrap->finalized && wrap->close_cb_ref != nullptr) {
     napi_value self = GetRefValue(wrap->env, wrap->wrapper_ref);
     napi_value cb = GetRefValue(wrap->env, wrap->close_cb_ref);
     if (cb != nullptr) {
       napi_value ignored = nullptr;
-      napi_call_function(wrap->env, self, cb, 0, nullptr, &ignored);
+      UnodeMakeCallback(wrap->env, self, cb, 0, nullptr, &ignored);
     }
     napi_delete_reference(wrap->env, wrap->close_cb_ref);
     wrap->close_cb_ref = nullptr;
+  }
+  if (wrap->delete_on_close || wrap->finalized) {
+    delete wrap;
   }
 }
 
 void TcpFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<TcpWrap*>(data);
   if (wrap == nullptr) return;
-  if (wrap->wrapper_ref != nullptr) napi_delete_reference(env, wrap->wrapper_ref);
-  if (wrap->close_cb_ref != nullptr) napi_delete_reference(env, wrap->close_cb_ref);
+  wrap->finalized = true;
+  if (wrap->wrapper_ref != nullptr) {
+    napi_delete_reference(env, wrap->wrapper_ref);
+    wrap->wrapper_ref = nullptr;
+  }
+  if (wrap->close_cb_ref != nullptr) {
+    napi_delete_reference(env, wrap->close_cb_ref);
+    wrap->close_cb_ref = nullptr;
+  }
+  uv_handle_t* h = reinterpret_cast<uv_handle_t*>(&wrap->handle);
+  if (!wrap->closed) {
+    wrap->delete_on_close = true;
+    if (!uv_is_closing(h)) {
+      uv_close(h, OnClosed);
+    }
+    return;
+  }
   delete wrap;
 }
 
@@ -570,27 +603,29 @@ void OnConnection(uv_stream_t* server, int status) {
   napi_typeof(env, onconnection, &t);
   if (t != napi_function) return;
 
-  napi_value argv[2] = {MakeInt32(env, status), nullptr};
+  napi_value undef = nullptr;
+  napi_get_undefined(env, &undef);
+  napi_value argv[2] = {MakeInt32(env, status), undef};
   if (status == 0) {
     napi_value ctor = GetRefValue(env, g_tcp_ctor_ref);
-    if (ctor != nullptr) {
-      napi_value arg0 = MakeInt32(env, kTcpSocket);
-      napi_value client_obj = nullptr;
-      napi_new_instance(env, ctor, 1, &arg0, &client_obj);
-      TcpWrap* client_wrap = nullptr;
-      if (client_obj != nullptr &&
-          napi_unwrap(env, client_obj, reinterpret_cast<void**>(&client_wrap)) == napi_ok &&
-          client_wrap != nullptr) {
-        int rc = uv_accept(server, reinterpret_cast<uv_stream_t*>(&client_wrap->handle));
-        argv[0] = MakeInt32(env, rc);
-        argv[1] = client_obj;
-      } else {
-        argv[0] = MakeInt32(env, UV_EINVAL);
-      }
+    if (ctor == nullptr) return;
+    napi_value arg0 = MakeInt32(env, kTcpSocket);
+    napi_value client_obj = nullptr;
+    napi_new_instance(env, ctor, 1, &arg0, &client_obj);
+    TcpWrap* client_wrap = nullptr;
+    if (client_obj == nullptr ||
+        napi_unwrap(env, client_obj, reinterpret_cast<void**>(&client_wrap)) != napi_ok ||
+        client_wrap == nullptr) {
+      return;
     }
+    // Match Node: if uv_accept fails (e.g. EAGAIN), abort this callback path.
+    if (uv_accept(server, reinterpret_cast<uv_stream_t*>(&client_wrap->handle)) != 0) {
+      return;
+    }
+    argv[1] = client_obj;
   }
   napi_value ignored = nullptr;
-  napi_call_function(env, server_obj, onconnection, 2, argv, &ignored);
+  UnodeMakeCallback(env, server_obj, onconnection, 2, argv, &ignored);
 }
 
 napi_value TcpListen(napi_env env, napi_callback_info info) {

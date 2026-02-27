@@ -10,6 +10,8 @@
 
 #include <uv.h>
 
+#include "unode_runtime.h"
+
 namespace {
 
 struct UdpWrap;
@@ -29,6 +31,8 @@ struct UdpWrap {
   napi_ref close_cb_ref = nullptr;
   uv_udp_t handle{};
   bool closed = false;
+  bool finalized = false;
+  bool delete_on_close = false;
   bool has_ref = true;
   int64_t async_id = 200000;
 };
@@ -39,6 +43,8 @@ struct SendWrap {
 
 napi_ref g_udp_ctor_ref = nullptr;
 int64_t g_next_async_id = 200000;
+
+void OnClosed(uv_handle_t* h);
 
 napi_value GetRefValue(napi_env env, napi_ref ref) {
   if (ref == nullptr) return nullptr;
@@ -90,8 +96,23 @@ void SendWrapFinalize(napi_env env, void* data, void* /*hint*/) {
 void UdpFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<UdpWrap*>(data);
   if (wrap == nullptr) return;
-  if (wrap->wrapper_ref) napi_delete_reference(env, wrap->wrapper_ref);
-  if (wrap->close_cb_ref) napi_delete_reference(env, wrap->close_cb_ref);
+  wrap->finalized = true;
+  if (wrap->wrapper_ref) {
+    napi_delete_reference(env, wrap->wrapper_ref);
+    wrap->wrapper_ref = nullptr;
+  }
+  if (wrap->close_cb_ref) {
+    napi_delete_reference(env, wrap->close_cb_ref);
+    wrap->close_cb_ref = nullptr;
+  }
+  uv_handle_t* h = reinterpret_cast<uv_handle_t*>(&wrap->handle);
+  if (!wrap->closed) {
+    wrap->delete_on_close = true;
+    if (!uv_is_closing(h)) {
+      uv_close(h, OnClosed);
+    }
+    return;
+  }
   delete wrap;
 }
 
@@ -138,7 +159,7 @@ void InvokeReqOnComplete(napi_env env, napi_value req_obj, int status) {
   if (t != napi_function) return;
   napi_value argv[1] = {MakeInt32(env, status)};
   napi_value ignored = nullptr;
-  napi_call_function(env, req_obj, oncomplete, 1, argv, &ignored);
+  UnodeMakeCallback(env, req_obj, oncomplete, 1, argv, &ignored);
 }
 
 void OnSendDone(uv_udp_send_t* req, int status) {
@@ -230,7 +251,7 @@ void OnRecv(uv_udp_t* handle, ssize_t nread, const uv_buf_t* buf, const sockaddr
       }
       argv[3] = rinfo;
       napi_value ignored = nullptr;
-      napi_call_function(wrap->env, self, onmessage, 4, argv, &ignored);
+      UnodeMakeCallback(wrap->env, self, onmessage, 4, argv, &ignored);
     }
   }
   if (buf && buf->base) free(buf->base);
@@ -240,15 +261,18 @@ void OnClosed(uv_handle_t* h) {
   auto* wrap = static_cast<UdpWrap*>(h->data);
   if (wrap == nullptr) return;
   wrap->closed = true;
-  if (wrap->close_cb_ref) {
+  if (!wrap->finalized && wrap->close_cb_ref) {
     napi_value self = GetRefValue(wrap->env, wrap->wrapper_ref);
     napi_value cb = GetRefValue(wrap->env, wrap->close_cb_ref);
     if (cb != nullptr) {
       napi_value ignored = nullptr;
-      napi_call_function(wrap->env, self, cb, 0, nullptr, &ignored);
+      UnodeMakeCallback(wrap->env, self, cb, 0, nullptr, &ignored);
     }
     napi_delete_reference(wrap->env, wrap->close_cb_ref);
     wrap->close_cb_ref = nullptr;
+  }
+  if (wrap->delete_on_close || wrap->finalized) {
+    delete wrap;
   }
 }
 
