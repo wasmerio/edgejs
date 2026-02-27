@@ -298,8 +298,10 @@ function normalizeSignVerifyError(err) {
     }
   } else if (message.includes('RSA lib')) {
     if (openssl3Plus) {
-      err.code = 'ERR_OSSL_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE';
-      err.message = 'error:1C8000A5:Provider routines::illegal or unsupported padding mode';
+      err.code = 'ERR_OSSL_RSA_DIGEST_TOO_BIG_FOR_RSA_KEY';
+      err.library = err.library || 'rsa routines';
+      err.reason = err.reason || 'digest too big for rsa key';
+      err.message = 'error:02000070:rsa routines::digest too big for rsa key';
     } else {
       err.code = 'ERR_OSSL_RSA_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE';
     }
@@ -591,6 +593,9 @@ function Cipheriv(algorithm, key, iv, options, decrypt = false) {
   this._chunks = [];
   this._readBuf = null;
   this._outputEncoding = undefined;
+  this._aad = Buffer.alloc(0);
+  this._authTag = null;
+  this._authTagLength = (options && Number.isInteger(options.authTagLength)) ? options.authTagLength : 16;
 }
 Cipheriv.prototype = Object.create(EventEmitter.prototype);
 Cipheriv.prototype.constructor = Cipheriv;
@@ -637,8 +642,40 @@ Cipheriv.prototype.final = function final(outputEncoding) {
   }
   const input = this._chunks.length === 1 ? this._chunks[0] : Buffer.concat(this._chunks);
   this._chunks = [];
-  const b = nativeToBuffer(binding.cipherTransform(this.algorithm, this.key, this.iv, input, this.decrypt, this.options || null));
+  let b;
+  if (String(this.algorithm).includes('-gcm') && typeof binding.cipherTransformAead === 'function') {
+    const result = binding.cipherTransformAead(
+      this.algorithm,
+      this.key,
+      this.iv,
+      input,
+      this.decrypt,
+      this._aad,
+      this._authTag,
+      this._authTagLength
+    );
+    b = nativeToBuffer(result && result.output);
+    if (!this.decrypt) {
+      this._authTag = result && result.authTag ? nativeToBuffer(result.authTag) : null;
+    }
+  } else {
+    b = nativeToBuffer(binding.cipherTransform(this.algorithm, this.key, this.iv, input, this.decrypt, this.options || null));
+  }
   return digestOutput(b, outputEncoding);
+};
+Cipheriv.prototype.setAAD = function setAAD(aad) {
+  this._aad = toBuffer(aad);
+  return this;
+};
+Cipheriv.prototype.getAuthTag = function getAuthTag() {
+  if (this.decrypt) throw makeError('ERR_CRYPTO_INVALID_STATE', 'Invalid state for operation getAuthTag');
+  if (!this._authTag) throw makeError('ERR_CRYPTO_INVALID_STATE', 'Unsupported state or unable to authenticate data');
+  return Buffer.from(this._authTag);
+};
+Cipheriv.prototype.setAuthTag = function setAuthTag(tag) {
+  if (!this.decrypt) throw makeError('ERR_CRYPTO_INVALID_STATE', 'Invalid state for operation setAuthTag');
+  this._authTag = toBuffer(tag);
+  return this;
 };
 Cipheriv.prototype.write = function write(data, enc) { this.update(data, enc); return true; };
 Cipheriv.prototype.end = function end(data, enc) {
@@ -1038,46 +1075,57 @@ Verify.prototype.verify = function verify(key, signature, signatureEncoding) {
 class DiffieHellman {}
 class DiffieHellmanGroup {}
 class ECDH {}
+
+class KeyObject {
+  constructor(type, data, asymmetricKeyType, asymmetricKeyDetails) {
+    this.type = type;
+    this.data = Buffer.from(data);
+    if (asymmetricKeyType) this.asymmetricKeyType = asymmetricKeyType;
+    if (asymmetricKeyDetails && typeof asymmetricKeyDetails === 'object') {
+      this.asymmetricKeyDetails = asymmetricKeyDetails;
+    }
+  }
+
+  export(options) {
+    void options;
+    return Buffer.from(this.data);
+  }
+}
+
 function createSecretKey(key) {
-  return { type: 'secret', data: toBuffer(key) };
+  return new KeyObject('secret', toBuffer(key));
 }
 function createPrivateKey(key) {
   if (key && typeof key === 'object' && key.type === 'private' && key.data != null) return key;
   const data = normalizeKeyMaterial(key, 'sign');
   const details = binding.getAsymmetricKeyDetails(data);
+  let keyType = 'rsa';
+  try {
+    keyType = binding.getAsymmetricKeyType(data) || 'rsa';
+  } catch {
+    keyType = 'rsa';
+  }
   if (details && typeof details === 'object' && details.modulusLength !== undefined &&
       details.publicExponent === undefined) {
     details.publicExponent = 65537n;
   }
-  return {
-    type: 'private',
-    asymmetricKeyType: 'rsa',
-    data,
-    asymmetricKeyDetails: details && typeof details === 'object' ? details : undefined,
-    export(options) {
-      void options;
-      return Buffer.from(data);
-    },
-  };
+  return new KeyObject('private', data, keyType, details && typeof details === 'object' ? details : undefined);
 }
 function createPublicKey(key) {
   if (key && typeof key === 'object' && key.type === 'public' && key.data != null) return key;
   const data = normalizeKeyMaterial(key, 'verify');
   const details = binding.getAsymmetricKeyDetails(data);
+  let keyType = 'rsa';
+  try {
+    keyType = binding.getAsymmetricKeyType(data) || 'rsa';
+  } catch {
+    keyType = 'rsa';
+  }
   if (details && typeof details === 'object' && details.modulusLength !== undefined &&
       details.publicExponent === undefined) {
     details.publicExponent = 65537n;
   }
-  return {
-    type: 'public',
-    asymmetricKeyType: 'rsa',
-    data,
-    asymmetricKeyDetails: details && typeof details === 'object' ? details : undefined,
-    export(options) {
-      void options;
-      return Buffer.from(data);
-    },
-  };
+  return new KeyObject('public', data, keyType, details && typeof details === 'object' ? details : undefined);
 }
 function createSign(algorithm) { return new Sign(algorithm); }
 function createVerify(algorithm) { return new Verify(algorithm); }
@@ -1215,6 +1263,59 @@ function verify(algorithm, data, key, signature, callback) {
     return;
   }
   return verifySyncImpl(algorithm, data, key, signature);
+}
+
+function normalizeRsaKeyAndOptions(options, opName) {
+  if (options == null || (typeof options !== 'object' && typeof options !== 'string' && !Buffer.isBuffer(options))) {
+    throw makeTypeError('ERR_INVALID_ARG_TYPE', `The "key" argument must be of type string or Buffer.${formatReceived(options)}`);
+  }
+  const opts = (typeof options === 'object' && !Buffer.isBuffer(options) && !ArrayBuffer.isView(options))
+    ? options
+    : { key: options };
+  const keyData = normalizeKeyMaterial(opts, opName);
+  let padding = opts.padding;
+  if (padding === undefined) padding = constants.RSA_PKCS1_OAEP_PADDING;
+  if (!Number.isInteger(padding)) {
+    throw makeTypeError('ERR_INVALID_ARG_VALUE', 'The property \'options.padding\' is invalid');
+  }
+  const oaepHash = opts.oaepHash === undefined ? 'sha1' : String(opts.oaepHash);
+  const oaepLabel = opts.oaepLabel === undefined ? null : toBuffer(opts.oaepLabel);
+  return { keyData, padding, oaepHash, oaepLabel };
+}
+
+function normalizeRsaCipherError(err) {
+  const message = String(err && err.message ? err.message : err);
+  const opensslMajor = Number(String(process?.versions?.openssl || '').split('.')[0] || 0);
+  const openssl3Plus = Number.isFinite(opensslMajor) && opensslMajor >= 3;
+  if (message.includes('RSA lib')) {
+    if (openssl3Plus) {
+      err.code = 'ERR_OSSL_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE';
+      err.message = 'error:1C8000A5:Provider routines::illegal or unsupported padding mode';
+    } else {
+      err.code = 'ERR_OSSL_RSA_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE';
+    }
+  }
+  return err;
+}
+
+function publicEncrypt(options, buffer) {
+  const input = toBuffer(buffer);
+  const { keyData, padding, oaepHash, oaepLabel } = normalizeRsaKeyAndOptions(options, 'publicEncrypt');
+  try {
+    return nativeToBuffer(binding.publicEncrypt(keyData, input, padding, oaepHash, oaepLabel));
+  } catch (err) {
+    throw normalizeRsaCipherError(err);
+  }
+}
+
+function privateDecrypt(options, buffer) {
+  const input = toBuffer(buffer);
+  const { keyData, padding, oaepHash, oaepLabel } = normalizeRsaKeyAndOptions(options, 'privateDecrypt');
+  try {
+    return nativeToBuffer(binding.privateDecrypt(keyData, input, padding, oaepHash, oaepLabel));
+  } catch (err) {
+    throw normalizeRsaCipherError(err);
+  }
 }
 
 const __rsa512PrivateKeyPem = `-----BEGIN PRIVATE KEY-----
@@ -1669,6 +1770,7 @@ module.exports = {
   Decipheriv,
   Sign,
   Verify,
+  KeyObject,
   DiffieHellman,
   DiffieHellmanGroup,
   ECDH,
@@ -1688,6 +1790,8 @@ module.exports = {
   generateKeyPairSync,
   sign,
   verify,
+  publicEncrypt,
+  privateDecrypt,
   constants,
   randomBytes,
   randomFillSync,

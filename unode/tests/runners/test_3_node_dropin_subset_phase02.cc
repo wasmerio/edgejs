@@ -761,6 +761,14 @@ DEFINE_RAW_NODE_TEST(RawTestCryptoRandomfillsyncRegressionFromNodeTest, "test-cr
 DEFINE_RAW_NODE_TEST(RawTestCryptoSecureHeapFromNodeTest, "test-crypto-secure-heap.js")
 // DEFINE_RAW_NODE_TEST(RawTestCryptoStreamFromNodeTest, "test-crypto-stream.js") // temporarily disabled: currently failing
 DEFINE_RAW_NODE_TEST(RawTestCryptoUpdateEncodingFromNodeTest, "test-crypto-update-encoding.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsTicketInvalidArgFromNodeTest, "test-tls-ticket-invalid-arg.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsSetCiphersErrorFromNodeTest, "test-tls-set-ciphers-error.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsOptionsBooleanCheckFromNodeTest, "test-tls-options-boolean-check.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsKeyengineInvalidArgTypeFromNodeTest, "test-tls-keyengine-invalid-arg-type.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsKeyengineUnsupportedFromNodeTest, "test-tls-keyengine-unsupported.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsClientcertengineInvalidArgTypeFromNodeTest, "test-tls-clientcertengine-invalid-arg-type.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsClientcertengineUnsupportedFromNodeTest, "test-tls-clientcertengine-unsupported.js")
+DEFINE_RAW_NODE_TEST(RawTestTlsSessionTimeoutErrorsFromNodeTest, "test-tls-session-timeout-errors.js")
 
 DEFINE_RAW_NODE_TEST(RawProcessExecveFromNodeTest, "test-process-execve.js")
 DEFINE_RAW_NODE_TEST(RawProcessExecveValidationFromNodeTest, "test-process-execve-validation.js")
