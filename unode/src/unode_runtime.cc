@@ -32,6 +32,7 @@
 #include "unode_process_wrap.h"
 #include "unode_string_decoder.h"
 #include "unode_tcp_wrap.h"
+#include "unode_tty_wrap.h"
 #include "unode_udp_wrap.h"
 #include "unode_url.h"
 #include "unode_util.h"
@@ -844,6 +845,8 @@ int RunScriptWithGlobals(napi_env env,
   UnodeInstallProcessWrapBinding(env);
   ClearPendingExceptionIfAny(env);
   UnodeInstallTcpWrapBinding(env);
+  ClearPendingExceptionIfAny(env);
+  UnodeInstallTtyWrapBinding(env);
   ClearPendingExceptionIfAny(env);
   UnodeInstallPipeWrapBinding(env);
   ClearPendingExceptionIfAny(env);

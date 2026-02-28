@@ -1025,6 +1025,9 @@ function resolveFallbackBinding(name) {
     };
   }
   if (name === 'tty_wrap') {
+    if (globalThis.__unode_tty_wrap && typeof globalThis.__unode_tty_wrap === 'object') {
+      return globalThis.__unode_tty_wrap;
+    }
     return {
       TTY: UnodeTTYWrap,
       isTTY(fd) {
