@@ -16,7 +16,7 @@ set(NAPI_V8_V8_EXTRA_LIBS
   "${NAPI_V8_V8_EXTRA_LIBS_DEFAULT}"
   CACHE STRING "Semicolon-separated extra V8 libraries (e.g. libplatform/libbase)"
 )
-set(NAPI_V8_GTEST_ROOT "${NAPI_V8_NODE_ROOT}/deps/googletest")
+set(NAPI_V8_GTEST_ROOT "${PROJECT_ROOT}/deps/googletest")
 include(GoogleTest)
 option(NAPI_V8_BUILD_NODE_API_TESTS "Build node-api fixture tests in napi-v8" OFF)
 

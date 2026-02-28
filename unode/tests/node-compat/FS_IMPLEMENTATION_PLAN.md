@@ -171,7 +171,7 @@ Location: `node/test/parallel/test-fs-*.js`.
 **Tests to run**
 
 - **Subset (green):** `unode/tests/node-compat/parallel/test-fs-phase-c-subset.js` – covers truncateSync, renameSync, unlinkSync, copyFileSync, appendFileSync (string + buffer), rmdirSync. Run via `FsPhaseCSubsetTest`.
-- **Raw Node tests (all passing):** The following Node tests from `node/test/parallel/` are run unchanged by the phase02 runner (when `NAPI_V8_NODE_ROOT_PATH` is set). Common, fixtures, and builtins were extended so they all pass.
+- **Raw Node tests (all passing):** The following Node tests from `node/test/parallel/` are run unchanged by the phase02 runner (when `PROJECT_ROOT_PATH` is set). Common, fixtures, and builtins were extended so they all pass.
   - **test-fs-rename-type-check.js** – `RawFsRenameFromNodeTest`.
   - **test-fs-unlink-type-check.js** – `RawFsUnlinkFromNodeTest`.
   - **test-fs-truncate-sync.js** – `RawFsTruncateSyncFromNodeTest`.
@@ -221,7 +221,7 @@ Location: `node/test/parallel/test-fs-*.js`.
 1. **Unode-owned tests** – Add small unit tests under `unode/tests/` that call our fs builtin directly (e.g. readFileSync, writeFileSync, statSync, existsSync) and assert behavior. These don’t require Node’s test harness.
 2. **Node test copy / subset** – Optionally copy a few Node tests into `unode/tests/node-compat/parallel/` (e.g. test-fs-exists-sync-subset.js) that use only our implemented APIs and our common.
 3. **Raw Node tests** – CTest cases (e.g. RawFsMkdtempFromNodeTest) run Node’s `node/test/parallel/test-fs-*.js` with `NODE_TEST_DIR`. **RunNodeCompatScript** (in the phase02 runner) resolves the unode root and runs the script by absolute path so compat scripts (e.g. ModuleLoadingSubsetTest) resolve builtins the same way as normal runtime.
-4. **CI** – Run the chosen fs tests in CI when `NAPI_V8_NODE_ROOT_PATH` is set.
+4. **CI** – Run the chosen fs tests in CI when `PROJECT_ROOT_PATH` is set.
 
 ---
 

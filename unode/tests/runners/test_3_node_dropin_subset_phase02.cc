@@ -130,7 +130,7 @@ int RunRawNodeTestScript(napi_env env,
                          const char* node_test_relative_path,
                          std::string* error_out,
                          bool keep_event_loop_alive = false) {
-#ifdef NAPI_V8_NODE_ROOT_PATH
+#if defined(NAPI_V8_NODE_ROOT_PATH) || defined(PROJECT_ROOT_PATH)
   namespace fs = std::filesystem;
   const std::string rel_path = node_test_relative_path ? std::string(node_test_relative_path) : std::string();
   const bool has_suite_prefix = rel_path.find('/') != std::string::npos;
@@ -140,7 +140,11 @@ int RunRawNodeTestScript(napi_env env,
       StartsWith(script_rel, "sequential/") || StartsWith(script_rel, "pummel/");
   ScopedExclusiveFileLock suite_lock(
       needs_global_serialization ? "/tmp/unode-node-suite-serial.lock" : nullptr);
+#if defined(NAPI_V8_NODE_ROOT_PATH)
   const std::string node_root(NAPI_V8_NODE_ROOT_PATH);
+#else
+  const std::string node_root(PROJECT_ROOT_PATH "/node");
+#endif
   const std::string unode_root(NAPI_V8_ROOT_PATH);
   fs::path node_root_path(node_root);
   if (!node_root_path.is_absolute()) {
@@ -453,7 +457,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, OsCheckedCompatTest) {
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
 
-#ifdef NAPI_V8_NODE_ROOT_PATH
+#if defined(NAPI_V8_NODE_ROOT_PATH) || defined(PROJECT_ROOT_PATH)
 TEST_F(Test3NodeDropinSubsetPhase02, RawRequireCacheFromNodeTest) {
   EnvScope s(runtime_.get());
   std::string error;

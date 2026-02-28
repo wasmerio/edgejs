@@ -1,6 +1,6 @@
 include(GoogleTest)
 
-set(NAPI_V8_GTEST_ROOT "${NAPI_V8_NODE_ROOT}/deps/googletest")
+set(NAPI_V8_GTEST_ROOT "${PROJECT_ROOT}/deps/googletest")
 set(UNODE_GTEST_PER_TEST_TIMEOUT_SECONDS 30)
 set(UNODE_CTEST_RESOURCE_LOCK_BUCKETS "24" CACHE STRING
     "Max concurrent unode gtest cases when ctest parallelism is unbounded (0 disables).")
@@ -43,6 +43,7 @@ if(NAPI_V8_V8_LIBRARY)
     target_compile_definitions(${target_name}
       PRIVATE
         NAPI_V8_NODE_ROOT_PATH="${NAPI_V8_NODE_ROOT}"
+        PROJECT_ROOT_PATH="${PROJECT_ROOT}"
         NAPI_V8_ROOT_PATH="${UNODE_ROOT}"
     )
     if(NAPI_V8_V8_DEFINES)

@@ -7,7 +7,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(UNODE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(NAPI_V8_ROOT "${UNODE_ROOT}/../napi-v8")
-set(NAPI_V8_NODE_ROOT "${UNODE_ROOT}/../node")
+set(PROJECT_ROOT "${UNODE_ROOT}/../")
+set(NAPI_V8_NODE_ROOT_DEFAULT "${PROJECT_ROOT}/node")
+if(DEFINED ENV{NAPI_V8_NODE_ROOT})
+  set(NAPI_V8_NODE_ROOT_DEFAULT "$ENV{NAPI_V8_NODE_ROOT}")
+endif()
+set(NAPI_V8_NODE_ROOT
+  "${NAPI_V8_NODE_ROOT_DEFAULT}"
+  CACHE PATH "Path to Node source root (for raw Node tests/fixtures)"
+)
 
 # Hard gate: unode runtime/library sources must never directly reference V8.
 file(GLOB_RECURSE UNODE_PURE_SRC_FILES
@@ -32,7 +40,7 @@ add_subdirectory("${NAPI_V8_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/napi-v8")
 
 # Use Node's bundled libuv (same as Node) for consistent behavior (e.g. mkdtemp).
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-add_subdirectory("${NAPI_V8_NODE_ROOT}/deps/uv" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
+add_subdirectory("${PROJECT_ROOT}/deps/uv" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
 find_package(OpenSSL REQUIRED)
 
 add_library(unode_node_api STATIC
@@ -41,12 +49,12 @@ add_library(unode_node_api STATIC
 )
 
 add_library(unode_ncrypto STATIC
-  "${NAPI_V8_NODE_ROOT}/deps/ncrypto/ncrypto.cc"
-  "${NAPI_V8_NODE_ROOT}/deps/ncrypto/engine.cc"
+  "${PROJECT_ROOT}/deps/ncrypto/ncrypto.cc"
+  "${PROJECT_ROOT}/deps/ncrypto/engine.cc"
 )
 target_include_directories(unode_ncrypto
   PUBLIC
-    "${NAPI_V8_NODE_ROOT}/deps/ncrypto"
+    "${PROJECT_ROOT}/deps/ncrypto"
 )
 target_link_libraries(unode_ncrypto
   PUBLIC
@@ -55,19 +63,19 @@ target_link_libraries(unode_ncrypto
 )
 
 add_library(unode_simdutf STATIC
-  "${NAPI_V8_NODE_ROOT}/deps/v8/third_party/simdutf/simdutf.cpp"
+  "${PROJECT_ROOT}/deps/v8/third_party/simdutf/simdutf.cpp"
 )
 add_library(unode_ada STATIC
-  "${NAPI_V8_NODE_ROOT}/deps/ada/ada.cpp"
+  "${PROJECT_ROOT}/deps/ada/ada.cpp"
 )
 target_include_directories(unode_ada
   PUBLIC
-    "${NAPI_V8_NODE_ROOT}/deps/ada"
+    "${PROJECT_ROOT}/deps/ada"
 )
 
 target_include_directories(unode_simdutf
   PUBLIC
-    "${NAPI_V8_NODE_ROOT}/deps/v8/third_party/simdutf"
+    "${PROJECT_ROOT}/deps/v8/third_party/simdutf"
 )
 
 target_include_directories(unode_node_api
@@ -87,9 +95,9 @@ add_library(unode_runtime STATIC
   src/unode_runtime_platform_v8.cc
   src/unode_process.cc
   src/unode_module_loader.cc
-  "${NAPI_V8_NODE_ROOT}/deps/llhttp/src/api.c"
-  "${NAPI_V8_NODE_ROOT}/deps/llhttp/src/http.c"
-  "${NAPI_V8_NODE_ROOT}/deps/llhttp/src/llhttp.c"
+  "${PROJECT_ROOT}/deps/llhttp/src/api.c"
+  "${PROJECT_ROOT}/deps/llhttp/src/http.c"
+  "${PROJECT_ROOT}/deps/llhttp/src/llhttp.c"
   src/unode_fs.cc
   src/unode_buffer.cc
   src/unode_os.cc
@@ -116,8 +124,8 @@ target_include_directories(unode_runtime
     "${UNODE_ROOT}/src"
   PRIVATE
     "${NAPI_V8_ROOT}/include"
-    "${NAPI_V8_NODE_ROOT}/deps/llhttp/include"
-    "${NAPI_V8_NODE_ROOT}/deps/ncrypto"
+    "${PROJECT_ROOT}/deps/llhttp/include"
+    "${PROJECT_ROOT}/deps/ncrypto"
 )
 target_link_libraries(unode_runtime
   PUBLIC
