@@ -7,15 +7,13 @@ const eventTarget = require(path.resolve(
   '../../../../node/lib/internal/event_target.js'
 ));
 
-if (typeof globalThis.Event !== 'function' && typeof eventTarget.Event === 'function') {
+if (typeof eventTarget.Event === 'function') {
   globalThis.Event = eventTarget.Event;
 }
-if (typeof globalThis.EventTarget !== 'function' &&
-    typeof eventTarget.EventTarget === 'function') {
+if (typeof eventTarget.EventTarget === 'function') {
   globalThis.EventTarget = eventTarget.EventTarget;
 }
-if (typeof globalThis.CustomEvent !== 'function' &&
-    typeof eventTarget.CustomEvent === 'function') {
+if (typeof eventTarget.CustomEvent === 'function') {
   globalThis.CustomEvent = eventTarget.CustomEvent;
 }
 

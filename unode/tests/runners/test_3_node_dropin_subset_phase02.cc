@@ -1036,8 +1036,24 @@ DEFINE_RAW_NODE_TEST(RawPseudoTtyHandleWrapHasrefFromNodeTest, "pseudo-tty/test-
 DEFINE_RAW_NODE_TEST(RawPseudoTtyWindowSizeFromNodeTest, "pseudo-tty/test-tty-window-size.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStreamConstructorsFromNodeTest, "pseudo-tty/test-tty-stream-constructors.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyIsattyFromNodeTest, "pseudo-tty/test-tty-isatty.js")
-// DEFINE_RAW_NODE_TEST(RawPseudoTtyAsyncWrapGetasyncidFromNodeTest, "pseudo-tty/test-async-wrap-getasyncid-tty.js")
-// Disabled until internalBinding('async_wrap') provider/hook plumbing is implemented.
+DEFINE_RAW_NODE_TEST(RawAbortSignalHandlerFromNodeTest, "abort/test-signal-handler.js")
+DEFINE_RAW_NODE_TEST(
+    RawAbortAddonRegisterSignalHandlerFromNodeTest,
+    "abort/test-addon-register-signal-handler.js")
+DEFINE_RAW_NODE_TEST(RawParallelSignalHandlerFromNodeTest, "parallel/test-signal-handler.js")
+DEFINE_RAW_NODE_TEST(RawParallelProcessRemoveAllSignalListenersFromNodeTest, "parallel/test-process-remove-all-signal-listeners.js")
+DEFINE_RAW_NODE_TEST(RawParallelSignalUnregisterFromNodeTest, "parallel/test-signal-unregister.js")
+DEFINE_RAW_NODE_TEST(RawParallelSignalArgsFromNodeTest, "parallel/test-signal-args.js")
+DEFINE_RAW_NODE_TEST(RawParallelSignalSafetyFromNodeTest, "parallel/test-signal-safety.js")
+DEFINE_RAW_NODE_TEST(RawParallelSignalHandlerRemoveOnExitFromNodeTest, "parallel/test-signal-handler-remove-on-exit.js")
+DEFINE_RAW_NODE_TEST(RawParallelAbortsignalCloneableFromNodeTest, "parallel/test-abortsignal-cloneable.js")
+DEFINE_RAW_NODE_TEST(RawParallelFsWatchAbortSignalFromNodeTest, "parallel/test-fs-watch-abort-signal.js")
+DEFINE_RAW_NODE_TEST(RawParallelStreamAddAbortSignalFromNodeTest, "parallel/test-stream-add-abort-signal.js")
+DEFINE_RAW_NODE_TEST(
+    RawParallelWhatwgEventsAddEventListenerOptionsSignalFromNodeTest,
+    "parallel/test-whatwg-events-add-event-listener-options-signal.js")
+DEFINE_RAW_NODE_TEST(RawParallelProcessKillPidFromNodeTest, "parallel/test-process-kill-pid.js")
+DEFINE_RAW_NODE_TEST(RawParallelProcessKillNullFromNodeTest, "parallel/test-process-kill-null.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyColorSupportFromNodeTest, "pseudo-tty/test-tty-color-support.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyColorSupportWarningFromNodeTest, "pseudo-tty/test-tty-color-support-warning.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyColorSupportWarning2FromNodeTest, "pseudo-tty/test-tty-color-support-warning-2.js")
@@ -1045,6 +1061,10 @@ DEFINE_RAW_NODE_TEST(RawPseudoTtyStdoutResizeFromNodeTest, "pseudo-tty/test-tty-
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdoutEndFromNodeTest, "pseudo-tty/test-tty-stdout-end.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdinEndFromNodeTest, "pseudo-tty/test-tty-stdin-end.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdinCallEndFromNodeTest, "pseudo-tty/test-tty-stdin-call-end.js")
+DEFINE_RAW_NODE_TEST(
+    RawPseudoTtySetRawModeResetSignalFromNodeTest,
+    "pseudo-tty/test-set-raw-mode-reset-signal.js")
+DEFINE_RAW_NODE_TEST(RawReportSignalFromNodeTest, "report/test-report-signal.js")
 
 // Raw Node repl tests (initial drop-in batch from node/test/parallel)
 DEFINE_RAW_NODE_TEST(RawReplEmptyFromNodeTest, "test-repl-empty.js")

@@ -101,6 +101,7 @@ add_library(unode_runtime STATIC
   src/unode_tcp_wrap.cc
   src/unode_tty_wrap.cc
   src/unode_pipe_wrap.cc
+  src/unode_signal_wrap.cc
   src/unode_cares_wrap.cc
   src/unode_udp_wrap.cc
   src/unode_url.cc

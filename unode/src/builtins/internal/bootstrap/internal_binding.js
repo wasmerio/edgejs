@@ -70,6 +70,44 @@ if (!primordialsExport || typeof primordialsExport !== 'object' || Object.keys(p
   }
 }
 
+if (!globalThis.__unode_event_target_signal_patched &&
+    typeof EventTarget === 'function' &&
+    EventTarget.prototype &&
+    typeof EventTarget.prototype.addEventListener === 'function') {
+  globalThis.__unode_event_target_signal_patched = true;
+  const originalAddEventListener = EventTarget.prototype.addEventListener;
+  const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+
+  EventTarget.prototype.addEventListener = function addEventListener(type, listener, options) {
+    if (options && typeof options === 'object' && Object.prototype.hasOwnProperty.call(options, 'signal')) {
+      const signal = options.signal;
+      if (signal !== undefined) {
+        const isAbortSignalLike =
+          signal &&
+          typeof signal === 'object' &&
+          typeof signal.aborted === 'boolean' &&
+          typeof signal.addEventListener === 'function' &&
+          typeof signal.removeEventListener === 'function';
+        if (!isAbortSignalLike) {
+          throw new TypeError('The "options.signal" property must be an instance of AbortSignal.');
+        }
+        if (signal.aborted) return;
+        const capture = options.capture === true;
+        const abortHandler = () => {
+          try {
+            originalRemoveEventListener.call(this, type, listener, capture);
+          } catch {}
+          try {
+            signal.removeEventListener('abort', abortHandler);
+          } catch {}
+        };
+        signal.addEventListener('abort', abortHandler, { once: true });
+      }
+    }
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+}
+
 const kUntransferable = Symbol('untransferable_object_private_symbol');
 const kArrowMessagePrivate = '__unode_arrow_message_private_symbol__';
 const kDecoratedPrivate = '__unode_decorated_private_symbol__';
@@ -533,6 +571,7 @@ const kLazyGlobalBackedBindings = new Set([
   'os',
   'pipe_wrap',
   'process_wrap',
+  'signal_wrap',
   'spawn_sync',
   'stream_wrap',
   'tcp_wrap',
@@ -634,7 +673,13 @@ function resolveFallbackBinding(name) {
     return {
       os: {
         UV_UDP_REUSEADDR: 4,
-        signals: osConstants.signals || {},
+        signals: (() => {
+          const src = (osConstants && osConstants.signals) || {};
+          const out = Object.create(null);
+          const keys = Object.keys(src);
+          for (let i = 0; i < keys.length; i++) out[keys[i]] = src[keys[i]];
+          return out;
+        })(),
         errno: {
           EISDIR: 21,
         },
@@ -802,6 +847,21 @@ function resolveFallbackBinding(name) {
         SERVER: 1,
       },
     };
+  }
+  if (name === 'signal_wrap') {
+    if (globalThis.__unode_signal_wrap && typeof globalThis.__unode_signal_wrap === 'object') {
+      return globalThis.__unode_signal_wrap;
+    }
+    class UnodeSignalWrapStub {
+      start() { return UV_EINVAL; }
+      stop() { return 0; }
+      close(cb) { if (typeof cb === 'function') cb(); }
+      ref() {}
+      unref() {}
+      hasRef() { return false; }
+      getAsyncId() { return -1; }
+    }
+    return { Signal: UnodeSignalWrapStub };
   }
   if (name === 'cares_wrap') {
     if (globalThis.__unode_cares_wrap) {
@@ -1099,6 +1159,17 @@ function internalBinding(name) {
   }
   if (binding === undefined || binding === null) {
     binding = resolveFallbackBinding(key);
+  }
+
+  if (key === 'constants' && binding && typeof binding === 'object') {
+    if (!binding.os || typeof binding.os !== 'object') binding.os = {};
+    const src = binding.os.signals;
+    const normalized = Object.create(null);
+    if (src && typeof src === 'object') {
+      const keys = Object.keys(src);
+      for (let i = 0; i < keys.length; i++) normalized[keys[i]] = src[keys[i]];
+    }
+    binding.os.signals = normalized;
   }
 
   if (kLazyGlobalBackedBindings.has(key) &&

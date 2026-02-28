@@ -526,6 +526,60 @@ napi_value CreateSignalsObject(napi_env env) {
 #ifdef SIGUSR2
   SetNamedInt32(env, obj, "SIGUSR2", SIGUSR2);
 #endif
+#ifdef SIGBREAK
+  SetNamedInt32(env, obj, "SIGBREAK", SIGBREAK);
+#endif
+#ifdef SIGPIPE
+  SetNamedInt32(env, obj, "SIGPIPE", SIGPIPE);
+#endif
+#ifdef SIGCHLD
+  SetNamedInt32(env, obj, "SIGCHLD", SIGCHLD);
+#endif
+#ifdef SIGSTKFLT
+  SetNamedInt32(env, obj, "SIGSTKFLT", SIGSTKFLT);
+#endif
+#ifdef SIGCONT
+  SetNamedInt32(env, obj, "SIGCONT", SIGCONT);
+#endif
+#ifdef SIGSTOP
+  SetNamedInt32(env, obj, "SIGSTOP", SIGSTOP);
+#endif
+#ifdef SIGTSTP
+  SetNamedInt32(env, obj, "SIGTSTP", SIGTSTP);
+#endif
+#ifdef SIGTTIN
+  SetNamedInt32(env, obj, "SIGTTIN", SIGTTIN);
+#endif
+#ifdef SIGTTOU
+  SetNamedInt32(env, obj, "SIGTTOU", SIGTTOU);
+#endif
+#ifdef SIGURG
+  SetNamedInt32(env, obj, "SIGURG", SIGURG);
+#endif
+#ifdef SIGXCPU
+  SetNamedInt32(env, obj, "SIGXCPU", SIGXCPU);
+#endif
+#ifdef SIGXFSZ
+  SetNamedInt32(env, obj, "SIGXFSZ", SIGXFSZ);
+#endif
+#ifdef SIGVTALRM
+  SetNamedInt32(env, obj, "SIGVTALRM", SIGVTALRM);
+#endif
+#ifdef SIGPROF
+  SetNamedInt32(env, obj, "SIGPROF", SIGPROF);
+#endif
+#ifdef SIGWINCH
+  SetNamedInt32(env, obj, "SIGWINCH", SIGWINCH);
+#endif
+#ifdef SIGIO
+  SetNamedInt32(env, obj, "SIGIO", SIGIO);
+#endif
+#ifdef SIGINFO
+  SetNamedInt32(env, obj, "SIGINFO", SIGINFO);
+#endif
+#ifdef SIGSYS
+  SetNamedInt32(env, obj, "SIGSYS", SIGSYS);
+#endif
   return obj;
 }
 

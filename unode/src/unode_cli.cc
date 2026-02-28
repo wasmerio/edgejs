@@ -109,6 +109,7 @@ int UnodeRunCli(int argc, const char* const* argv, std::string* error_out) {
     error_out->clear();
   }
   if (argv == nullptr || argc < 2) {
+    UnodeSetExecArgv({});
     UnodeSetScriptArgv({});
     if (error_out != nullptr) {
       *error_out = kUsage;
@@ -167,6 +168,14 @@ int UnodeRunCli(int argc, const char* const* argv, std::string* error_out) {
         script_argv.emplace_back(argv[i]);
       }
     }
+    std::vector<std::string> exec_argv;
+    exec_argv.reserve(static_cast<size_t>(mode_index));
+    for (int i = 1; i < mode_index; ++i) {
+      if (argv[i] == nullptr) continue;
+      const std::string token(argv[i]);
+      if (!token.empty() && token[0] == '-') exec_argv.push_back(token);
+    }
+    UnodeSetExecArgv(exec_argv);
     UnodeSetScriptArgv(script_argv);
     const std::string code = argv[mode_index + 1];
     std::string flags_line;
@@ -209,13 +218,38 @@ int UnodeRunCli(int argc, const char* const* argv, std::string* error_out) {
         error_out);
   }
 
+  int script_index = 1;
+  std::vector<std::string> exec_argv;
+  exec_argv.reserve(static_cast<size_t>(argc));
+  while (script_index < argc && argv[script_index] != nullptr) {
+    const std::string token(argv[script_index]);
+    if (token == "--") {
+      script_index++;
+      break;
+    }
+    if (!token.empty() && token[0] == '-') {
+      exec_argv.push_back(token);
+      script_index++;
+      continue;
+    }
+    break;
+  }
+  UnodeSetExecArgv(exec_argv);
+  if (script_index >= argc || argv[script_index] == nullptr) {
+    UnodeSetScriptArgv({});
+    if (error_out != nullptr) {
+      *error_out = kUsage;
+    }
+    return 1;
+  }
+
   std::vector<std::string> script_argv;
-  script_argv.reserve(static_cast<size_t>(argc - 2));
-  for (int i = 2; i < argc; ++i) {
+  script_argv.reserve(static_cast<size_t>(argc - (script_index + 1)));
+  for (int i = script_index + 1; i < argc; ++i) {
     if (argv[i] != nullptr) {
       script_argv.emplace_back(argv[i]);
     }
   }
   UnodeSetScriptArgv(script_argv);
-  return UnodeRunCliScript(argv[1], error_out);
+  return UnodeRunCliScript(argv[script_index], error_out);
 }

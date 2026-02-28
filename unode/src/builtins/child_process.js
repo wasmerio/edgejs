@@ -30,11 +30,17 @@ function registerProcess(pid, onSignal) {
   processTable.set(Number(pid), { alive: true, onSignal });
 }
 
+const __nativeKill = typeof process._kill === 'function' ? process._kill.bind(process) : null;
 process._kill = function unodeKill(pid, signal) {
   const rec = processTable.get(Number(pid));
-  if (!rec || !rec.alive) return -3; // ESRCH
-  if (signal !== 0 && typeof rec.onSignal === 'function') rec.onSignal(signal);
-  return 0;
+  if (rec && rec.alive) {
+    if (signal !== 0 && typeof rec.onSignal === 'function') rec.onSignal(signal);
+    return 0;
+  }
+  if (typeof __nativeKill === 'function') {
+    return __nativeKill(pid, signal);
+  }
+  return -3; // ESRCH
 };
 
 function makeTypeError(code, message) {

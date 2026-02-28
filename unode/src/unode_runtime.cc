@@ -12,6 +12,8 @@
 #include <thread>
 #include <vector>
 #include <arpa/inet.h>
+#include <cerrno>
+#include <csignal>
 
 #include <uv.h>
 
@@ -27,6 +29,7 @@
 #include "unode_module_loader.h"
 #include "unode_os.h"
 #include "unode_pipe_wrap.h"
+#include "unode_signal_wrap.h"
 #include "unode_runtime_platform.h"
 #include "unode_stream_wrap.h"
 #include "unode_process_wrap.h"
@@ -44,6 +47,7 @@ namespace {
 
 std::string g_unode_current_script_path;
 std::vector<std::string> g_unode_exec_argv;
+std::vector<std::string> g_unode_cli_exec_argv;
 std::string g_unode_process_title;
 std::vector<std::string> g_unode_script_argv;
 const auto g_process_start_time = std::chrono::steady_clock::now();
@@ -457,6 +461,41 @@ bool DispatchUncaughtException(napi_env env, napi_value exception, bool* handled
   return true;
 }
 
+napi_value UnodeProcessKillBinding(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_value self = nullptr;
+  napi_get_cb_info(env, info, &argc, argv, &self, nullptr);
+  (void)self;
+  int32_t pid = 0;
+  int32_t sig = SIGTERM;
+  if (argc >= 1 && argv[0] != nullptr) {
+    napi_get_value_int32(env, argv[0], &pid);
+  }
+  if (argc >= 2 && argv[1] != nullptr) {
+    napi_get_value_int32(env, argv[1], &sig);
+  }
+  int rc = 0;
+#if defined(_WIN32)
+  (void)pid;
+  (void)sig;
+  rc = -1;
+  const int err = UV_ENOSYS;
+#else
+  if (::kill(static_cast<pid_t>(pid), sig) != 0) {
+    rc = -1;
+  }
+  const int err = (rc == 0) ? 0 : errno;
+#endif
+  napi_value out = nullptr;
+  if (rc == 0) {
+    napi_create_int32(env, 0, &out);
+  } else {
+    napi_create_int32(env, -err, &out);
+  }
+  return out;
+}
+
 int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
   bool has_pending = false;
   if (napi_is_exception_pending(env, &has_pending) != napi_ok || !has_pending) {
@@ -742,6 +781,11 @@ std::string EscapeForSingleQuotedJs(const std::string& in) {
 
 void ParseNodeStyleFlagsFromSource(const char* source_text) {
   g_unode_exec_argv.clear();
+  for (const auto& arg : g_unode_cli_exec_argv) {
+    if (!arg.empty() && arg[0] == '-') {
+      g_unode_exec_argv.push_back(arg);
+    }
+  }
   g_unode_process_title.clear();
   if (source_text == nullptr) return;
   std::istringstream in{std::string(source_text)};
@@ -849,6 +893,8 @@ int RunScriptWithGlobals(napi_env env,
   UnodeInstallTtyWrapBinding(env);
   ClearPendingExceptionIfAny(env);
   UnodeInstallPipeWrapBinding(env);
+  ClearPendingExceptionIfAny(env);
+  UnodeInstallSignalWrapBinding(env);
   ClearPendingExceptionIfAny(env);
   UnodeInstallCaresWrapBinding(env);
   ClearPendingExceptionIfAny(env);
@@ -1364,6 +1410,16 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  napi_value process_kill_fn = nullptr;
+  if (napi_create_function(env,
+                           "__unode_process_kill",
+                           NAPI_AUTO_LENGTH,
+                           UnodeProcessKillBinding,
+                           nullptr,
+                           &process_kill_fn) == napi_ok &&
+      process_kill_fn != nullptr) {
+    napi_set_named_property(env, global, "__unode_process_kill", process_kill_fn);
+  }
   napi_value primordials_container = nullptr;
   if (napi_create_object(env, &primordials_container) != napi_ok || primordials_container == nullptr) {
     if (error_out != nullptr) {
@@ -1649,6 +1705,41 @@ int RunScriptWithGlobals(napi_env env,
       "      delete globalThis.process.listenerCount;"
       "    }"
       "  } catch (_) {}"
+      "  try {"
+      "    if (!globalThis.process.__unode_signal_listener_hooks_installed) {"
+      "      var __uSignalHooks0 = require('internal/process/signal');"
+      "      if (__uSignalHooks0 && typeof __uSignalHooks0.startListeningIfSignal === 'function') {"
+      "        process.on('newListener', __uSignalHooks0.startListeningIfSignal);"
+      "      }"
+      "      if (__uSignalHooks0 && typeof __uSignalHooks0.stopListeningIfSignal === 'function') {"
+      "        process.on('removeListener', __uSignalHooks0.stopListeningIfSignal);"
+      "      }"
+      "      globalThis.process.__unode_signal_listener_hooks_installed = true;"
+      "    }"
+      "  } catch (_) {}"
+      "  try {"
+      "    var __reportMod = require('internal/process/report');"
+      "    if (__reportMod && __reportMod.report) {"
+      "      Object.defineProperty(globalThis.process, 'report', {"
+      "        value: __reportMod.report,"
+      "        writable: true,"
+      "        enumerable: true,"
+      "        configurable: true"
+      "      });"
+      "      if (typeof __reportMod.addSignalHandler === 'function') {"
+      "        __reportMod.addSignalHandler();"
+      "        try {"
+      "          if (__reportMod.report && __reportMod.report.reportOnSignal === true) {"
+      "            var __sigMod = require('internal/process/signal');"
+      "            if (__sigMod && typeof __sigMod.startListeningIfSignal === 'function') {"
+      "              var __sigName = (typeof __reportMod.report.signal === 'string') ? __reportMod.report.signal : 'SIGUSR2';"
+      "              __sigMod.startListeningIfSignal(__sigName);"
+      "            }"
+      "          }"
+      "        } catch (_) {}"
+      "      }"
+      "    }"
+      "  } catch (_) {}"
       "  if (typeof globalThis.process.ref !== 'function') {"
       "    globalThis.process.ref = function(obj) {"
       "      if (!obj) return;"
@@ -1726,8 +1817,37 @@ int RunScriptWithGlobals(napi_env env,
       "      }"
       "    });"
       "  }"
-      "  globalThis.process._kill = function() { return 0; };"
-      "    var __signalMap = { SIGHUP: 1, SIGINT: 2, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGTERM: 15, SIGWINCH: 28 };"
+      "  globalThis.process._kill = function(pid, sig) {"
+      "    var __pidNum = Number(pid);"
+      "    var __sigNum = Number(sig);"
+      "    if (__pidNum === Number(globalThis.process.pid) && __sigNum !== 0 &&"
+      "        typeof globalThis.process.emit === 'function' &&"
+      "        typeof globalThis.process.listenerCount === 'function') {"
+      "      var __signals = (require('os').constants && require('os').constants.signals) || {};"
+      "      var __sigName = null;"
+      "      var __sigKeys = Object.keys(__signals);"
+      "      for (var __si = 0; __si < __sigKeys.length; __si++) {"
+      "        var __name = __sigKeys[__si];"
+      "        if (__signals[__name] === __sigNum) { __sigName = __name; break; }"
+      "      }"
+      "      var __reportSignalShortcut = false;"
+      "      try {"
+      "        __reportSignalShortcut = !!(globalThis.process.report &&"
+      "          globalThis.process.report.reportOnSignal === true &&"
+      "          typeof globalThis.process.report.signal === 'string' &&"
+      "          __sigName === globalThis.process.report.signal);"
+      "      } catch (_) {}"
+      "      if (__sigName && __reportSignalShortcut && globalThis.process.listenerCount(__sigName) > 0) {"
+        "        globalThis.queueMicrotask(function(){ globalThis.process.emit(__sigName, __sigName); });"
+        "        return 0;"
+      "      }"
+      "    }"
+      "    if (typeof globalThis.__unode_process_kill === 'function') {"
+      "      return globalThis.__unode_process_kill(__pidNum, __sigNum);"
+      "    }"
+      "    return 0;"
+      "  };"
+      "    var __signalMap = ((require('os').constants && require('os').constants.signals) || {});"
       "    var __pidErr = function(v) {"
       "      var tail = '';"
       "      if (v === null || v === undefined) tail = ' Received ' + String(v);"
@@ -1762,7 +1882,7 @@ int RunScriptWithGlobals(napi_env env,
       "          sig = signal;"
       "        }"
       "      }"
-      "      if (nPid === globalThis.process.pid && (signal === 'SIGWINCH' || sig === 28)) {"
+      "      if (nPid === globalThis.process.pid && (signal === 'SIGWINCH' || sig === __signalMap.SIGWINCH)) {"
       "        try {"
       "          if (globalThis.process.stdout && typeof globalThis.process.stdout._refreshSize === 'function') {"
       "            globalThis.process.stdout._refreshSize();"
@@ -1940,7 +2060,7 @@ int RunScriptWithGlobals(napi_env env,
       "      if (typeof globalThis.internalBinding === 'function') {"
       "        var __allow = {"
       "          buffer: 1, cares_wrap: 1, constants: 1, contextify: 1, fs: 1, fs_event_wrap: 1,"
-      "          icu: 1, inspector: 1, js_stream: 1, natives: 1, os: 1, pipe_wrap: 1, process_wrap: 1, spawn_sync: 1,"
+      "          icu: 1, inspector: 1, js_stream: 1, natives: 1, os: 1, pipe_wrap: 1, process_wrap: 1, signal_wrap: 1, spawn_sync: 1,"
       "          stream_wrap: 1, tcp_wrap: 1, tls_wrap: 1, tty_wrap: 1, udp_wrap: 1, util: 1, uv: 1, zlib: 1"
       "        };"
       "        var out = globalThis.internalBinding(name);"
@@ -2105,7 +2225,29 @@ int RunScriptWithGlobals(napi_env env,
     entry_source =
         "(function(){ try { var __entry = require('path').resolve('" +
         EscapeForSingleQuotedJs(entry_script_path) +
-        "'); return require(__entry); } catch (err) {"
+        "');"
+        "if (process && typeof process.on === 'function' && !process.__unode_signal_listener_hooks_installed) {"
+        "  try {"
+        "    try { require('events'); } catch (_) {}"
+        "    var __uSignalHooks = require('internal/process/signal');"
+        "    var __beforeSigNl = (typeof process.listenerCount === 'function') ? process.listenerCount('newListener') : 0;"
+        "    if (__uSignalHooks && typeof __uSignalHooks.startListeningIfSignal === 'function') {"
+        "      process.on('newListener', __uSignalHooks.startListeningIfSignal);"
+        "    }"
+        "    if (__uSignalHooks && typeof __uSignalHooks.stopListeningIfSignal === 'function') {"
+        "      process.on('removeListener', __uSignalHooks.stopListeningIfSignal);"
+        "    }"
+        "    if (__uSignalHooks && typeof __uSignalHooks.startListeningIfSignal === 'function' && typeof process.eventNames === 'function') {"
+        "      var __existingSignalEvents = process.eventNames();"
+        "      for (var __sei = 0; __sei < __existingSignalEvents.length; __sei++) {"
+        "        try { __uSignalHooks.startListeningIfSignal(__existingSignalEvents[__sei]); } catch (_) {}"
+        "      }"
+        "    }"
+        "    var __afterSigNl = (typeof process.listenerCount === 'function') ? process.listenerCount('newListener') : 0;"
+        "    process.__unode_signal_listener_hooks_installed = __afterSigNl > __beforeSigNl;"
+      "  } catch (_) {}"
+        "}"
+        "return require(__entry); } catch (err) {"
         "var p = globalThis.process;"
         "var handled = false;"
         "try { if (p && typeof p.emit === 'function') p.emit('uncaughtExceptionMonitor', err, 'uncaughtException'); } catch (monitorErr) { throw monitorErr; }"
@@ -2327,4 +2469,8 @@ int UnodeRunScriptFile(napi_env env, const char* script_path, std::string* error
 
 void UnodeSetScriptArgv(const std::vector<std::string>& script_argv) {
   g_unode_script_argv = script_argv;
+}
+
+void UnodeSetExecArgv(const std::vector<std::string>& exec_argv) {
+  g_unode_cli_exec_argv = exec_argv;
 }

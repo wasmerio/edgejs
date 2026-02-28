@@ -430,6 +430,30 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
     }
     return util_binding;
   }
+  if (name == "process_methods") {
+    napi_value global = nullptr;
+    if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
+      return undefined;
+    }
+    napi_value binding = nullptr;
+    if (napi_get_named_property(env, global, "__unode_process_methods_binding", &binding) != napi_ok ||
+        binding == nullptr) {
+      return undefined;
+    }
+    return binding;
+  }
+  if (name == "report") {
+    napi_value global = nullptr;
+    if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
+      return undefined;
+    }
+    napi_value binding = nullptr;
+    if (napi_get_named_property(env, global, "__unode_report_binding", &binding) != napi_ok ||
+        binding == nullptr) {
+      return undefined;
+    }
+    return binding;
+  }
   return undefined;
 }
 

@@ -3,9 +3,13 @@
 #include <chrono>
 #include <cstring>
 #include <cmath>
+#include <ctime>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -17,9 +21,11 @@
 extern char** _environ;
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
+#include <signal.h>
 #include <unistd.h>
 extern char** environ;
 #else
+#include <signal.h>
 #include <unistd.h>
 extern char** environ;
 #endif
@@ -30,6 +36,28 @@ const auto g_process_start_time = std::chrono::steady_clock::now();
 const auto g_cpu_usage_start = std::chrono::steady_clock::now();
 std::string g_unode_exec_path;
 uint32_t g_process_umask = 0022;
+
+struct ProcessMethodsBindingState {
+  napi_ref binding_ref = nullptr;
+  napi_ref hrtime_buffer_ref = nullptr;
+};
+
+struct ReportBindingState {
+  napi_ref binding_ref = nullptr;
+  bool compact = false;
+  bool exclude_network = false;
+  bool exclude_env = false;
+  bool report_on_fatal_error = false;
+  bool report_on_signal = false;
+  bool report_on_uncaught_exception = false;
+  std::string directory = ".";
+  std::string filename;
+  std::string signal = "SIGUSR2";
+  uint64_t sequence = 0;
+};
+
+std::map<napi_env, ProcessMethodsBindingState> g_process_methods_states;
+std::map<napi_env, ReportBindingState> g_report_states;
 
 std::string MaybePreferSiblingUnodeBinary(const std::string& detected_exec_path) {
   if (detected_exec_path.empty()) return detected_exec_path;
@@ -206,6 +234,469 @@ std::string NapiValueToUtf8(napi_env env, napi_value value) {
   if (napi_get_value_string_utf8(env, string_value, out.data(), out.size(), &copied) != napi_ok) return "";
   out.resize(copied);
   return out;
+}
+
+ProcessMethodsBindingState* GetProcessMethodsState(napi_env env) {
+  auto it = g_process_methods_states.find(env);
+  if (it == g_process_methods_states.end()) return nullptr;
+  return &it->second;
+}
+
+ReportBindingState* GetReportState(napi_env env) {
+  auto it = g_report_states.find(env);
+  if (it == g_report_states.end()) return nullptr;
+  return &it->second;
+}
+
+bool SetNamedString(napi_env env, napi_value obj, const char* name, const std::string& value) {
+  napi_value v = nullptr;
+  if (napi_create_string_utf8(env, value.c_str(), NAPI_AUTO_LENGTH, &v) != napi_ok || v == nullptr) return false;
+  return napi_set_named_property(env, obj, name, v) == napi_ok;
+}
+
+bool SetNamedDouble(napi_env env, napi_value obj, const char* name, double value) {
+  napi_value v = nullptr;
+  if (napi_create_double(env, value, &v) != napi_ok || v == nullptr) return false;
+  return napi_set_named_property(env, obj, name, v) == napi_ok;
+}
+
+bool SetNamedInt32(napi_env env, napi_value obj, const char* name, int32_t value) {
+  napi_value v = nullptr;
+  if (napi_create_int32(env, value, &v) != napi_ok || v == nullptr) return false;
+  return napi_set_named_property(env, obj, name, v) == napi_ok;
+}
+
+bool SetNamedBool(napi_env env, napi_value obj, const char* name, bool value) {
+  napi_value v = nullptr;
+  if (napi_get_boolean(env, value, &v) != napi_ok || v == nullptr) return false;
+  return napi_set_named_property(env, obj, name, v) == napi_ok;
+}
+
+bool SetNamedValue(napi_env env, napi_value obj, const char* name, napi_value value) {
+  if (value == nullptr) return false;
+  return napi_set_named_property(env, obj, name, value) == napi_ok;
+}
+
+bool IsValidMacAddress(const std::string& mac);
+
+bool ValueToInt32(napi_env env, napi_value value, int32_t* out) {
+  if (out == nullptr || value == nullptr) return false;
+  return napi_get_value_int32(env, value, out) == napi_ok;
+}
+
+bool ValueToBool(napi_env env, napi_value value, bool* out) {
+  if (out == nullptr || value == nullptr) return false;
+  return napi_get_value_bool(env, value, out) == napi_ok;
+}
+
+napi_value RequireBuiltin(napi_env env, const char* id) {
+  napi_value global = nullptr;
+  napi_value require_fn = nullptr;
+  napi_value id_value = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "require", &require_fn) != napi_ok ||
+      require_fn == nullptr ||
+      napi_create_string_utf8(env, id, NAPI_AUTO_LENGTH, &id_value) != napi_ok ||
+      id_value == nullptr) {
+    return nullptr;
+  }
+  napi_valuetype t = napi_undefined;
+  if (napi_typeof(env, require_fn, &t) != napi_ok || t != napi_function) return nullptr;
+  napi_value argv[1] = {id_value};
+  napi_value out = nullptr;
+  if (napi_call_function(env, global, require_fn, 1, argv, &out) != napi_ok) return nullptr;
+  return out;
+}
+
+napi_value MakeReportUserLimits(napi_env env) {
+  napi_value limits = nullptr;
+  if (napi_create_object(env, &limits) != napi_ok || limits == nullptr) return nullptr;
+  const char* keys[] = {
+      "core_file_size_blocks",
+      "data_seg_size_bytes",
+      "file_size_blocks",
+      "max_locked_memory_bytes",
+      "max_memory_size_bytes",
+      "open_files",
+      "stack_size_bytes",
+      "cpu_time_seconds",
+      "max_user_processes",
+      "virtual_memory_bytes",
+  };
+  for (const char* key : keys) {
+    napi_value entry = nullptr;
+    napi_value unlimited = nullptr;
+    if (napi_create_object(env, &entry) != napi_ok || entry == nullptr ||
+        napi_create_string_utf8(env, "unlimited", NAPI_AUTO_LENGTH, &unlimited) != napi_ok ||
+        unlimited == nullptr) {
+      return nullptr;
+    }
+    if (napi_set_named_property(env, entry, "soft", unlimited) != napi_ok ||
+        napi_set_named_property(env, entry, "hard", unlimited) != napi_ok ||
+        napi_set_named_property(env, limits, key, entry) != napi_ok) {
+      return nullptr;
+    }
+  }
+  return limits;
+}
+
+napi_value BuildReportObject(napi_env env,
+                             const std::string& event_message,
+                             const std::string& trigger,
+                             const std::string& report_filename) {
+  napi_value report = nullptr;
+  if (napi_create_object(env, &report) != napi_ok || report == nullptr) return nullptr;
+
+  napi_value process_obj = nullptr;
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "process", &process_obj) != napi_ok ||
+      process_obj == nullptr) {
+    return nullptr;
+  }
+
+  napi_value os = RequireBuiltin(env, "os");
+  if (os == nullptr) return nullptr;
+
+  napi_value header = nullptr;
+  if (napi_create_object(env, &header) != napi_ok || header == nullptr) return nullptr;
+  SetNamedString(env, header, "event", event_message);
+  SetNamedString(env, header, "trigger", trigger);
+  if (!report_filename.empty()) {
+    SetNamedString(env, header, "filename", report_filename);
+  } else {
+    napi_value null_value = nullptr;
+    napi_get_null(env, &null_value);
+    SetNamedValue(env, header, "filename", null_value);
+  }
+
+  const std::time_t now = std::time(nullptr);
+  std::tm local_tm{};
+#if defined(_WIN32)
+  localtime_s(&local_tm, &now);
+#else
+  localtime_r(&now, &local_tm);
+#endif
+  char time_buf[64] = {'\0'};
+  std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%dT%H:%M:%S%z", &local_tm);
+  SetNamedString(env, header, "dumpEventTime", time_buf);
+  SetNamedDouble(env, header, "dumpEventTimeStamp", static_cast<double>(now) * 1000.0);
+  SetNamedInt32(env, header, "processId", static_cast<int32_t>(uv_os_getpid()));
+  SetNamedInt32(env, header, "threadId", static_cast<int32_t>(uv_os_getpid()));
+
+  napi_value argv = nullptr;
+  if (napi_get_named_property(env, process_obj, "argv", &argv) == napi_ok && argv != nullptr) {
+    SetNamedValue(env, header, "commandLine", argv);
+  }
+  napi_value node_version = nullptr;
+  if (napi_get_named_property(env, process_obj, "version", &node_version) == napi_ok && node_version != nullptr) {
+    SetNamedValue(env, header, "nodejsVersion", node_version);
+  }
+  SetNamedInt32(env, header, "wordSize", static_cast<int32_t>(sizeof(void*) * 8));
+  napi_value arch = nullptr;
+  if (napi_get_named_property(env, process_obj, "arch", &arch) == napi_ok && arch != nullptr) {
+    SetNamedValue(env, header, "arch", arch);
+  }
+  napi_value platform = nullptr;
+  if (napi_get_named_property(env, process_obj, "platform", &platform) == napi_ok && platform != nullptr) {
+    SetNamedValue(env, header, "platform", platform);
+  }
+  napi_value versions = nullptr;
+  if (napi_get_named_property(env, process_obj, "versions", &versions) == napi_ok && versions != nullptr) {
+    SetNamedValue(env, header, "componentVersions", versions);
+  }
+  napi_value release = nullptr;
+  if (napi_get_named_property(env, process_obj, "release", &release) == napi_ok && release != nullptr) {
+    SetNamedValue(env, header, "release", release);
+  }
+
+  auto setHeaderFromOs = [&](const char* fn_name, const char* field) {
+    napi_value fn = nullptr;
+    if (napi_get_named_property(env, os, fn_name, &fn) != napi_ok || fn == nullptr) return;
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, fn, &type) != napi_ok || type != napi_function) return;
+    napi_value result = nullptr;
+    if (napi_call_function(env, os, fn, 0, nullptr, &result) != napi_ok || result == nullptr) return;
+    SetNamedValue(env, header, field, result);
+  };
+  setHeaderFromOs("type", "osName");
+  setHeaderFromOs("release", "osRelease");
+  setHeaderFromOs("version", "osVersion");
+  setHeaderFromOs("machine", "osMachine");
+  setHeaderFromOs("hostname", "host");
+
+  napi_value cwd_fn = nullptr;
+  if (napi_get_named_property(env, process_obj, "cwd", &cwd_fn) == napi_ok && cwd_fn != nullptr) {
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, cwd_fn, &type) == napi_ok && type == napi_function) {
+      napi_value cwd_result = nullptr;
+      if (napi_call_function(env, process_obj, cwd_fn, 0, nullptr, &cwd_result) == napi_ok &&
+          cwd_result != nullptr) {
+        SetNamedValue(env, header, "cwd", cwd_result);
+      }
+    }
+  }
+
+  napi_value cpus_fn = nullptr;
+  if (napi_get_named_property(env, os, "cpus", &cpus_fn) == napi_ok && cpus_fn != nullptr) {
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, cpus_fn, &type) == napi_ok && type == napi_function) {
+      napi_value cpus = nullptr;
+      if (napi_call_function(env, os, cpus_fn, 0, nullptr, &cpus) == napi_ok && cpus != nullptr) {
+        bool is_arr = false;
+        if (napi_is_array(env, cpus, &is_arr) == napi_ok && is_arr) {
+          napi_value normalized_cpus = nullptr;
+          if (napi_create_array(env, &normalized_cpus) == napi_ok && normalized_cpus != nullptr) {
+            uint32_t cpu_count = 0;
+            napi_get_array_length(env, cpus, &cpu_count);
+            for (uint32_t i = 0; i < cpu_count; ++i) {
+              napi_value cpu = nullptr;
+              if (napi_get_element(env, cpus, i, &cpu) != napi_ok || cpu == nullptr) continue;
+              napi_value out_cpu = nullptr;
+              if (napi_create_object(env, &out_cpu) != napi_ok || out_cpu == nullptr) continue;
+              const char* scalar_fields[] = {"model", "speed"};
+              for (const char* field : scalar_fields) {
+                napi_value field_v = nullptr;
+                if (napi_get_named_property(env, cpu, field, &field_v) == napi_ok && field_v != nullptr) {
+                  SetNamedValue(env, out_cpu, field, field_v);
+                }
+              }
+              napi_value times = nullptr;
+              if (napi_get_named_property(env, cpu, "times", &times) == napi_ok && times != nullptr) {
+                const char* time_in_fields[] = {"user", "nice", "sys", "idle", "irq"};
+                for (const char* field : time_in_fields) {
+                  napi_value tv = nullptr;
+                  if (napi_get_named_property(env, times, field, &tv) == napi_ok && tv != nullptr) {
+                    SetNamedValue(env, out_cpu, field, tv);
+                  }
+                }
+              }
+              napi_set_element(env, normalized_cpus, i, out_cpu);
+            }
+            SetNamedValue(env, header, "cpus", normalized_cpus);
+          }
+        } else {
+          SetNamedValue(env, header, "cpus", cpus);
+        }
+      }
+    }
+  }
+
+  napi_value net_fn = nullptr;
+  if (napi_get_named_property(env, os, "networkInterfaces", &net_fn) == napi_ok && net_fn != nullptr) {
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, net_fn, &type) == napi_ok && type == napi_function) {
+      napi_value net_obj = nullptr;
+      if (napi_call_function(env, os, net_fn, 0, nullptr, &net_obj) == napi_ok && net_obj != nullptr) {
+        napi_value network_interfaces = nullptr;
+        if (napi_create_array(env, &network_interfaces) == napi_ok && network_interfaces != nullptr) {
+          uint32_t out_idx = 0;
+          napi_value iface_names = nullptr;
+          if (napi_get_property_names(env, net_obj, &iface_names) == napi_ok && iface_names != nullptr) {
+            uint32_t iface_count = 0;
+            napi_get_array_length(env, iface_names, &iface_count);
+            for (uint32_t i = 0; i < iface_count; ++i) {
+              napi_value iface_name_v = nullptr;
+              if (napi_get_element(env, iface_names, i, &iface_name_v) != napi_ok || iface_name_v == nullptr) continue;
+              const std::string iface_name = NapiValueToUtf8(env, iface_name_v);
+              napi_value iface_arr = nullptr;
+              if (napi_get_property(env, net_obj, iface_name_v, &iface_arr) != napi_ok || iface_arr == nullptr) continue;
+              bool is_arr = false;
+              if (napi_is_array(env, iface_arr, &is_arr) != napi_ok || !is_arr) continue;
+              uint32_t addr_count = 0;
+              napi_get_array_length(env, iface_arr, &addr_count);
+              for (uint32_t j = 0; j < addr_count; ++j) {
+                napi_value entry = nullptr;
+                if (napi_get_element(env, iface_arr, j, &entry) != napi_ok || entry == nullptr) continue;
+                napi_value out_entry = nullptr;
+                if (napi_create_object(env, &out_entry) != napi_ok || out_entry == nullptr) continue;
+                SetNamedString(env, out_entry, "name", iface_name);
+                const char* copied[] = {"address", "netmask", "family", "mac", "internal", "scopeid"};
+                for (const char* key : copied) {
+                  napi_value key_v = nullptr;
+                  if (napi_create_string_utf8(env, key, NAPI_AUTO_LENGTH, &key_v) != napi_ok || key_v == nullptr) continue;
+                  napi_value val = nullptr;
+                  if (napi_get_property(env, entry, key_v, &val) == napi_ok && val != nullptr) {
+                    napi_valuetype t = napi_undefined;
+                    if (napi_typeof(env, val, &t) == napi_ok && t != napi_undefined) {
+                      if (std::strcmp(key, "mac") == 0) {
+                        const std::string mac = NapiValueToUtf8(env, val);
+                        const std::string normalized = IsValidMacAddress(mac) ? mac : "00:00:00:00:00:00";
+                        SetNamedString(env, out_entry, "mac", normalized);
+                      } else {
+                        SetNamedValue(env, out_entry, key, val);
+                      }
+                    }
+                  }
+                }
+                napi_set_element(env, network_interfaces, out_idx++, out_entry);
+              }
+            }
+          }
+          SetNamedValue(env, header, "networkInterfaces", network_interfaces);
+        }
+      }
+    }
+  }
+
+  SetNamedString(env, header, "glibcVersionRuntime", "");
+  SetNamedString(env, header, "glibcVersionCompiler", "");
+  SetNamedInt32(env, header, "reportVersion", 5);
+  SetNamedValue(env, report, "header", header);
+
+  napi_value native_stack = nullptr;
+  napi_create_array_with_length(env, 1, &native_stack);
+  napi_value frame = nullptr;
+  napi_create_object(env, &frame);
+  SetNamedString(env, frame, "pc", "0x0");
+  SetNamedString(env, frame, "symbol", "unode::report");
+  napi_set_element(env, native_stack, 0, frame);
+  SetNamedValue(env, report, "nativeStack", native_stack);
+
+  napi_value js_stack = nullptr;
+  napi_create_object(env, &js_stack);
+  SetNamedString(env, js_stack, "message", event_message);
+  napi_value js_frames = nullptr;
+  napi_create_array(env, &js_frames);
+  SetNamedValue(env, js_stack, "stack", js_frames);
+  napi_value error_props = nullptr;
+  napi_create_object(env, &error_props);
+  SetNamedValue(env, js_stack, "errorProperties", error_props);
+  SetNamedValue(env, report, "javascriptStack", js_stack);
+
+  napi_value libuv = nullptr;
+  napi_create_array_with_length(env, 2, &libuv);
+  napi_value loop_entry = nullptr;
+  napi_create_object(env, &loop_entry);
+  SetNamedString(env, loop_entry, "type", "loop");
+  SetNamedString(env, loop_entry, "address", "0x1");
+  SetNamedBool(env, loop_entry, "is_active", true);
+  napi_set_element(env, libuv, 0, loop_entry);
+  napi_value timer_entry = nullptr;
+  napi_create_object(env, &timer_entry);
+  SetNamedString(env, timer_entry, "type", "timer");
+  SetNamedString(env, timer_entry, "address", "0x2");
+  SetNamedBool(env, timer_entry, "is_active", false);
+  SetNamedBool(env, timer_entry, "is_referenced", false);
+  napi_set_element(env, libuv, 1, timer_entry);
+  SetNamedValue(env, report, "libuv", libuv);
+
+  napi_value shared_objects = nullptr;
+  napi_create_array(env, &shared_objects);
+  SetNamedValue(env, report, "sharedObjects", shared_objects);
+
+  napi_value usage = nullptr;
+  napi_create_object(env, &usage);
+  SetNamedDouble(env, usage, "userCpuSeconds", 0.0);
+  SetNamedDouble(env, usage, "kernelCpuSeconds", 0.0);
+  SetNamedDouble(env, usage, "cpuConsumptionPercent", 0.0);
+  SetNamedDouble(env, usage, "userCpuConsumptionPercent", 0.0);
+  SetNamedDouble(env, usage, "kernelCpuConsumptionPercent", 0.0);
+  SetNamedString(env, usage, "maxRss", "0");
+  SetNamedString(env, usage, "rss", "0");
+  SetNamedString(env, usage, "free_memory", "0");
+  SetNamedString(env, usage, "total_memory", "0");
+  SetNamedString(env, usage, "available_memory", "0");
+  napi_value page_faults = nullptr;
+  napi_create_object(env, &page_faults);
+  SetNamedInt32(env, page_faults, "IORequired", 0);
+  SetNamedInt32(env, page_faults, "IONotRequired", 0);
+  SetNamedValue(env, usage, "pageFaults", page_faults);
+  napi_value fs_activity = nullptr;
+  napi_create_object(env, &fs_activity);
+  SetNamedInt32(env, fs_activity, "reads", 0);
+  SetNamedInt32(env, fs_activity, "writes", 0);
+  SetNamedValue(env, usage, "fsActivity", fs_activity);
+  SetNamedValue(env, report, "resourceUsage", usage);
+
+  napi_value workers = nullptr;
+  napi_create_array(env, &workers);
+  SetNamedValue(env, report, "workers", workers);
+
+  ReportBindingState* state = GetReportState(env);
+  if (state == nullptr || !state->exclude_env) {
+    napi_value env_obj = nullptr;
+    if (napi_get_named_property(env, process_obj, "env", &env_obj) == napi_ok && env_obj != nullptr) {
+      SetNamedValue(env, report, "environmentVariables", env_obj);
+    }
+  }
+
+  napi_value user_limits = MakeReportUserLimits(env);
+  if (user_limits != nullptr) {
+    SetNamedValue(env, report, "userLimits", user_limits);
+  }
+
+  napi_value js_heap = nullptr;
+  napi_create_object(env, &js_heap);
+  const char* heap_int_fields[] = {
+      "totalMemory", "executableMemory", "totalCommittedMemory", "availableMemory",
+      "totalGlobalHandlesMemory", "usedGlobalHandlesMemory", "usedMemory",
+      "memoryLimit", "mallocedMemory", "externalMemory", "peakMallocedMemory",
+      "nativeContextCount", "detachedContextCount", "doesZapGarbage",
+  };
+  for (const char* field : heap_int_fields) {
+    SetNamedInt32(env, js_heap, field, 0);
+  }
+  napi_value heap_spaces = nullptr;
+  napi_create_object(env, &heap_spaces);
+  napi_value space = nullptr;
+  napi_create_object(env, &space);
+  const char* heap_space_fields[] = {"memorySize", "committedMemory", "capacity", "used", "available"};
+  for (const char* field : heap_space_fields) SetNamedInt32(env, space, field, 0);
+  SetNamedValue(env, heap_spaces, "new_space", space);
+  SetNamedValue(env, js_heap, "heapSpaces", heap_spaces);
+  SetNamedValue(env, report, "javascriptHeap", js_heap);
+
+  return report;
+}
+
+std::string BuildDefaultReportFilename() {
+  const auto now_tp = std::chrono::system_clock::now();
+  const auto now = std::chrono::system_clock::to_time_t(now_tp);
+  std::tm local_tm{};
+#if defined(_WIN32)
+  localtime_s(&local_tm, &now);
+#else
+  localtime_r(&now, &local_tm);
+#endif
+  char date_buf[16] = {'\0'};
+  char time_buf[16] = {'\0'};
+  std::strftime(date_buf, sizeof(date_buf), "%Y%m%d", &local_tm);
+  std::strftime(time_buf, sizeof(time_buf), "%H%M%S", &local_tm);
+  std::ostringstream oss;
+  oss << "report." << date_buf << "." << time_buf << "." << uv_os_getpid() << "."
+      << uv_os_getpid() << ".";
+  return oss.str();
+}
+
+std::string JoinPath(const std::string& dir, const std::string& file) {
+  namespace fs = std::filesystem;
+  fs::path p = fs::path(dir) / fs::path(file);
+  return p.lexically_normal().string();
+}
+
+bool HasExecArgvFlag(const std::vector<std::string>& exec_argv, const char* flag) {
+  for (const auto& arg : exec_argv) {
+    if (arg == flag) return true;
+  }
+  return false;
+}
+
+bool IsValidMacAddress(const std::string& mac) {
+  if (mac.size() != 17) return false;
+  for (size_t i = 0; i < mac.size(); ++i) {
+    if ((i + 1) % 3 == 0) {
+      if (mac[i] != ':') return false;
+      continue;
+    }
+    const char ch = mac[i];
+    const bool hex_digit =
+        (ch >= '0' && ch <= '9') ||
+        (ch >= 'a' && ch <= 'f') ||
+        (ch >= 'A' && ch <= 'F');
+    if (!hex_digit) return false;
+  }
+  return true;
 }
 
 void CopyProcessEnvironmentToObject(napi_env env, napi_value env_obj) {
@@ -657,6 +1148,525 @@ napi_value ProcessAbortCallback(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
+napi_value ProcessMethodsCauseSegfaultCallback(napi_env env, napi_callback_info info) {
+#if defined(_WIN32)
+  std::abort();
+#else
+  raise(SIGSEGV);
+  std::abort();
+#endif
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsKillCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || argv[0] == nullptr) return nullptr;
+  int32_t pid = 0;
+  if (!ValueToInt32(env, argv[0], &pid)) return nullptr;
+  int32_t signal = 0;
+  if (argc >= 2 && argv[1] != nullptr) ValueToInt32(env, argv[1], &signal);
+  int rc = uv_kill(pid, signal);
+  napi_value out = nullptr;
+  napi_create_int32(env, rc, &out);
+  return out;
+}
+
+napi_value ProcessMethodsRawDebugCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 8;
+  napi_value argv[8] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  std::ostringstream oss;
+  for (size_t i = 0; i < argc; ++i) {
+    if (i > 0) oss << " ";
+    oss << NapiValueToUtf8(env, argv[i]);
+  }
+  std::cerr << oss.str() << std::endl;
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsNoopUndefinedCallback(napi_env env, napi_callback_info info) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsEmptyArrayCallback(napi_env env, napi_callback_info info) {
+  napi_value out = nullptr;
+  napi_create_array(env, &out);
+  return out;
+}
+
+napi_value ProcessMethodsRssCallback(napi_env env, napi_callback_info info) {
+  size_t rss = 0;
+  uv_resident_set_memory(&rss);
+  napi_value out = nullptr;
+  napi_create_double(env, static_cast<double>(rss), &out);
+  return out;
+}
+
+napi_value ProcessMethodsCpuUsageBufferCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || argv[0] == nullptr) return nullptr;
+  bool is_typedarray = false;
+  napi_is_typedarray(env, argv[0], &is_typedarray);
+  if (!is_typedarray) return nullptr;
+  napi_typedarray_type ta_type;
+  size_t length = 0;
+  void* data = nullptr;
+  napi_value arraybuffer = nullptr;
+  size_t byte_offset = 0;
+  if (napi_get_typedarray_info(env, argv[0], &ta_type, &length, &data, &arraybuffer, &byte_offset) != napi_ok ||
+      data == nullptr) {
+    return nullptr;
+  }
+  if (ta_type != napi_float64_array || length < 2) return nullptr;
+  double* values = static_cast<double*>(data);
+  const auto now = std::chrono::steady_clock::now();
+  const uint64_t micros =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - g_cpu_usage_start).count());
+  values[0] = static_cast<double>(micros * 7 / 10);
+  values[1] = static_cast<double>(micros * 3 / 10);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsThreadCpuUsageBufferCallback(napi_env env, napi_callback_info info) {
+  return ProcessMethodsCpuUsageBufferCallback(env, info);
+}
+
+napi_value ProcessMethodsMemoryUsageBufferCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || argv[0] == nullptr) return nullptr;
+  bool is_typedarray = false;
+  napi_is_typedarray(env, argv[0], &is_typedarray);
+  if (!is_typedarray) return nullptr;
+  napi_typedarray_type ta_type;
+  size_t length = 0;
+  void* data = nullptr;
+  napi_value arraybuffer = nullptr;
+  size_t byte_offset = 0;
+  if (napi_get_typedarray_info(env, argv[0], &ta_type, &length, &data, &arraybuffer, &byte_offset) != napi_ok ||
+      data == nullptr) {
+    return nullptr;
+  }
+  if (ta_type != napi_float64_array || length < 5) return nullptr;
+  double* values = static_cast<double*>(data);
+  size_t rss = 0;
+  uv_resident_set_memory(&rss);
+  values[0] = static_cast<double>(rss);
+  values[1] = 16.0 * 1024.0 * 1024.0;
+  values[2] = 8.0 * 1024.0 * 1024.0;
+  values[3] = 0.0;
+  values[4] = 0.0;
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsResourceUsageBufferCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || argv[0] == nullptr) return nullptr;
+  bool is_typedarray = false;
+  napi_is_typedarray(env, argv[0], &is_typedarray);
+  if (!is_typedarray) return nullptr;
+  napi_typedarray_type ta_type;
+  size_t length = 0;
+  void* data = nullptr;
+  napi_value arraybuffer = nullptr;
+  size_t byte_offset = 0;
+  if (napi_get_typedarray_info(env, argv[0], &ta_type, &length, &data, &arraybuffer, &byte_offset) != napi_ok ||
+      data == nullptr) {
+    return nullptr;
+  }
+  if (ta_type != napi_float64_array) return nullptr;
+  double* values = static_cast<double*>(data);
+  for (size_t i = 0; i < length; ++i) values[i] = 0;
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+void UpdateHrtimeBuffer(napi_env env, bool write_bigint) {
+  ProcessMethodsBindingState* state = GetProcessMethodsState(env);
+  if (state == nullptr || state->hrtime_buffer_ref == nullptr) return;
+  napi_value buffer = nullptr;
+  if (napi_get_reference_value(env, state->hrtime_buffer_ref, &buffer) != napi_ok || buffer == nullptr) return;
+  bool is_typedarray = false;
+  if (napi_is_typedarray(env, buffer, &is_typedarray) != napi_ok || !is_typedarray) return;
+  napi_typedarray_type ta_type;
+  size_t length = 0;
+  void* data = nullptr;
+  napi_value arraybuffer = nullptr;
+  size_t byte_offset = 0;
+  if (napi_get_typedarray_info(env, buffer, &ta_type, &length, &data, &arraybuffer, &byte_offset) != napi_ok ||
+      data == nullptr || ta_type != napi_uint32_array || length < 3) {
+    return;
+  }
+  uint32_t* values = static_cast<uint32_t*>(data);
+  const uint64_t now_ns = GetHrtimeNanoseconds();
+  if (write_bigint) {
+    values[0] = static_cast<uint32_t>(now_ns & 0xffffffffull);
+    values[1] = static_cast<uint32_t>((now_ns >> 32) & 0xffffffffull);
+    return;
+  }
+  const uint64_t sec = now_ns / 1000000000ull;
+  const uint32_t nsec = static_cast<uint32_t>(now_ns % 1000000000ull);
+  values[0] = static_cast<uint32_t>((sec >> 32) & 0xffffffffull);
+  values[1] = static_cast<uint32_t>(sec & 0xffffffffull);
+  values[2] = nsec;
+}
+
+napi_value ProcessMethodsHrtimeCallback(napi_env env, napi_callback_info info) {
+  UpdateHrtimeBuffer(env, false);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsHrtimeBigIntCallback(napi_env env, napi_callback_info info) {
+  UpdateHrtimeBuffer(env, true);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsSetEmitWarningSyncCallback(napi_env env, napi_callback_info info) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+void ProcessMethodsBindingFinalize(napi_env env, void* data, void* hint) {
+  (void)data;
+  (void)hint;
+  auto it = g_process_methods_states.find(env);
+  if (it == g_process_methods_states.end()) return;
+  if (it->second.hrtime_buffer_ref != nullptr) {
+    napi_delete_reference(env, it->second.hrtime_buffer_ref);
+    it->second.hrtime_buffer_ref = nullptr;
+  }
+  if (it->second.binding_ref != nullptr) {
+    napi_delete_reference(env, it->second.binding_ref);
+    it->second.binding_ref = nullptr;
+  }
+  g_process_methods_states.erase(it);
+}
+
+napi_value ReportWriteReportCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const std::string event_message = (argc >= 1 && argv[0] != nullptr) ? NapiValueToUtf8(env, argv[0]) : "JavaScript API";
+  const std::string trigger = (argc >= 2 && argv[1] != nullptr) ? NapiValueToUtf8(env, argv[1]) : "API";
+  std::string requested_file;
+  if (argc >= 3 && argv[2] != nullptr) {
+    napi_valuetype t = napi_undefined;
+    if (napi_typeof(env, argv[2], &t) == napi_ok && t == napi_string) {
+      requested_file = NapiValueToUtf8(env, argv[2]);
+    }
+  }
+  ReportBindingState* state = GetReportState(env);
+  if (state == nullptr) return nullptr;
+
+  if (!std::filesystem::exists(state->directory)) {
+    std::filesystem::create_directories(state->directory);
+  }
+
+  std::string output_file = requested_file;
+  if (output_file.empty()) {
+    if (state->filename.empty()) {
+      state->sequence++;
+      std::ostringstream generated;
+      generated << BuildDefaultReportFilename() << state->sequence << ".json";
+      output_file = generated.str();
+    } else {
+      output_file = state->filename;
+    }
+  }
+  const std::string absolute_path =
+      std::filesystem::path(output_file).is_absolute() ? output_file : JoinPath(state->directory, output_file);
+
+  napi_value report_obj = BuildReportObject(env, event_message, trigger, absolute_path);
+  if (report_obj == nullptr) return nullptr;
+
+  napi_value global = nullptr;
+  napi_value json_obj = nullptr;
+  napi_value stringify_fn = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "JSON", &json_obj) != napi_ok || json_obj == nullptr ||
+      napi_get_named_property(env, json_obj, "stringify", &stringify_fn) != napi_ok || stringify_fn == nullptr) {
+    return nullptr;
+  }
+  napi_value null_value = nullptr;
+  napi_get_null(env, &null_value);
+  napi_value space = nullptr;
+  if (state->compact) {
+    napi_create_int32(env, 0, &space);
+  } else {
+    napi_create_int32(env, 2, &space);
+  }
+  napi_value stringify_argv[3] = {report_obj, null_value, space};
+  napi_value json_string = nullptr;
+  if (napi_call_function(env, json_obj, stringify_fn, 3, stringify_argv, &json_string) != napi_ok ||
+      json_string == nullptr) {
+    return nullptr;
+  }
+  std::string payload = NapiValueToUtf8(env, json_string);
+  payload.push_back('\n');
+
+  std::ofstream out(absolute_path, std::ios::out | std::ios::trunc);
+  out << payload;
+  out.close();
+
+  napi_value path_value = nullptr;
+  napi_create_string_utf8(env, absolute_path.c_str(), NAPI_AUTO_LENGTH, &path_value);
+  return path_value;
+}
+
+napi_value ReportGetReportCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const std::string event_message = "JavaScript API";
+  const std::string trigger = "GetReport";
+  napi_value report_obj = BuildReportObject(env, event_message, trigger, "");
+  if (report_obj == nullptr) return nullptr;
+  napi_value global = nullptr;
+  napi_value json_obj = nullptr;
+  napi_value stringify_fn = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "JSON", &json_obj) != napi_ok || json_obj == nullptr ||
+      napi_get_named_property(env, json_obj, "stringify", &stringify_fn) != napi_ok || stringify_fn == nullptr) {
+    return nullptr;
+  }
+  napi_value null_value = nullptr;
+  napi_get_null(env, &null_value);
+  napi_value space = nullptr;
+  napi_create_int32(env, 2, &space);
+  napi_value stringify_argv[3] = {report_obj, null_value, space};
+  napi_value json_string = nullptr;
+  if (napi_call_function(env, json_obj, stringify_fn, 3, stringify_argv, &json_string) != napi_ok ||
+      json_string == nullptr) {
+    return nullptr;
+  }
+  return json_string;
+}
+
+napi_value ReportGetCompactCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  napi_get_boolean(env, state != nullptr && state->compact, &out);
+  return out;
+}
+
+napi_value ReportSetCompactCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    bool value = false;
+    if (ValueToBool(env, argv[0], &value)) state->compact = value;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportGetExcludeNetworkCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  napi_get_boolean(env, state != nullptr && state->exclude_network, &out);
+  return out;
+}
+
+napi_value ReportSetExcludeNetworkCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    bool value = false;
+    if (ValueToBool(env, argv[0], &value)) state->exclude_network = value;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportGetExcludeEnvCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  napi_get_boolean(env, state != nullptr && state->exclude_env, &out);
+  return out;
+}
+
+napi_value ReportSetExcludeEnvCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    bool value = false;
+    if (ValueToBool(env, argv[0], &value)) state->exclude_env = value;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportGetDirectoryCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  const std::string value = state != nullptr ? state->directory : ".";
+  napi_create_string_utf8(env, value.c_str(), NAPI_AUTO_LENGTH, &out);
+  return out;
+}
+
+napi_value ReportSetDirectoryCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    state->directory = NapiValueToUtf8(env, argv[0]);
+    if (state->directory.empty()) state->directory = ".";
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportGetFilenameCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  const std::string value = state != nullptr ? state->filename : "";
+  napi_create_string_utf8(env, value.c_str(), NAPI_AUTO_LENGTH, &out);
+  return out;
+}
+
+napi_value ReportSetFilenameCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    state->filename = NapiValueToUtf8(env, argv[0]);
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportGetSignalCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  const std::string value = state != nullptr ? state->signal : "SIGUSR2";
+  napi_create_string_utf8(env, value.c_str(), NAPI_AUTO_LENGTH, &out);
+  return out;
+}
+
+napi_value ReportSetSignalCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    state->signal = NapiValueToUtf8(env, argv[0]);
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportShouldReportOnFatalErrorCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  napi_get_boolean(env, state != nullptr && state->report_on_fatal_error, &out);
+  return out;
+}
+
+napi_value ReportSetReportOnFatalErrorCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    bool value = false;
+    if (ValueToBool(env, argv[0], &value)) state->report_on_fatal_error = value;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportShouldReportOnSignalCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  napi_get_boolean(env, state != nullptr && state->report_on_signal, &out);
+  return out;
+}
+
+napi_value ReportSetReportOnSignalCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    bool value = false;
+    if (ValueToBool(env, argv[0], &value)) state->report_on_signal = value;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReportShouldReportOnUncaughtExceptionCallback(napi_env env, napi_callback_info info) {
+  ReportBindingState* state = GetReportState(env);
+  napi_value out = nullptr;
+  napi_get_boolean(env, state != nullptr && state->report_on_uncaught_exception, &out);
+  return out;
+}
+
+napi_value ReportSetReportOnUncaughtExceptionCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  ReportBindingState* state = GetReportState(env);
+  if (state != nullptr && argc >= 1 && argv[0] != nullptr) {
+    bool value = false;
+    if (ValueToBool(env, argv[0], &value)) state->report_on_uncaught_exception = value;
+  }
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+void ReportBindingFinalize(napi_env env, void* data, void* hint) {
+  (void)data;
+  (void)hint;
+  auto it = g_report_states.find(env);
+  if (it == g_report_states.end()) return;
+  if (it->second.binding_ref != nullptr) {
+    napi_delete_reference(env, it->second.binding_ref);
+    it->second.binding_ref = nullptr;
+  }
+  g_report_states.erase(it);
+}
+
 }  // namespace
 
 napi_status UnodeInstallProcessObject(napi_env env,
@@ -974,5 +1984,157 @@ napi_status UnodeInstallProcessObject(napi_env env,
   status = napi_define_properties(env, process_obj, 1, &config_desc);
   if (status != napi_ok) return status;
 
-  return napi_set_named_property(env, global, "process", process_obj);
+  status = napi_set_named_property(env, global, "process", process_obj);
+  if (status != napi_ok) return status;
+
+  // Native internalBinding('process_methods')
+  {
+    auto& state = g_process_methods_states[env];
+    if (state.binding_ref != nullptr) {
+      napi_delete_reference(env, state.binding_ref);
+      state.binding_ref = nullptr;
+    }
+    if (state.hrtime_buffer_ref != nullptr) {
+      napi_delete_reference(env, state.hrtime_buffer_ref);
+      state.hrtime_buffer_ref = nullptr;
+    }
+    napi_value binding = nullptr;
+    status = napi_create_object(env, &binding);
+    if (status != napi_ok || binding == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+    napi_wrap(env, binding, nullptr, ProcessMethodsBindingFinalize, nullptr, nullptr);
+
+    napi_value hrtime_buffer_ab = nullptr;
+    if (napi_create_arraybuffer(env, sizeof(uint32_t) * 3, nullptr, &hrtime_buffer_ab) != napi_ok ||
+        hrtime_buffer_ab == nullptr) {
+      return napi_generic_failure;
+    }
+    napi_value hrtime_buffer = nullptr;
+    if (napi_create_typedarray(
+            env, napi_uint32_array, 3, hrtime_buffer_ab, 0, &hrtime_buffer) != napi_ok ||
+        hrtime_buffer == nullptr) {
+      return napi_generic_failure;
+    }
+    if (napi_create_reference(env, hrtime_buffer, 1, &state.hrtime_buffer_ref) != napi_ok ||
+        state.hrtime_buffer_ref == nullptr) {
+      return napi_generic_failure;
+    }
+    if (napi_set_named_property(env, binding, "hrtimeBuffer", hrtime_buffer) != napi_ok) return napi_generic_failure;
+
+    struct BindingMethod {
+      const char* name;
+      napi_callback cb;
+    };
+    const BindingMethod methods[] = {
+        {"_debugProcess", ProcessMethodsNoopUndefinedCallback},
+        {"abort", ProcessAbortCallback},
+        {"causeSegfault", ProcessMethodsCauseSegfaultCallback},
+        {"chdir", ProcessChdirCallback},
+        {"umask", ProcessUmaskCallback},
+        {"memoryUsage", ProcessMethodsMemoryUsageBufferCallback},
+        {"constrainedMemory", ProcessConstrainedMemoryCallback},
+        {"availableMemory", ProcessAvailableMemoryCallback},
+        {"rss", ProcessMethodsRssCallback},
+        {"cpuUsage", ProcessMethodsCpuUsageBufferCallback},
+        {"threadCpuUsage", ProcessMethodsThreadCpuUsageBufferCallback},
+        {"resourceUsage", ProcessMethodsResourceUsageBufferCallback},
+        {"_debugEnd", ProcessMethodsNoopUndefinedCallback},
+        {"_getActiveRequests", ProcessMethodsEmptyArrayCallback},
+        {"_getActiveHandles", ProcessMethodsEmptyArrayCallback},
+        {"getActiveResourcesInfo", ProcessMethodsEmptyArrayCallback},
+        {"_kill", ProcessMethodsKillCallback},
+        {"_rawDebug", ProcessMethodsRawDebugCallback},
+        {"cwd", ProcessCwdCallback},
+        {"dlopen", ProcessMethodsNoopUndefinedCallback},
+        {"reallyExit", ProcessExitCallback},
+        {"execve", ProcessMethodsNoopUndefinedCallback},
+        {"uptime", ProcessUptimeCallback},
+        {"patchProcessObject", ProcessMethodsNoopUndefinedCallback},
+        {"loadEnvFile", ProcessMethodsNoopUndefinedCallback},
+        {"setEmitWarningSync", ProcessMethodsSetEmitWarningSyncCallback},
+        {"hrtime", ProcessMethodsHrtimeCallback},
+        {"hrtimeBigInt", ProcessMethodsHrtimeBigIntCallback},
+    };
+    for (const auto& method : methods) {
+      napi_value fn = nullptr;
+      if (napi_create_function(env, method.name, NAPI_AUTO_LENGTH, method.cb, nullptr, &fn) != napi_ok ||
+          fn == nullptr ||
+          napi_set_named_property(env, binding, method.name, fn) != napi_ok) {
+        return napi_generic_failure;
+      }
+    }
+    UpdateHrtimeBuffer(env, false);
+    if (napi_create_reference(env, binding, 1, &state.binding_ref) != napi_ok || state.binding_ref == nullptr) {
+      return napi_generic_failure;
+    }
+    if (napi_set_named_property(env, global, "__unode_process_methods_binding", binding) != napi_ok) {
+      return napi_generic_failure;
+    }
+  }
+
+  // Native internalBinding('report')
+  {
+    auto& state = g_report_states[env];
+    if (state.binding_ref != nullptr) {
+      napi_delete_reference(env, state.binding_ref);
+      state.binding_ref = nullptr;
+    }
+    state.compact = HasExecArgvFlag(exec_argv, "--report-compact");
+    state.exclude_network = HasExecArgvFlag(exec_argv, "--report-exclude-network");
+    state.exclude_env = HasExecArgvFlag(exec_argv, "--report-exclude-env");
+    state.report_on_fatal_error = HasExecArgvFlag(exec_argv, "--report-on-fatalerror");
+    state.report_on_signal = HasExecArgvFlag(exec_argv, "--report-on-signal");
+    state.report_on_uncaught_exception = HasExecArgvFlag(exec_argv, "--report-uncaught-exception");
+    state.directory = ".";
+    state.filename.clear();
+    state.signal = "SIGUSR2";
+    state.sequence = 0;
+
+    napi_value binding = nullptr;
+    status = napi_create_object(env, &binding);
+    if (status != napi_ok || binding == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+    napi_wrap(env, binding, nullptr, ReportBindingFinalize, nullptr, nullptr);
+
+    struct BindingMethod {
+      const char* name;
+      napi_callback cb;
+    };
+    const BindingMethod methods[] = {
+        {"writeReport", ReportWriteReportCallback},
+        {"getReport", ReportGetReportCallback},
+        {"getCompact", ReportGetCompactCallback},
+        {"setCompact", ReportSetCompactCallback},
+        {"getExcludeNetwork", ReportGetExcludeNetworkCallback},
+        {"setExcludeNetwork", ReportSetExcludeNetworkCallback},
+        {"getExcludeEnv", ReportGetExcludeEnvCallback},
+        {"setExcludeEnv", ReportSetExcludeEnvCallback},
+        {"getDirectory", ReportGetDirectoryCallback},
+        {"setDirectory", ReportSetDirectoryCallback},
+        {"getFilename", ReportGetFilenameCallback},
+        {"setFilename", ReportSetFilenameCallback},
+        {"getSignal", ReportGetSignalCallback},
+        {"setSignal", ReportSetSignalCallback},
+        {"shouldReportOnFatalError", ReportShouldReportOnFatalErrorCallback},
+        {"setReportOnFatalError", ReportSetReportOnFatalErrorCallback},
+        {"shouldReportOnSignal", ReportShouldReportOnSignalCallback},
+        {"setReportOnSignal", ReportSetReportOnSignalCallback},
+        {"shouldReportOnUncaughtException", ReportShouldReportOnUncaughtExceptionCallback},
+        {"setReportOnUncaughtException", ReportSetReportOnUncaughtExceptionCallback},
+    };
+    for (const auto& method : methods) {
+      napi_value fn = nullptr;
+      if (napi_create_function(env, method.name, NAPI_AUTO_LENGTH, method.cb, nullptr, &fn) != napi_ok ||
+          fn == nullptr ||
+          napi_set_named_property(env, binding, method.name, fn) != napi_ok) {
+        return napi_generic_failure;
+      }
+    }
+    if (napi_create_reference(env, binding, 1, &state.binding_ref) != napi_ok || state.binding_ref == nullptr) {
+      return napi_generic_failure;
+    }
+    if (napi_set_named_property(env, global, "__unode_report_binding", binding) != napi_ok) {
+      return napi_generic_failure;
+    }
+  }
+
+  return napi_ok;
 }

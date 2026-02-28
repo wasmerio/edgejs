@@ -191,6 +191,14 @@ const char* SignalName(int signum) {
     case SIGINT: return "SIGINT";
     case SIGABRT: return "SIGABRT";
     case SIGQUIT: return "SIGQUIT";
+    case SIGSEGV: return "SIGSEGV";
+    case SIGILL: return "SIGILL";
+#if defined(SIGTRAP)
+    case SIGTRAP: return "SIGTRAP";
+#endif
+#if defined(SIGBUS)
+    case SIGBUS: return "SIGBUS";
+#endif
     default: return nullptr;
   }
 }

@@ -178,10 +178,18 @@ function fileURLToPath(input, options = undefined) {
   const protocol = parsed.protocol;
   if (!String(protocol || '').startsWith('file')) throw new ERR_INVALID_URL_SCHEME('file');
   let inputUrl;
-  try {
-    inputUrl = new URLImpl(String(href));
-  } catch {
-    inputUrl = href;
+  const GlobalURL = globalThis.URL;
+  if (typeof GlobalURL === 'function') {
+    try {
+      inputUrl = new GlobalURL(String(href));
+    } catch {}
+  }
+  if (!inputUrl) {
+    try {
+      inputUrl = new URLImpl(String(href));
+    } catch {
+      inputUrl = href;
+    }
   }
   const url = {
     hostname: parsed.hostname || '',

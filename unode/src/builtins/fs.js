@@ -1,5 +1,6 @@
 'use strict';
 
+const { EventEmitter } = require('events');
 const binding = globalThis.__unode_fs;
 const encodingBinding = globalThis.__unode_encoding || null;
 let warnedInvalidExistsSyncPath = false;
@@ -639,7 +640,7 @@ function open(path, flags, mode, callback) {
   callback = makeCallback(callback);
   const req = { type: 'FSReqCallback', syscall: 'open' };
   activeRequests.push(req);
-  setImmediateOrSync(() => {
+  const run = () => {
     try {
       const p = getValidatedPath(path);
       const f = flags == null ? binding.O_RDONLY : (typeof flags === 'string' ? stringToFlags(flags) : flags);
@@ -659,7 +660,12 @@ function open(path, flags, mode, callback) {
         drop();
       }
     }
-  });
+  };
+  if (typeof process === 'object' && process && typeof process.nextTick === 'function') {
+    process.nextTick(run);
+  } else {
+    run();
+  }
 }
 
 function close(fd, callback) {
@@ -1203,6 +1209,65 @@ function fsyncSync(fd) {
   binding.fsync(fd);
 }
 
+class FSWatcher extends EventEmitter {
+  constructor() {
+    super();
+    this._closed = false;
+  }
+
+  close() {
+    if (this._closed) return;
+    this._closed = true;
+    setImmediateOrSync(() => this.emit('close'));
+  }
+}
+
+function watch(filename, options, listener) {
+  if (typeof options === 'function') {
+    listener = options;
+    options = undefined;
+  }
+  if (typeof options === 'string') {
+    options = { encoding: options };
+  }
+  options = options && typeof options === 'object' ? options : {};
+  filename = getValidatedPath(filename, 'filename');
+  void filename;
+
+  const watcher = new FSWatcher();
+  if (typeof listener === 'function') {
+    watcher.on('change', listener);
+  }
+
+  const signal = options.signal;
+  if (signal !== undefined) {
+    const isAbortSignalLike =
+      signal &&
+      typeof signal === 'object' &&
+      typeof signal.aborted === 'boolean' &&
+      typeof signal.addEventListener === 'function' &&
+      typeof signal.removeEventListener === 'function';
+    if (!isAbortSignalLike) {
+      const err = new TypeError(
+        'The "options.signal" property must be an instance of AbortSignal.'
+      );
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+
+    if (signal.aborted) {
+      watcher.close();
+      return watcher;
+    }
+
+    const onAbort = () => watcher.close();
+    signal.addEventListener('abort', onAbort, { once: true });
+    watcher.once('close', () => signal.removeEventListener('abort', onAbort));
+  }
+
+  return watcher;
+}
+
 function mkdtempSync(prefix, options) {
   options = getOptions(options, { encoding: 'utf8' });
   prefix = getValidatedPath(prefix, 'prefix');
@@ -1288,11 +1353,13 @@ module.exports = {
   fsyncSync,
   mkdtempSync,
   mkdtemp,
+  watch,
   _toUnixTimestamp: toUnixTimestamp,
   constants,
   Dirent,
   Stats,
   Dir,
+  FSWatcher,
 };
 module.exports.rename = rename;
 
