@@ -15,6 +15,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+          test -f node/src/node_api_types.h
 
       - name: Validate public N-API headers stay V8-agnostic
         run: |
@@ -63,6 +70,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+          test -f node/src/node_api_types.h
 
       - name: Validate public N-API headers stay V8-agnostic
         run: |

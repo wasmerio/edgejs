@@ -54,5 +54,10 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=v8");
     println!("cargo:rustc-link-lib=dylib=v8_libplatform");
     println!("cargo:rustc-link-lib=dylib=v8_libbase");
-    println!("cargo:rustc-link-lib=dylib=c++");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "macos" || target_os == "ios" {
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
 }
