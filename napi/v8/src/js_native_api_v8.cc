@@ -1,5 +1,5 @@
 #include "internal/napi_v8_env.h"
-#include "../../node/src/node_api_types.h"
+#include "node_api_types.h"
 
 #include <climits>
 #include <atomic>

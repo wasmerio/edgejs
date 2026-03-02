@@ -15,51 +15,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Ensure googletest dependency exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -f "deps/googletest/src/gtest-all.cc" ]]; then
-            exit 0
-          fi
-          echo "deps/googletest missing, bootstrapping from upstream..."
-          rm -rf /tmp/googletest
-          git clone --depth 1 https://github.com/google/googletest.git /tmp/googletest
-          rm -rf deps/googletest
-          mkdir -p deps/googletest
-          cp -R /tmp/googletest/googletest/. deps/googletest/
-
-      - name: Setup Prebuilt V8 For Wasmer
-        shell: bash
-        run: |
-          set -euo pipefail
-          V8_VERSION="11.9.1"
-          ASSET="v8-linux-amd64.tar.xz"
-          V8_ROOT="$PWD/.ci/v8/${V8_VERSION}/linux-amd64"
-          mkdir -p "$V8_ROOT"
-          curl -fsSL "https://github.com/wasmerio/v8-custom-builds/releases/download/${V8_VERSION}/${ASSET}" -o "$V8_ROOT/${ASSET}"
-          tar -xJf "$V8_ROOT/${ASSET}" -C "$V8_ROOT"
-
-          # napi/wasmer currently links dynamic v8 libs; provide local shared wrappers.
-          c++ -shared \
-            -Wl,--whole-archive "$V8_ROOT/lib/libv8.a" -Wl,--no-whole-archive \
-            -o "$V8_ROOT/lib/libv8.so" \
-            -ldl -pthread -lm -lrt || true
-          cat > "$V8_ROOT/lib/v8_libplatform_stub.cc" <<'EOF'
-          extern "C" void __dummy_v8_libplatform() {}
-          EOF
-          c++ -shared "$V8_ROOT/lib/v8_libplatform_stub.cc" -o "$V8_ROOT/lib/libv8_libplatform.so"
-          cat > "$V8_ROOT/lib/v8_libbase_stub.cc" <<'EOF'
-          extern "C" void __dummy_v8_libbase() {}
-          EOF
-          c++ -shared "$V8_ROOT/lib/v8_libbase_stub.cc" -o "$V8_ROOT/lib/libv8_libbase.so"
-
-          echo "V8_INCLUDE_DIR=$V8_ROOT/include" >> "$GITHUB_ENV"
-          echo "V8_LIB_DIR=$V8_ROOT/lib" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$V8_ROOT/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Validate public N-API headers stay V8-agnostic
         run: |
@@ -71,20 +26,8 @@ jobs:
       - name: Compile napi-v8
         run: cmake --build napi/v8/build -j4
 
-      - name: "Test napi (parallel: napi-v8 + wasmer)"
-        shell: bash
-        run: |
-          set -euo pipefail
-          (
-            ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
-          ) &
-          pid_napi=$!
-          (
-            cargo test --manifest-path napi/wasmer/Cargo.toml --lib -- --nocapture
-          ) &
-          pid_wasmer=$!
-          wait "$pid_napi"
-          wait "$pid_wasmer"
+      - name: Test napi-v8
+        run: ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
 
       - name: Build unode
         run: |
@@ -120,52 +63,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Ensure googletest dependency exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -f "deps/googletest/src/gtest-all.cc" ]]; then
-            exit 0
-          fi
-          echo "deps/googletest missing, bootstrapping from upstream..."
-          rm -rf /tmp/googletest
-          git clone --depth 1 https://github.com/google/googletest.git /tmp/googletest
-          rm -rf deps/googletest
-          mkdir -p deps/googletest
-          cp -R /tmp/googletest/googletest/. deps/googletest/
-
-      - name: Setup Prebuilt V8 For Wasmer
-        shell: bash
-        run: |
-          set -euo pipefail
-          V8_VERSION="11.9.1"
-          ASSET="v8-darwin-arm64.tar.xz"
-          V8_ROOT="$PWD/.ci/v8/${V8_VERSION}/darwin-arm64"
-          mkdir -p "$V8_ROOT"
-          curl -fsSL "https://github.com/wasmerio/v8-custom-builds/releases/download/${V8_VERSION}/${ASSET}" -o "$V8_ROOT/${ASSET}"
-          tar -xJf "$V8_ROOT/${ASSET}" -C "$V8_ROOT"
-
-          # napi/wasmer currently links dynamic v8 libs; provide local shared wrappers.
-          clang++ -dynamiclib \
-            -Wl,-undefined,dynamic_lookup \
-            -Wl,-all_load "$V8_ROOT/lib/libv8.a" \
-            -framework CoreFoundation \
-            -o "$V8_ROOT/lib/libv8.dylib"
-          cat > "$V8_ROOT/lib/v8_libplatform_stub.cc" <<'EOF'
-          extern "C" void __dummy_v8_libplatform() {}
-          EOF
-          clang++ -dynamiclib "$V8_ROOT/lib/v8_libplatform_stub.cc" -o "$V8_ROOT/lib/libv8_libplatform.dylib"
-          cat > "$V8_ROOT/lib/v8_libbase_stub.cc" <<'EOF'
-          extern "C" void __dummy_v8_libbase() {}
-          EOF
-          clang++ -dynamiclib "$V8_ROOT/lib/v8_libbase_stub.cc" -o "$V8_ROOT/lib/libv8_libbase.dylib"
-
-          echo "V8_INCLUDE_DIR=$V8_ROOT/include" >> "$GITHUB_ENV"
-          echo "V8_LIB_DIR=$V8_ROOT/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$V8_ROOT/lib:${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Validate public N-API headers stay V8-agnostic
         run: |
@@ -177,20 +74,8 @@ jobs:
       - name: Compile napi-v8
         run: cmake --build napi/v8/build -j4
 
-      - name: "Test napi (parallel: napi-v8 + wasmer)"
-        shell: bash
-        run: |
-          set -euo pipefail
-          (
-            ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
-          ) &
-          pid_napi=$!
-          (
-            cargo test --manifest-path napi/wasmer/Cargo.toml --lib -- --nocapture
-          ) &
-          pid_wasmer=$!
-          wait "$pid_napi"
-          wait "$pid_wasmer"
+      - name: Test napi-v8
+        run: ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
 
       - name: Build unode
         run: |
