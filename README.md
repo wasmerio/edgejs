@@ -1,12 +1,12 @@
-# node-napi
+# Ubinode
 
-`node-napi` aims to implement Node.js fully on top of N-API, directly, instead of depending on V8.
+Ubi reimagines Node: fully sandboxed, engine-agnostic, and built for embedded and serverless execution. Ubiquitous by design.
 
 ## Why This Project
 
-Node.js is deeply tied to V8 internals. This project explores a different architecture: a Node runtime centered on N-API contracts, where engine-specific behavior is isolated behind stable interfaces.
+Node.js is deeply tied to V8 internals. This project aims for a different architecture: a Node runtime centered on N-API contracts, where engine-specific behavior is isolated behind stable interfaces.
 
-The long-term intent is to make runtime internals less engine-coupled while preserving compatibility expectations for native modules.
+The intent is to make runtime internals less engine-coupled while preserving compatibility expectations for native modules.
 
 ## Project Direction
 
