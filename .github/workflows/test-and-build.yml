@@ -39,6 +39,15 @@ jobs:
       - name: Test napi-v8
         run: ctest --test-dir napi/v8/build --output-on-failure -R '^napi_v8\.'
 
+      - name: Build ubi (Debug)
+        run: |
+          cmake -S ubi -B build-ubi -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-ubi -j4
+      - name: Test ubi
+        run: ctest --test-dir build-ubi --output-on-failure -j4
+      - name: Remove debug build
+        run: rm -rf build-ubi
+
       - name: Build ubi
         run: |
           cmake -S ubi -B build-ubi -DCMAKE_BUILD_TYPE=Release

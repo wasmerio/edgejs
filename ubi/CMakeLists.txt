@@ -206,12 +206,20 @@ target_link_libraries(ubi_ncrypto
 add_library(ubi_simdutf STATIC
   "${PROJECT_ROOT}/deps/simdutf/simdutf.cpp"
 )
+add_library(ubi_simdjson STATIC
+  "${PROJECT_ROOT}/deps/simdjson/simdjson.cpp"
+)
 add_library(ubi_ada STATIC
   "${PROJECT_ROOT}/deps/ada/ada.cpp"
 )
 target_include_directories(ubi_ada
   PUBLIC
     "${PROJECT_ROOT}/deps/ada"
+)
+
+target_include_directories(ubi_simdjson
+  PUBLIC
+    "${PROJECT_ROOT}/deps"
 )
 
 target_include_directories(ubi_simdutf
@@ -271,6 +279,7 @@ target_link_libraries(ubi_runtime
   PUBLIC
     ubi_node_api
   PRIVATE
+    ubi_simdjson
     ubi_simdutf
     ubi_ada
     ubi_ncrypto
