@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -51,6 +52,19 @@ std::vector<std::string> g_unode_cli_exec_argv;
 std::string g_unode_process_title;
 std::vector<std::string> g_unode_script_argv;
 const auto g_process_start_time = std::chrono::steady_clock::now();
+
+#if !defined(_WIN32)
+void InstallDefaultSignalBehavior() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+#if defined(SIGPIPE)
+    // Node ignores SIGPIPE by default; writes should surface as EPIPE instead
+    // of terminating the process.
+    signal(SIGPIPE, SIG_IGN);
+#endif
+  });
+}
+#endif
 
 bool DebugExceptionsEnabled() {
   const char* env = std::getenv("UNODE_DEBUG_EXCEPTIONS");
@@ -850,6 +864,9 @@ int RunScriptWithGlobals(napi_env env,
                          const char* entry_script_path,
                          std::string* error_out,
                          bool keep_event_loop_alive) {
+#if !defined(_WIN32)
+  InstallDefaultSignalBehavior();
+#endif
   if (env == nullptr) {
     if (error_out != nullptr) {
       *error_out = "Invalid environment";
