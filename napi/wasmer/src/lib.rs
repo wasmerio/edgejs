@@ -73,6 +73,13 @@ extern "C" fn snapi_host_invoke_wasm_callback(wasm_fn_ptr: u32, data_val: u64) -
 // ============================================================
 unsafe extern "C" {
     fn snapi_bridge_init() -> i32;
+    fn snapi_bridge_unofficial_create_env(
+        module_api_version: i32,
+        env_out: *mut u32,
+        scope_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_release_env(scope_handle: u32) -> i32;
+    fn snapi_bridge_unofficial_process_microtasks(env_handle: u32) -> i32;
     // Value creation
     fn snapi_bridge_get_undefined(out_id: *mut u32) -> i32;
     fn snapi_bridge_get_null(out_id: *mut u32) -> i32;
@@ -379,6 +386,42 @@ fn read_guest_c_string(env: &mut FunctionEnvMut<RuntimeEnv>, guest_ptr: i32) -> 
 fn guest_napi_wasm_init_env(_env: FunctionEnvMut<RuntimeEnv>) -> i32 {
     let ok = unsafe { snapi_bridge_init() };
     if ok != 0 { 1 } else { 0 }
+}
+
+fn guest_unofficial_napi_create_env(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    module_api_version: i32,
+    env_out_ptr: i32,
+    scope_out_ptr: i32,
+) -> i32 {
+    let mut env_handle: u32 = 0;
+    let mut scope_handle: u32 = 0;
+    let status = unsafe {
+        snapi_bridge_unofficial_create_env(module_api_version, &mut env_handle, &mut scope_handle)
+    };
+    if status != 0 {
+        return status;
+    }
+    if env_out_ptr > 0 {
+        write_guest_u32(&mut env, env_out_ptr as u32, env_handle);
+    }
+    if scope_out_ptr > 0 {
+        write_guest_u32(&mut env, scope_out_ptr as u32, scope_handle);
+    }
+    0
+}
+
+fn guest_unofficial_napi_release_env(_env: FunctionEnvMut<RuntimeEnv>, scope_ptr: i32) -> i32 {
+    let scope_handle = if scope_ptr > 0 { scope_ptr as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_release_env(scope_handle) }
+}
+
+fn guest_unofficial_napi_process_microtasks(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_process_microtasks(env_handle) }
 }
 
 // --- Singleton getters ---
@@ -1812,6 +1855,9 @@ fn register_napi_imports(store: &mut Store, fe: &FunctionEnv<RuntimeEnv>, io: &m
 
     // Init
     reg!("napi_wasm_init_env", guest_napi_wasm_init_env);
+    reg!("unofficial_napi_create_env", guest_unofficial_napi_create_env);
+    reg!("unofficial_napi_release_env", guest_unofficial_napi_release_env);
+    reg!("unofficial_napi_process_microtasks", guest_unofficial_napi_process_microtasks);
     // Singleton getters
     reg!("napi_get_undefined", guest_napi_get_undefined);
     reg!("napi_get_null", guest_napi_get_null);

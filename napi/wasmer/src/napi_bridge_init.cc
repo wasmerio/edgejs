@@ -21,6 +21,8 @@ namespace {
 std::mutex g_mu;
 napi_env g_env = nullptr;
 void* g_scope = nullptr;  // opaque scope handle from unofficial_napi_create_env
+constexpr uint32_t kUnofficialEnvHandle = 1;
+constexpr uint32_t kUnofficialScopeHandle = 1;
 
 // Handle table: maps u32 IDs to napi_value pointers.
 std::unordered_map<uint32_t, napi_value> g_values;
@@ -95,6 +97,25 @@ napi_escapable_handle_scope LoadEscScope(uint32_t id) {
 }
 
 void RemoveEscScope(uint32_t id) { g_esc_scopes.erase(id); }
+
+napi_status DisposeBridgeStateLocked() {
+  g_values.clear();
+  g_next_id = 1;
+  g_refs.clear();
+  g_next_ref_id = 1;
+  g_deferreds.clear();
+  g_next_deferred_id = 1;
+  g_esc_scopes.clear();
+  g_next_esc_scope_id = 1;
+  if (g_scope) {
+    napi_status s = unofficial_napi_release_env(g_scope);
+    g_scope = nullptr;
+    g_env = nullptr;
+    return s;
+  }
+  g_env = nullptr;
+  return napi_ok;
+}
 
 }  // namespace
 
@@ -1617,23 +1638,38 @@ extern "C" int snapi_bridge_create_function(const char* utf8name, uint32_t name_
   return napi_ok;
 }
 
+extern "C" int snapi_bridge_unofficial_create_env(int32_t module_api_version,
+                                                  uint32_t* env_out,
+                                                  uint32_t* scope_out) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  if (g_env == nullptr) {
+    napi_status s = unofficial_napi_create_env(module_api_version, &g_env, &g_scope);
+    if (s != napi_ok) return s;
+  }
+  if (env_out != nullptr) *env_out = kUnofficialEnvHandle;
+  if (scope_out != nullptr) *scope_out = kUnofficialScopeHandle;
+  return napi_ok;
+}
+
+extern "C" int snapi_bridge_unofficial_release_env(uint32_t scope_handle) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  if (g_env == nullptr && g_scope == nullptr) return napi_ok;
+  if (scope_handle != kUnofficialScopeHandle) return napi_invalid_arg;
+  return DisposeBridgeStateLocked();
+}
+
+extern "C" int snapi_bridge_unofficial_process_microtasks(uint32_t env_handle) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  if (g_env == nullptr) return napi_invalid_arg;
+  if (env_handle != kUnofficialEnvHandle) return napi_invalid_arg;
+  return unofficial_napi_process_microtasks(g_env);
+}
+
 // ============================================================
 // Cleanup
 // ============================================================
 
 extern "C" void snapi_bridge_dispose() {
   std::lock_guard<std::mutex> lock(g_mu);
-  g_values.clear();
-  g_next_id = 1;
-  g_refs.clear();
-  g_next_ref_id = 1;
-  g_deferreds.clear();
-  g_next_deferred_id = 1;
-  g_esc_scopes.clear();
-  g_next_esc_scope_id = 1;
-  if (g_scope) {
-    unofficial_napi_release_env(g_scope);
-    g_scope = nullptr;
-    g_env = nullptr;
-  }
+  (void)DisposeBridgeStateLocked();
 }
