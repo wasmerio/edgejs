@@ -1,4 +1,4 @@
 'use strict';
 
 const path = require('path');
-module.exports = require(path.resolve(__dirname, '../../../node/lib/_http_agent.js'));
+module.exports = require(path.resolve(__dirname, '../../../node-lib/_http_agent.js'));

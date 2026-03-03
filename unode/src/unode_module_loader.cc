@@ -166,44 +166,6 @@ bool ResolveAsDirectory(const fs::path& candidate, fs::path* out) {
   return false;
 }
 
-static fs::path NodeLibRootFromExecutable() {
-  static const fs::path root = []() -> fs::path {
-    char exe_path[4096];
-    size_t size = sizeof(exe_path);
-    if (uv_exepath(exe_path, &size) != 0 || size == 0) {
-      return fs::path();
-    }
-    const fs::path exe_dir = fs::path(std::string(exe_path, size)).parent_path();
-    const fs::path candidate = fs::absolute(exe_dir / ".." / "node-libs").lexically_normal();
-    if (PathExistsDirectory(candidate)) {
-      return candidate;
-    }
-    return fs::path();
-  }();
-  return root;
-}
-
-static bool ResolveMissingNodeLibPath(const fs::path& normalized_missing, fs::path* out) {
-  const std::string needle = "/node/lib/";
-  const std::string missing = normalized_missing.generic_string();
-  const size_t pos = missing.find(needle);
-  if (pos == std::string::npos) return false;
-
-  const std::string suffix = missing.substr(pos + needle.size());
-  if (suffix.empty()) return false;
-
-  const fs::path root = NodeLibRootFromExecutable();
-  if (root.empty()) return false;
-
-  fs::path resolved;
-  const fs::path candidate = root / suffix;
-  if (ResolveAsFile(candidate, &resolved) || ResolveAsDirectory(candidate, &resolved)) {
-    *out = resolved.lexically_normal();
-    return true;
-  }
-  return false;
-}
-
 std::string CanonicalPathKey(const fs::path& path) {
   std::error_code ec;
   fs::path absolute = path;
@@ -306,17 +268,16 @@ bool ResolveBuiltinPath(const std::string& specifier, const std::string& base_di
       return true;
     }
   }
-  // Resolve critical internal util modules directly to upstream node/lib paths.
+  // Resolve critical internal util modules directly to upstream node-lib paths.
   // This avoids an extra shim layer that can expose partially initialized wrapper
   // exports during circular loads (e.g. events <-> internal/util call paths).
   if (id == "internal/util" || id == "internal/util/inspect") {
-    const fs::path upstream_node_lib_dir = NodeLibRootFromExecutable();
-    if (!upstream_node_lib_dir.empty()) {
-      fs::path upstream_candidate = upstream_node_lib_dir / (id + ".js");
-      if (ResolveAsFile(upstream_candidate, &resolved)) {
-        *out = resolved.lexically_normal();
-        return true;
-      }
+    static const fs::path upstream_node_lib_dir =
+        fs::absolute(fs::path(__FILE__).parent_path() / ".." / ".." / "node-lib").lexically_normal();
+    fs::path upstream_candidate = upstream_node_lib_dir / (id + ".js");
+    if (ResolveAsFile(upstream_candidate, &resolved)) {
+      *out = resolved.lexically_normal();
+      return true;
     }
   }
   fs::path candidate = runtime_builtins_dir / (id + ".js");
@@ -324,8 +285,8 @@ bool ResolveBuiltinPath(const std::string& specifier, const std::string& base_di
     *out = resolved.lexically_normal();
     return true;
   }
-  // Preserve Node-style relative builtin lookup for modules loaded from node/lib
-  // (e.g. internal/v8/startup_snapshot from node/lib/buffer.js).
+  // Preserve Node-style relative builtin lookup for modules loaded from node-lib
+  // (e.g. internal/v8/startup_snapshot from node-lib/buffer.js).
   const fs::path base_relative_builtins = fs::absolute(fs::path(base_dir) / ".." / "builtins").lexically_normal();
   candidate = base_relative_builtins / (id + ".js");
   if (ResolveAsFile(candidate, &resolved)) {
@@ -1020,10 +981,6 @@ bool ResolveModulePath(const std::string& specifier, const std::string& base_dir
   const fs::path normalized = fs::absolute(raw_path).lexically_normal();
   fs::path resolved;
   if (ResolveAsFile(normalized, &resolved) || ResolveAsDirectory(normalized, &resolved)) {
-    *out = resolved.lexically_normal();
-    return true;
-  }
-  if (ResolveMissingNodeLibPath(normalized, &resolved)) {
     *out = resolved.lexically_normal();
     return true;
   }

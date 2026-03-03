@@ -11,4 +11,4 @@ if (process && typeof process.kill !== 'function') {
     return true;
   };
 }
-module.exports = require('../../../node/lib/util.js');
+module.exports = require('../../../node-lib/util.js');

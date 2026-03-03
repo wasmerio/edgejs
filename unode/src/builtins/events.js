@@ -3,7 +3,7 @@
 // Ensure Event/EventTarget/CustomEvent globals exist before loading events tests.
 require('internal/event_target');
 
-const exported = require('../../../node/lib/events.js');
+const exported = require('../../../node-lib/events.js');
 
 // Provide a lightweight process event emitter surface in runtimes where process
 // does not expose Node's full EventEmitter behavior.

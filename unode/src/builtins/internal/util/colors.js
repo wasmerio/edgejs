@@ -1,3 +1,3 @@
 'use strict';
 
-module.exports = require('../../../../../node/lib/internal/util/colors.js');
+module.exports = require('../../../../../node-lib/internal/util/colors.js');

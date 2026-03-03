@@ -1,4 +1,4 @@
 'use strict';
 
 const path = require('path');
-module.exports = require(path.resolve(__dirname, '../../../node/lib/querystring.js'));
+module.exports = require(path.resolve(__dirname, '../../../node-lib/querystring.js'));

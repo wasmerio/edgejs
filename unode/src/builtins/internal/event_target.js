@@ -4,7 +4,7 @@ const path = require('path');
 
 const eventTarget = require(path.resolve(
   __dirname,
-  '../../../../node/lib/internal/event_target.js'
+  '../../../../node-lib/internal/event_target.js'
 ));
 
 if (typeof eventTarget.Event === 'function') {
