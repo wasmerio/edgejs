@@ -18,6 +18,8 @@ napi_status NAPI_CDECL unofficial_napi_destroy_env_instance(napi_env env);
 class V8Runtime {
  public:
   V8Runtime() {
+    static constexpr char kDefaultFlags[] = "--js-float16array";
+    v8::V8::SetFlagsFromString(kDefaultFlags, static_cast<int>(sizeof(kDefaultFlags) - 1));
     v8::V8::InitializeICUDefaultLocation("");
     v8::V8::InitializeExternalStartupData("");
     platform_ = v8::platform::NewDefaultPlatform();

@@ -39,6 +39,11 @@ struct UnofficialEnvScope {
 std::mutex g_runtime_mu;
 SharedRuntime g_runtime;
 
+void ApplyDefaultV8Flags() {
+  static constexpr char kDefaultFlags[] = "--js-float16array";
+  v8::V8::SetFlagsFromString(kDefaultFlags, static_cast<int>(sizeof(kDefaultFlags) - 1));
+}
+
 napi_status AcquireRuntime(v8::Isolate** isolate_out) {
   if (isolate_out == nullptr) return napi_invalid_arg;
   std::lock_guard<std::mutex> lock(g_runtime_mu);
@@ -47,6 +52,7 @@ napi_status AcquireRuntime(v8::Isolate** isolate_out) {
   // was 0 and we don't have an isolate yet). Re-initializing causes V8 fatal
   // "Wrong initialization order" when a second test runs after the first released.
   if (g_runtime.refcount == 0 && g_runtime.isolate == nullptr) {
+    ApplyDefaultV8Flags();
     v8::V8::InitializeICUDefaultLocation("");
     v8::V8::InitializeExternalStartupData("");
     g_runtime.platform = v8::platform::NewDefaultPlatform();
