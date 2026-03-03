@@ -31,13 +31,13 @@ jobs:
           ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
 
       - name: Build napi-v8
-        run: cmake -S napi/v8 -B napi/v8/build
+        run: cmake -S napi/v8 -B napi/v8/build -DNAPI_V8_BUILD_TESTS=ON
 
       - name: Compile napi-v8
         run: cmake --build napi/v8/build -j4
 
       - name: Test napi-v8
-        run: ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
+        run: ctest --test-dir napi/v8/build --output-on-failure -R '^napi_v8\.'
 
       - name: Build unode
         run: |
@@ -93,13 +93,13 @@ jobs:
           ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
 
       - name: Build napi-v8
-        run: cmake -S napi/v8 -B napi/v8/build
+        run: cmake -S napi/v8 -B napi/v8/build -DNAPI_V8_BUILD_TESTS=ON
 
       - name: Compile napi-v8
         run: cmake --build napi/v8/build -j4
 
       - name: Test napi-v8
-        run: ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
+        run: ctest --test-dir napi/v8/build --output-on-failure -R '^napi_v8\.'
 
       - name: Build unode
         run: |
