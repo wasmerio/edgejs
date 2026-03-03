@@ -47,6 +47,8 @@ extern char** environ;
 extern char** environ;
 #endif
 
+#define DUMMY_UV_STUBS 1
+
 namespace {
 
 const auto g_process_start_time = std::chrono::steady_clock::now();

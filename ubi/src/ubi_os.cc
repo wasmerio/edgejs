@@ -318,6 +318,12 @@ napi_value BindingGetInterfaceAddresses(napi_env env, napi_callback_info info) {
   uv_interface_address_t* interfaces = nullptr;
   int count = 0;
 
+#ifdef DUMMY_UV_STUBS
+  napi_value out = nullptr;
+  if (napi_create_array_with_length(env, static_cast<size_t>(count) * 7, &out) != napi_ok || out == nullptr) {
+    return nullptr;
+  }
+#else
   const int err = uv_interface_addresses(&interfaces, &count);
   if (err != 0) {
     SetContextError(env, ctx, "uv_interface_addresses", err);
@@ -370,6 +376,7 @@ napi_value BindingGetInterfaceAddresses(napi_env env, napi_callback_info info) {
   }
 
   uv_free_interface_addresses(interfaces, count);
+#endif
 
   return out;
 }
