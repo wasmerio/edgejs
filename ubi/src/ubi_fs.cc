@@ -1502,6 +1502,18 @@ void UbiInstallFsBinding(napi_env env) {
   SetInt32Constant(env, binding, "S_IFLNK", 0120000);
   SetInt32Constant(env, binding, "S_IFIFO", 0010000);
   SetInt32Constant(env, binding, "S_IFSOCK", 0140000);
+  SetInt32Constant(env, binding, "S_IRWXU", 0700);
+  SetInt32Constant(env, binding, "S_IRUSR", 0400);
+  SetInt32Constant(env, binding, "S_IWUSR", 0200);
+  SetInt32Constant(env, binding, "S_IXUSR", 0100);
+  SetInt32Constant(env, binding, "S_IRWXG", 0070);
+  SetInt32Constant(env, binding, "S_IRGRP", 0040);
+  SetInt32Constant(env, binding, "S_IWGRP", 0020);
+  SetInt32Constant(env, binding, "S_IXGRP", 0010);
+  SetInt32Constant(env, binding, "S_IRWXO", 0007);
+  SetInt32Constant(env, binding, "S_IROTH", 0004);
+  SetInt32Constant(env, binding, "S_IWOTH", 0002);
+  SetInt32Constant(env, binding, "S_IXOTH", 0001);
   SetInt32Constant(env, binding, "COPYFILE_EXCL", UV_FS_COPYFILE_EXCL);
   SetInt32Constant(env, binding, "COPYFILE_FICLONE", UV_FS_COPYFILE_FICLONE);
   SetInt32Constant(env, binding, "COPYFILE_FICLONE_FORCE", UV_FS_COPYFILE_FICLONE_FORCE);

@@ -490,18 +490,28 @@ napi_value TcpSetBlocking(napi_env env, napi_callback_info info) {
 }
 
 napi_value TcpBind(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr};
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr};
   TcpWrap* wrap = nullptr;
   GetThis(env, info, &argc, argv, &wrap);
   if (wrap == nullptr || argc < 2) return MakeInt32(env, UV_EINVAL);
   std::string host = ValueToUtf8(env, argv[0]);
   int32_t port = 0;
   napi_get_value_int32(env, argv[1], &port);
+  unsigned int flags = 0;
+  if (argc > 2 && argv[2] != nullptr) {
+    uint32_t tmp = 0;
+    napi_get_value_uint32(env, argv[2], &tmp);
+    flags = tmp;
+#ifdef UV_TCP_IPV6ONLY
+    // Match Node: ignore IPv6-only flag on IPv4 sockets.
+    flags &= ~UV_TCP_IPV6ONLY;
+#endif
+  }
   sockaddr_in addr{};
   int rc = uv_ip4_addr(host.c_str(), port, &addr);
   if (rc != 0) return MakeInt32(env, rc);
-  rc = uv_tcp_bind(&wrap->handle, reinterpret_cast<const sockaddr*>(&addr), 0);
+  rc = uv_tcp_bind(&wrap->handle, reinterpret_cast<const sockaddr*>(&addr), flags);
   return MakeInt32(env, rc);
 }
 
@@ -963,16 +973,8 @@ void UbiInstallTcpWrapBinding(napi_env env) {
   napi_create_object(env, &constants);
   SetNamedU32(env, constants, "SOCKET", kTcpSocket);
   SetNamedU32(env, constants, "SERVER", kTcpServer);
-#ifdef UV_TCP_IPV6ONLY
-  SetNamedU32(env, constants, "UV_TCP_IPV6ONLY", UV_TCP_IPV6ONLY);
-#else
-  SetNamedU32(env, constants, "UV_TCP_IPV6ONLY", 0);
-#endif
-#ifdef UV_TCP_REUSEPORT
-  SetNamedU32(env, constants, "UV_TCP_REUSEPORT", UV_TCP_REUSEPORT);
-#else
-  SetNamedU32(env, constants, "UV_TCP_REUSEPORT", 0);
-#endif
+  SetNamedU32(env, constants, "UV_TCP_IPV6ONLY", static_cast<uint32_t>(UV_TCP_IPV6ONLY));
+  SetNamedU32(env, constants, "UV_TCP_REUSEPORT", static_cast<uint32_t>(UV_TCP_REUSEPORT));
 
   napi_set_named_property(env, binding, "TCP", tcp_ctor);
   napi_set_named_property(env, binding, "TCPConnectWrap", connect_wrap_ctor);

@@ -1,9 +1,12 @@
 #include "unofficial_napi.h"
 
+#include <ctime>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
+#include <unordered_map>
 
 #include <libplatform/libplatform.h>
 
@@ -38,6 +41,8 @@ struct UnofficialEnvScope {
 
 std::mutex g_runtime_mu;
 SharedRuntime g_runtime;
+std::unordered_map<v8::Isolate*, napi_env> g_env_by_isolate;
+std::unordered_map<v8::Isolate*, v8::Global<v8::Function>> g_promise_reject_callbacks;
 
 void ApplyDefaultV8Flags() {
   static constexpr char kDefaultFlags[] = "--js-float16array";
@@ -85,6 +90,63 @@ void ReleaseRuntime() {
   // repeated Dispose/Initialize instability in embedded setups.
 }
 
+void PromiseRejectCallback(v8::PromiseRejectMessage message) {
+  v8::Local<v8::Promise> promise = message.GetPromise();
+  if (promise.IsEmpty()) return;
+
+  v8::Isolate* isolate = promise->GetIsolate();
+  napi_env env = nullptr;
+  v8::Local<v8::Function> callback;
+  {
+    std::lock_guard<std::mutex> lock(g_runtime_mu);
+    const auto env_it = g_env_by_isolate.find(isolate);
+    if (env_it == g_env_by_isolate.end() || env_it->second == nullptr) return;
+    env = env_it->second;
+    const auto cb_it = g_promise_reject_callbacks.find(isolate);
+    if (cb_it == g_promise_reject_callbacks.end() || cb_it->second.IsEmpty()) return;
+    callback = cb_it->second.Get(isolate);
+  }
+  if (env == nullptr || callback.IsEmpty()) return;
+
+  v8::PromiseRejectEvent event = message.GetEvent();
+  v8::Local<v8::Value> value;
+  switch (event) {
+    case v8::kPromiseRejectWithNoHandler:
+    case v8::kPromiseResolveAfterResolved:
+    case v8::kPromiseRejectAfterResolved:
+      value = message.GetValue();
+      if (value.IsEmpty()) value = v8::Undefined(isolate);
+      break;
+    case v8::kPromiseHandlerAddedAfterReject:
+      value = v8::Undefined(isolate);
+      break;
+    default:
+      return;
+  }
+
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context = env->context();
+  v8::Context::Scope context_scope(context);
+  v8::TryCatch tc(isolate);
+  v8::Local<v8::Value> args[] = {
+      v8::Integer::New(isolate, static_cast<int>(event)),
+      promise,
+      value};
+  (void)callback->Call(context, v8::Undefined(isolate), 3, args);
+  if (tc.HasCaught() && !tc.HasTerminated()) {
+    // Match Node behavior: V8 expects this callback to return without a pending
+    // exception. Print a best-effort diagnostic instead of scheduling it.
+    std::fprintf(stderr, "Exception in PromiseRejectCallback:\n");
+    v8::Local<v8::Value> caught = tc.Exception();
+    v8::String::Utf8Value text(isolate, caught);
+    if (*text != nullptr) {
+      std::fprintf(stderr, "%s\n", *text);
+    } else {
+      std::fprintf(stderr, "<exception>\n");
+    }
+  }
+}
+
 }  // namespace
 
 extern "C" {
@@ -92,14 +154,34 @@ extern "C" {
 napi_status NAPI_CDECL unofficial_napi_create_env_from_context(
     v8::Local<v8::Context> context, int32_t module_api_version, napi_env* result) {
   if (result == nullptr || context.IsEmpty()) return napi_invalid_arg;
+  context->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
   auto* env = new (std::nothrow) napi_env__(context, module_api_version);
   if (env == nullptr) return napi_generic_failure;
+  {
+    std::lock_guard<std::mutex> lock(g_runtime_mu);
+    g_env_by_isolate[env->isolate] = env;
+  }
   *result = env;
   return napi_ok;
 }
 
 napi_status NAPI_CDECL unofficial_napi_destroy_env_instance(napi_env env) {
   if (env == nullptr) return napi_invalid_arg;
+  {
+    std::lock_guard<std::mutex> lock(g_runtime_mu);
+    auto env_it = g_env_by_isolate.find(env->isolate);
+    if (env_it != g_env_by_isolate.end() && env_it->second == env) {
+      g_env_by_isolate.erase(env_it);
+    }
+    auto cb_it = g_promise_reject_callbacks.find(env->isolate);
+    if (cb_it != g_promise_reject_callbacks.end()) {
+      cb_it->second.Reset();
+      g_promise_reject_callbacks.erase(cb_it);
+    }
+  }
+  if (env->isolate != nullptr) {
+    env->isolate->SetPromiseRejectCallback(nullptr);
+  }
   delete env;
   return napi_ok;
 }
@@ -169,6 +251,42 @@ napi_status NAPI_CDECL unofficial_napi_process_microtasks(napi_env env) {
   // Keep this helper engine-agnostic in behavior: flush microtasks only.
   // Foreground task pumping is owned by higher-level runtime loop policy.
   env->isolate->PerformMicrotaskCheckpoint();
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_enqueue_microtask(napi_env env, napi_value callback) {
+  if (env == nullptr || env->isolate == nullptr || callback == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(callback);
+  if (!raw->IsFunction()) return napi_function_expected;
+  env->context()->GetMicrotaskQueue()->EnqueueMicrotask(env->isolate, raw.As<v8::Function>());
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_set_promise_reject_callback(napi_env env,
+                                                                   napi_value callback) {
+  if (env == nullptr || env->isolate == nullptr || callback == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(callback);
+  if (!raw->IsFunction()) return napi_function_expected;
+  {
+    std::lock_guard<std::mutex> lock(g_runtime_mu);
+    g_env_by_isolate[env->isolate] = env;
+    auto& slot = g_promise_reject_callbacks[env->isolate];
+    slot.Reset();
+    slot.Reset(env->isolate, raw.As<v8::Function>());
+  }
+  env->isolate->SetPromiseRejectCallback(PromiseRejectCallback);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_notify_datetime_configuration_change(napi_env env) {
+  if (env == nullptr || env->isolate == nullptr) return napi_invalid_arg;
+#if defined(__POSIX__)
+  tzset();
+#elif defined(_WIN32)
+  _tzset();
+#endif
+  env->isolate->DateTimeConfigurationChangeNotification(
+      v8::Isolate::TimeZoneDetection::kRedetect);
   return napi_ok;
 }
 

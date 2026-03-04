@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "uv.h"
+#include "unofficial_napi.h"
 
 namespace {
 
@@ -404,6 +405,14 @@ static napi_value TaskQueueEnqueueMicrotask(napi_env env, napi_callback_info inf
   napi_value argv[1] = {nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
 
+#if defined(UBI_BUNDLED_NAPI_V8)
+  if (unofficial_napi_enqueue_microtask(env, argv[0]) == napi_ok) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+#endif
+
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
 
@@ -423,8 +432,7 @@ static napi_value TaskQueueEnqueueMicrotask(napi_env env, napi_callback_info inf
 }
 
 static napi_value TaskQueueRunMicrotasks(napi_env env, napi_callback_info /*info*/) {
-  // V8 performs microtask checkpoints automatically for most turns in ubi.
-  // Keep this as a no-op hook with Node-compatible shape.
+  (void)unofficial_napi_process_microtasks(env);
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
@@ -452,6 +460,9 @@ static napi_value TaskQueueSetPromiseRejectCallback(napi_env env, napi_callback_
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
+#if defined(UBI_BUNDLED_NAPI_V8)
+  (void)unofficial_napi_set_promise_reject_callback(env, argv[0]);
+#endif
   auto& st = g_task_queue_states[env];
   if (st.promise_reject_callback_ref != nullptr) {
     napi_delete_reference(env, st.promise_reject_callback_ref);
@@ -841,19 +852,23 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
     if (fs_binding != undefined) {
       napi_value fs_constants_obj = nullptr;
       if (napi_create_object(env, &fs_constants_obj) == napi_ok && fs_constants_obj != nullptr) {
-        auto copy_key = [&](const char* key) {
-          bool has_prop = false;
-          if (napi_has_named_property(env, fs_binding, key, &has_prop) == napi_ok && has_prop) {
-            napi_value v = nullptr;
-            if (napi_get_named_property(env, fs_binding, key, &v) == napi_ok && v != nullptr) {
-              napi_set_named_property(env, fs_constants_obj, key, v);
+        napi_value keys = nullptr;
+        if (napi_get_property_names(env, fs_binding, &keys) == napi_ok && keys != nullptr) {
+          uint32_t key_count = 0;
+          if (napi_get_array_length(env, keys, &key_count) == napi_ok) {
+            for (uint32_t i = 0; i < key_count; i++) {
+              napi_value key = nullptr;
+              if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) continue;
+              napi_value value = nullptr;
+              if (napi_get_property(env, fs_binding, key, &value) != napi_ok || value == nullptr) continue;
+              napi_valuetype t = napi_undefined;
+              if (napi_typeof(env, value, &t) != napi_ok) continue;
+              if (t == napi_number) {
+                napi_set_property(env, fs_constants_obj, key, value);
+              }
             }
           }
-        };
-        copy_key("F_OK");
-        copy_key("R_OK");
-        copy_key("W_OK");
-        copy_key("X_OK");
+        }
         napi_set_named_property(env, out, "fs", fs_constants_obj);
       }
     }
@@ -1653,4 +1668,41 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path) 
     return napi_generic_failure;
   }
   return napi_ok;
+}
+
+napi_status UbiRunTaskQueueTickCallback(napi_env env, bool* called) {
+  if (called != nullptr) {
+    *called = false;
+  }
+  if (env == nullptr) {
+    return napi_invalid_arg;
+  }
+  auto it = g_task_queue_states.find(env);
+  if (it == g_task_queue_states.end() || it->second.tick_callback_ref == nullptr) {
+    return napi_ok;
+  }
+
+  napi_value tick_cb = nullptr;
+  napi_status status = napi_get_reference_value(env, it->second.tick_callback_ref, &tick_cb);
+  if (status != napi_ok || tick_cb == nullptr) {
+    return status == napi_ok ? napi_generic_failure : status;
+  }
+
+  napi_value global = nullptr;
+  status = napi_get_global(env, &global);
+  if (status != napi_ok || global == nullptr) {
+    return status == napi_ok ? napi_generic_failure : status;
+  }
+
+  napi_value process = nullptr;
+  if (napi_get_named_property(env, global, "process", &process) != napi_ok || process == nullptr) {
+    process = global;
+  }
+
+  napi_value ignored = nullptr;
+  status = napi_call_function(env, process, tick_cb, 0, nullptr, &ignored);
+  if (status == napi_ok && called != nullptr) {
+    *called = true;
+  }
+  return status;
 }

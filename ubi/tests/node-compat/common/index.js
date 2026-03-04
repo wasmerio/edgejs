@@ -3,6 +3,8 @@
 const assert = require('assert');
 const childProcess = require('child_process');
 const fs = require('fs');
+const path = require('path');
+const tmpdir = require('./tmpdir');
 try { require('internal/event_target'); } catch {}
 const processRef = globalThis.process;
 if (processRef && typeof processRef.getgroups !== 'function') {
@@ -132,9 +134,12 @@ const localhostIPv6 = '::1';
 const pwdCommand = isWindows ?
   ['cmd.exe', ['/d', '/c', 'cd']] :
   ['pwd', []];
-const PIPE = isWindows ?
-  `\\\\.\\pipe\\node-napi-test-${process.pid}` :
-  (20000 + (process.pid % 20000));
+const PIPE = (() => {
+  const localRelative = path.relative(process.cwd(), `${tmpdir.path}/`);
+  const pipePrefix = isWindows ? '\\\\.\\pipe\\' : localRelative;
+  const pipeName = `node-test.${process.pid}.sock`;
+  return path.join(pipePrefix, pipeName);
+})();
 const hasCrypto = Boolean(process?.versions?.openssl) &&
   !process?.env?.NODE_SKIP_CRYPTO;
 

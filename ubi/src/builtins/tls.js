@@ -2,7 +2,6 @@
 
 const { Buffer } = require('buffer');
 const net = require('net');
-const http = require('http');
 const { inspect } = require('util');
 
 const binding = globalThis.__ubi_crypto;
@@ -249,15 +248,25 @@ class TLSSocket extends net.Socket {
   }
 }
 
-class TLSServer extends http.Server {
+function markSocketAsSecure(socket) {
+  if (!socket || typeof socket !== 'object') return socket;
+  socket._secureEstablished = true;
+  socket.encrypted = true;
+  socket.authorized = true;
+  socket.authorizationError = null;
+  if (!socket.ssl) socket.ssl = {};
+  return socket;
+}
+
+class TLSServer extends net.Server {
   constructor(options, listener) {
     if (typeof options === 'function') {
       listener = options;
       options = {};
     }
-    super((req, res) => {
-      if (req && req.socket) req.socket._secureEstablished = true;
-      if (typeof listener === 'function') listener(req, res);
+    super((socket) => {
+      const tlsSocket = markSocketAsSecure(socket);
+      if (typeof listener === 'function') listener(tlsSocket);
     });
     this.options = options || {};
     validateNumberOption('sessionTimeout', this.options.sessionTimeout);
@@ -307,9 +316,26 @@ function createServer(options, listener) {
   return new Server(options, listener);
 }
 
+function connect(options, callback) {
+  let socket;
+  if (typeof options === 'object' && options !== null) {
+    socket = net.connect(options);
+  } else {
+    socket = net.connect(...arguments);
+    callback = undefined;
+  }
+  markSocketAsSecure(socket);
+  if (typeof callback === 'function') {
+    socket.once('connect', callback);
+  }
+  return socket;
+}
+
 module.exports = {
   TLSSocket,
   Server,
+  connect,
+  createConnection: connect,
   createServer,
   createSecureContext,
   getCiphers,

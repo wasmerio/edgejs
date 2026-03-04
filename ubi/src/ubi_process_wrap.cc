@@ -236,7 +236,14 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
   if (wrap->alive) return MakeInt32(env, UV_EINVAL);
   if (argc < 1 || argv[0] == nullptr) return MakeInt32(env, UV_EINVAL);
 
-  bool use_real_async = IsTruthyProperty(env, argv[0], "__ubiRealAsync");
+  bool use_real_async = true;
+  napi_value real_async_value = nullptr;
+  if (GetNamedValue(env, argv[0], "__ubiRealAsync", &real_async_value) && real_async_value != nullptr) {
+    bool parsed = true;
+    if (napi_get_value_bool(env, real_async_value, &parsed) == napi_ok) {
+      use_real_async = parsed;
+    }
+  }
   if (!use_real_async) {
     wrap->real_async = false;
     wrap->pid = ++g_next_pid;
@@ -399,25 +406,8 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
               if (type == "wrap") {
                 entry.flags = UV_INHERIT_STREAM;
               } else {
-                bool readable = (i == 0);
-                bool writable = (i != 0);
-                napi_value readable_value = nullptr;
-                if (GetNamedValue(env, item, "readable", &readable_value) && readable_value != nullptr) {
-                  bool b = false;
-                  if (napi_get_value_bool(env, readable_value, &b) == napi_ok) readable = b;
-                }
-                napi_value writable_value = nullptr;
-                if (GetNamedValue(env, item, "writable", &writable_value) && writable_value != nullptr) {
-                  bool b = false;
-                  if (napi_get_value_bool(env, writable_value, &b) == napi_ok) writable = b;
-                }
-                uv_stdio_flags f = UV_CREATE_PIPE;
-                if (readable) f = static_cast<uv_stdio_flags>(f | UV_READABLE_PIPE);
-                if (writable) f = static_cast<uv_stdio_flags>(f | UV_WRITABLE_PIPE);
-                bool is_ipc = IsTruthyProperty(env, item, "ipc");
-                if (is_ipc) {
-                  f = static_cast<uv_stdio_flags>(f | UV_READABLE_PIPE | UV_WRITABLE_PIPE);
-                }
+                uv_stdio_flags f =
+                    static_cast<uv_stdio_flags>(UV_CREATE_PIPE | UV_READABLE_PIPE | UV_WRITABLE_PIPE);
                 if (type == "overlapped") {
                   f = static_cast<uv_stdio_flags>(f | UV_OVERLAPPED_PIPE);
                 }

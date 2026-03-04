@@ -198,8 +198,6 @@ if (!globalThis.__ubi_private_accessors_installed) {
   install(kDecoratedPrivate, false);
 }
 
-let watchdogDepth = 0;
-let watchdogPending = false;
 let timersImmediateCallback = null;
 let timersProcessTimersCallback = null;
 let timersBootstrapDone = false;
@@ -207,12 +205,6 @@ let timersScheduledHandle = null;
 let timersImmediateHandle = null;
 let timerRefEnabled = true;
 let immediateRefEnabled = true;
-if (!globalThis.__ubi_sigint_watchdog_listener_installed && typeof process?.on === 'function') {
-  globalThis.__ubi_sigint_watchdog_listener_installed = true;
-  process.on('SIGINT', () => {
-    if (watchdogDepth > 0) watchdogPending = true;
-  });
-}
 
 function getNativeTimerPrimitives() {
   return {
@@ -616,6 +608,21 @@ function internalBinding(name) {
     }
     if (binding.UV_UNKNOWN === undefined) binding.UV_UNKNOWN = -4094;
     if (binding.UV_EAI_MEMORY === undefined) binding.UV_EAI_MEMORY = -3001;
+  }
+  if (key === 'errors') {
+    if (!binding || typeof binding !== 'object') {
+      binding = {};
+    }
+    if (typeof binding.getErrorSourcePositions !== 'function') {
+      binding.getErrorSourcePositions = function getErrorSourcePositions() {
+        return {
+          sourceLine: '',
+          scriptResourceName: '',
+          lineNumber: 0,
+          startColumn: 0,
+        };
+      };
+    }
   }
 
   kInternalBindingCache.set(key, binding);

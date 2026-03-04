@@ -12,6 +12,8 @@
 
 #include <uv.h>
 
+#include "ubi_runtime.h"
+
 namespace {
 
 constexpr int kDnsOrderVerbatim = 0;
@@ -37,11 +39,24 @@ struct ChannelWrap {
   std::vector<std::pair<std::string, int>> servers;
   std::string local_ipv4;
   std::string local_ipv6;
-  bool query_in_flight = false;
+  int32_t timeout = -1;
+  int32_t tries = 4;
+  int32_t max_timeout = 0;
 };
 
 std::unordered_map<napi_env, std::unordered_set<CaresReqWrap*>> g_pending_reqs_by_env;
 std::unordered_set<napi_env> g_cleanup_hook_registered;
+std::unordered_map<napi_env, napi_ref> g_dns_fallback_module_refs;
+void OnCaresEnvCleanup(void* arg);
+
+void EnsureCaresCleanupHook(napi_env env) {
+  if (env == nullptr) return;
+  auto [it, inserted] = g_cleanup_hook_registered.emplace(env);
+  if (!inserted) return;
+  if (napi_add_env_cleanup_hook(env, OnCaresEnvCleanup, env) != napi_ok) {
+    g_cleanup_hook_registered.erase(it);
+  }
+}
 
 void UntrackPendingReq(CaresReqWrap* req) {
   if (req == nullptr || req->env == nullptr) return;
@@ -64,6 +79,13 @@ void OnCaresEnvCleanup(void* arg) {
   napi_env env = static_cast<napi_env>(arg);
   auto it = g_pending_reqs_by_env.find(env);
   if (it == g_pending_reqs_by_env.end()) {
+    auto module_it = g_dns_fallback_module_refs.find(env);
+    if (module_it != g_dns_fallback_module_refs.end()) {
+      if (module_it->second != nullptr) {
+        napi_delete_reference(env, module_it->second);
+      }
+      g_dns_fallback_module_refs.erase(module_it);
+    }
     g_cleanup_hook_registered.erase(env);
     return;
   }
@@ -87,17 +109,19 @@ void OnCaresEnvCleanup(void* arg) {
   }
 
   g_pending_reqs_by_env.erase(it);
+  auto module_it = g_dns_fallback_module_refs.find(env);
+  if (module_it != g_dns_fallback_module_refs.end()) {
+    if (module_it->second != nullptr) {
+      napi_delete_reference(env, module_it->second);
+    }
+    g_dns_fallback_module_refs.erase(module_it);
+  }
   g_cleanup_hook_registered.erase(env);
 }
 
 void TrackPendingReq(napi_env env, CaresReqWrap* req) {
   if (env == nullptr || req == nullptr) return;
-  auto [it, inserted] = g_cleanup_hook_registered.emplace(env);
-  if (inserted) {
-    if (napi_add_env_cleanup_hook(env, OnCaresEnvCleanup, env) != napi_ok) {
-      g_cleanup_hook_registered.erase(it);
-    }
-  }
+  EnsureCaresCleanupHook(env);
   g_pending_reqs_by_env[env].insert(req);
 }
 
@@ -167,10 +191,21 @@ napi_value ReqCtor(napi_env env, napi_callback_info info) {
 
 napi_value ChannelCtor(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
-  size_t argc = 0;
-  napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, &self, nullptr);
   auto* ch = new ChannelWrap();
   ch->servers.emplace_back("127.0.0.1", 53);
+  if (argc >= 1 && argv[0] != nullptr) {
+    (void)napi_get_value_int32(env, argv[0], &ch->timeout);
+  }
+  if (argc >= 2 && argv[1] != nullptr) {
+    (void)napi_get_value_int32(env, argv[1], &ch->tries);
+  }
+  if (argc >= 3 && argv[2] != nullptr) {
+    (void)napi_get_value_int32(env, argv[2], &ch->max_timeout);
+  }
+  EnsureCaresCleanupHook(env);
   napi_wrap(env, self, ch, ChannelFinalize, nullptr, &ch->wrapper_ref);
   return self;
 }
@@ -183,7 +218,7 @@ void InvokeOnComplete(napi_env env, napi_value req_obj, size_t argc, napi_value*
   napi_typeof(env, oncomplete, &t);
   if (t != napi_function) return;
   napi_value ignored = nullptr;
-  napi_call_function(env, req_obj, oncomplete, argc, argv, &ignored);
+  UbiMakeCallback(env, req_obj, oncomplete, argc, argv, &ignored);
 }
 
 void OnGetAddrInfo(uv_getaddrinfo_t* req, int status, struct addrinfo* res) {
@@ -430,13 +465,93 @@ napi_value CaresStrError(napi_env env, napi_callback_info info) {
   return out;
 }
 
+bool GetDnsFallbackModule(napi_env env, napi_value* module_out) {
+  if (module_out == nullptr) return false;
+  *module_out = nullptr;
+  EnsureCaresCleanupHook(env);
+
+  auto it = g_dns_fallback_module_refs.find(env);
+  if (it != g_dns_fallback_module_refs.end() && it->second != nullptr) {
+    if (napi_get_reference_value(env, it->second, module_out) == napi_ok && *module_out != nullptr) {
+      return true;
+    }
+  }
+
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
+
+  napi_value require_fn = nullptr;
+  if (napi_get_named_property(env, global, "__ubi_bootstrap_require", &require_fn) != napi_ok ||
+      require_fn == nullptr) {
+    if (napi_get_named_property(env, global, "require", &require_fn) != napi_ok || require_fn == nullptr) {
+      return false;
+    }
+  }
+  napi_valuetype require_type = napi_undefined;
+  if (napi_typeof(env, require_fn, &require_type) != napi_ok || require_type != napi_function) return false;
+
+  napi_value specifier = nullptr;
+  napi_create_string_utf8(env, "internal/dns/fallback_resolver", NAPI_AUTO_LENGTH, &specifier);
+  napi_value argv[1] = {specifier};
+  napi_value module = nullptr;
+  if (napi_call_function(env, global, require_fn, 1, argv, &module) != napi_ok || module == nullptr) {
+    bool has_pending = false;
+    if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+      napi_value ignored = nullptr;
+      (void)napi_get_and_clear_last_exception(env, &ignored);
+    }
+    return false;
+  }
+
+  napi_ref module_ref = nullptr;
+  if (napi_create_reference(env, module, 1, &module_ref) != napi_ok || module_ref == nullptr) return false;
+  auto old_it = g_dns_fallback_module_refs.find(env);
+  if (old_it != g_dns_fallback_module_refs.end() && old_it->second != nullptr) {
+    napi_delete_reference(env, old_it->second);
+  }
+  g_dns_fallback_module_refs[env] = module_ref;
+  *module_out = module;
+  return true;
+}
+
+bool HasPendingFallbackQueries(napi_env env, napi_value self) {
+  napi_value module = nullptr;
+  if (!GetDnsFallbackModule(env, &module) || module == nullptr) return false;
+  napi_value method = nullptr;
+  if (napi_get_named_property(env, module, "hasNativeQueries", &method) != napi_ok || method == nullptr) {
+    return false;
+  }
+  napi_valuetype method_type = napi_undefined;
+  if (napi_typeof(env, method, &method_type) != napi_ok || method_type != napi_function) return false;
+  napi_value argv[1] = {self};
+  napi_value result = nullptr;
+  if (napi_call_function(env, module, method, 1, argv, &result) != napi_ok || result == nullptr) return false;
+  bool has_pending = false;
+  (void)napi_get_value_bool(env, result, &has_pending);
+  return has_pending;
+}
+
+void CancelFallbackQueries(napi_env env, napi_value self) {
+  napi_value module = nullptr;
+  if (!GetDnsFallbackModule(env, &module) || module == nullptr) return;
+  napi_value method = nullptr;
+  if (napi_get_named_property(env, module, "cancelNativeQueries", &method) != napi_ok || method == nullptr) return;
+  napi_valuetype method_type = napi_undefined;
+  if (napi_typeof(env, method, &method_type) != napi_ok || method_type != napi_function) return;
+  napi_value argv[1] = {self};
+  napi_value ignored = nullptr;
+  (void)napi_call_function(env, module, method, 1, argv, &ignored);
+}
+
+struct QueryMethodData {
+  const char* binding_name;
+};
+
 napi_value ChannelCancel(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
   size_t argc = 0;
   napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
-  ChannelWrap* ch = nullptr;
-  napi_unwrap(env, self, reinterpret_cast<void**>(&ch));
-  if (ch != nullptr) ch->query_in_flight = false;
+  CancelFallbackQueries(env, self);
   napi_value u = nullptr;
   napi_get_undefined(env, &u);
   return u;
@@ -474,7 +589,7 @@ napi_value ChannelSetServers(napi_env env, napi_callback_info info) {
   ChannelWrap* ch = nullptr;
   napi_unwrap(env, self, reinterpret_cast<void**>(&ch));
   if (ch == nullptr || argc < 1) return MakeInt32(env, UV_EINVAL);
-  if (ch->query_in_flight) return MakeInt32(env, 1);
+  if (HasPendingFallbackQueries(env, self)) return MakeInt32(env, 1);
   ch->servers.clear();
   uint32_t n = 0;
   napi_get_array_length(env, argv[0], &n);
@@ -559,34 +674,75 @@ napi_value ChannelSetLocalAddress(napi_env env, napi_callback_info info) {
   return u;
 }
 
-napi_value ChannelQueryUnsupported(napi_env env, napi_callback_info info) {
+napi_value ChannelQueryViaNativeFallback(napi_env env, napi_callback_info info) {
   size_t argc = 2;
-  napi_value argv[2] = {nullptr};
+  napi_value argv[2] = {nullptr, nullptr};
   napi_value self = nullptr;
-  napi_get_cb_info(env, info, &argc, argv, &self, nullptr);
+  void* callback_data = nullptr;
+  napi_get_cb_info(env, info, &argc, argv, &self, &callback_data);
+  if (argc < 2 || argv[0] == nullptr || argv[1] == nullptr) return MakeInt32(env, UV_EINVAL);
+
   ChannelWrap* ch = nullptr;
   napi_unwrap(env, self, reinterpret_cast<void**>(&ch));
-  if (ch != nullptr) ch->query_in_flight = true;
-  if (argc > 0) {
-    napi_value req = argv[0];
-    // Node DNS tests expect unsupported/raw resolution failures to surface as
-    // ENOTFOUND rather than ENOSYS.
-    napi_value status = MakeInt32(env, UV_EAI_NONAME);
-    napi_value arr = nullptr;
-    napi_create_array_with_length(env, 0, &arr);
-    napi_value oncomplete = nullptr;
-    if (napi_get_named_property(env, req, "oncomplete", &oncomplete) == napi_ok && oncomplete != nullptr) {
-      napi_valuetype t = napi_undefined;
-      napi_typeof(env, oncomplete, &t);
-      if (t == napi_function) {
-        napi_value args[3] = {status, arr, nullptr};
-        napi_get_undefined(env, &args[2]);
-        napi_value ignored = nullptr;
-        napi_call_function(env, req, oncomplete, 3, args, &ignored);
-      }
-    }
+  if (ch == nullptr) return MakeInt32(env, UV_EINVAL);
+
+  const auto* method_data = static_cast<const QueryMethodData*>(callback_data);
+  if (method_data == nullptr || method_data->binding_name == nullptr) return MakeInt32(env, UV_EINVAL);
+
+  napi_value module = nullptr;
+  if (!GetDnsFallbackModule(env, &module) || module == nullptr) return MakeInt32(env, UV_ENOSYS);
+  napi_value start_query_fn = nullptr;
+  if (napi_get_named_property(env, module, "startNativeQuery", &start_query_fn) != napi_ok ||
+      start_query_fn == nullptr) {
+    return MakeInt32(env, UV_ENOSYS);
   }
-  return MakeInt32(env, 0);
+  napi_valuetype fn_type = napi_undefined;
+  if (napi_typeof(env, start_query_fn, &fn_type) != napi_ok || fn_type != napi_function) {
+    return MakeInt32(env, UV_ENOSYS);
+  }
+
+  bool ttl = false;
+  napi_value ttl_value = nullptr;
+  if (napi_get_named_property(env, argv[0], "ttl", &ttl_value) == napi_ok && ttl_value != nullptr) {
+    (void)napi_get_value_bool(env, ttl_value, &ttl);
+  }
+  const std::string hostname = ValueToUtf8(env, argv[1]);
+
+  napi_value binding_name = nullptr;
+  napi_value hostname_value = nullptr;
+  napi_value ttl_value_arg = nullptr;
+  napi_value timeout_value = nullptr;
+  napi_value tries_value = nullptr;
+  napi_value max_timeout_value = nullptr;
+  napi_create_string_utf8(env, method_data->binding_name, NAPI_AUTO_LENGTH, &binding_name);
+  napi_create_string_utf8(env, hostname.c_str(), hostname.size(), &hostname_value);
+  napi_get_boolean(env, ttl, &ttl_value_arg);
+  napi_create_int32(env, ch->timeout, &timeout_value);
+  napi_create_int32(env, ch->tries, &tries_value);
+  napi_create_int32(env, ch->max_timeout, &max_timeout_value);
+
+  napi_value call_argv[8] = {
+      self,
+      argv[0],
+      binding_name,
+      hostname_value,
+      ttl_value_arg,
+      timeout_value,
+      tries_value,
+      max_timeout_value,
+  };
+  napi_value call_result = nullptr;
+  if (napi_call_function(env, module, start_query_fn, 8, call_argv, &call_result) != napi_ok || call_result == nullptr) {
+    bool has_pending = false;
+    if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+      napi_value ignored = nullptr;
+      (void)napi_get_and_clear_last_exception(env, &ignored);
+    }
+    return MakeInt32(env, UV_EINVAL);
+  }
+  int32_t status = 0;
+  if (napi_get_value_int32(env, call_result, &status) != napi_ok) status = 0;
+  return MakeInt32(env, status);
 }
 
 void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback cb) {
@@ -601,6 +757,21 @@ void SetNamedU32(napi_env env, napi_value obj, const char* name, uint32_t value)
   napi_create_uint32(env, value, &v);
   if (v) napi_set_named_property(env, obj, name, v);
 }
+
+constexpr QueryMethodData kQueryAnyMethod{"queryAny"};
+constexpr QueryMethodData kQueryAMethod{"queryA"};
+constexpr QueryMethodData kQueryAaaaMethod{"queryAaaa"};
+constexpr QueryMethodData kQueryCaaMethod{"queryCaa"};
+constexpr QueryMethodData kQueryCnameMethod{"queryCname"};
+constexpr QueryMethodData kQueryMxMethod{"queryMx"};
+constexpr QueryMethodData kQueryNsMethod{"queryNs"};
+constexpr QueryMethodData kQueryTlsaMethod{"queryTlsa"};
+constexpr QueryMethodData kQueryTxtMethod{"queryTxt"};
+constexpr QueryMethodData kQuerySrvMethod{"querySrv"};
+constexpr QueryMethodData kQueryPtrMethod{"queryPtr"};
+constexpr QueryMethodData kQueryNaptrMethod{"queryNaptr"};
+constexpr QueryMethodData kQuerySoaMethod{"querySoa"};
+constexpr QueryMethodData kGetHostByAddrMethod{"getHostByAddr"};
 
 }  // namespace
 
@@ -620,20 +791,20 @@ void UbiInstallCaresWrapBinding(napi_env env) {
       {"getServers", nullptr, ChannelGetServers, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
       {"setServers", nullptr, ChannelSetServers, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
       {"setLocalAddress", nullptr, ChannelSetLocalAddress, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryAny", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryA", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryAaaa", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryCaa", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryCname", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryMx", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryNs", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryTlsa", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryTxt", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"querySrv", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryPtr", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"queryNaptr", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"querySoa", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
-      {"getHostByAddr", nullptr, ChannelQueryUnsupported, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
+      {"queryAny", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryAnyMethod)},
+      {"queryA", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryAMethod)},
+      {"queryAaaa", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryAaaaMethod)},
+      {"queryCaa", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryCaaMethod)},
+      {"queryCname", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryCnameMethod)},
+      {"queryMx", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryMxMethod)},
+      {"queryNs", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryNsMethod)},
+      {"queryTlsa", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryTlsaMethod)},
+      {"queryTxt", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryTxtMethod)},
+      {"querySrv", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQuerySrvMethod)},
+      {"queryPtr", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryPtrMethod)},
+      {"queryNaptr", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQueryNaptrMethod)},
+      {"querySoa", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kQuerySoaMethod)},
+      {"getHostByAddr", nullptr, ChannelQueryViaNativeFallback, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), const_cast<QueryMethodData*>(&kGetHostByAddrMethod)},
   };
   napi_value channel_ctor = nullptr;
   if (napi_define_class(env,

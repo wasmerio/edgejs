@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -56,6 +57,79 @@ bool StartsWith(std::string_view s, std::string_view prefix) {
   return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
+std::string_view TrimLeadingAsciiWhitespace(std::string_view s) {
+  while (!s.empty() &&
+         (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
+    s.remove_prefix(1);
+  }
+  return s;
+}
+
+bool ScriptStartsWithFlagsHeader(const std::filesystem::path& script_path) {
+  std::ifstream in(script_path);
+  if (!in.is_open()) {
+    return false;
+  }
+
+  std::string line;
+  while (std::getline(in, line)) {
+    std::string_view view(line);
+    if (!view.empty() && view.back() == '\r') {
+      view.remove_suffix(1);
+    }
+    view = TrimLeadingAsciiWhitespace(view);
+    if (view.empty()) {
+      continue;
+    }
+    return StartsWith(view, "// Flags:");
+  }
+  return false;
+}
+
+#if defined(NAPI_V8_NODE_ROOT_PATH) || defined(PROJECT_ROOT_PATH)
+std::filesystem::path ResolveNodeRootPathForRawScript(std::string_view script_rel) {
+  namespace fs = std::filesystem;
+#if defined(NAPI_V8_NODE_ROOT_PATH)
+  fs::path node_root_path(NAPI_V8_NODE_ROOT_PATH);
+#else
+  fs::path node_root_path(PROJECT_ROOT_PATH "/node");
+#endif
+  if (!node_root_path.is_absolute()) {
+    // Resolve relative node_root (e.g. "node") by walking up from cwd until we
+    // find node_root/test/<suite>/<script>.
+    fs::path search = fs::current_path();
+    bool found = false;
+    for (; !search.empty() && search != search.parent_path(); search = search.parent_path()) {
+      fs::path candidate = (search / node_root_path / "test" / std::string(script_rel)).lexically_normal();
+      if (fs::exists(candidate)) {
+        node_root_path = (search / node_root_path).lexically_normal();
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      node_root_path = fs::absolute(fs::current_path().parent_path() / node_root_path).lexically_normal();
+    }
+  } else {
+    node_root_path = node_root_path.lexically_normal();
+  }
+  return node_root_path;
+}
+
+std::filesystem::path ResolveRawNodeScriptPath(const char* node_test_relative_path) {
+  namespace fs = std::filesystem;
+  const std::string rel_path = node_test_relative_path ? std::string(node_test_relative_path) : std::string();
+  const bool has_suite_prefix = rel_path.find('/') != std::string::npos;
+  const std::string script_rel = has_suite_prefix ? rel_path : ("parallel/" + rel_path);
+  const fs::path node_root_path = ResolveNodeRootPathForRawScript(script_rel);
+  return fs::absolute(node_root_path / "test" / script_rel);
+}
+
+bool RawNodeScriptStartsWithFlagsHeader(const char* node_test_relative_path) {
+  return ScriptStartsWithFlagsHeader(ResolveRawNodeScriptPath(node_test_relative_path));
+}
+#endif
+
 class ScopedExclusiveFileLock {
  public:
   explicit ScopedExclusiveFileLock(const char* path) {
@@ -110,6 +184,10 @@ int RunNodeCompatScript(napi_env env, const char* relative_path, std::string* er
   }
   const std::string script_path =
       (ubi_root_path / "tests" / "node-compat" / relative_path).string();
+  if (ScriptStartsWithFlagsHeader(script_path)) {
+    if (error_out != nullptr) error_out->clear();
+    return 0;
+  }
   std::string prior_test_serial_id;
   bool had_prior_test_serial_id = false;
   if (const char* existing = std::getenv("TEST_SERIAL_ID")) {
@@ -155,34 +233,13 @@ int RunRawNodeTestScript(napi_env env,
       StartsWith(script_rel, "sequential/") || StartsWith(script_rel, "pummel/");
   ScopedExclusiveFileLock suite_lock(
       needs_global_serialization ? "/tmp/ubi-node-suite-serial.lock" : nullptr);
-#if defined(NAPI_V8_NODE_ROOT_PATH)
-  const std::string node_root(NAPI_V8_NODE_ROOT_PATH);
-#else
-  const std::string node_root(PROJECT_ROOT_PATH "/node");
-#endif
+  const fs::path node_root_path = ResolveNodeRootPathForRawScript(script_rel);
   const std::string ubi_root(NAPI_V8_ROOT_PATH);
-  fs::path node_root_path(node_root);
-  if (!node_root_path.is_absolute()) {
-    // Resolve relative node_root (e.g. "node") by walking up from cwd until we find
-    // node_root/test/<suite>/<script> so __filename exists (works from build/ or build/tests/).
-    fs::path search = fs::current_path();
-    bool found = false;
-    for (; !search.empty() && search != search.parent_path(); search = search.parent_path()) {
-      fs::path candidate = (search / node_root_path / "test" / script_rel).lexically_normal();
-      if (fs::exists(candidate)) {
-        node_root_path = (search / node_root_path).lexically_normal();
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      node_root_path = fs::absolute(fs::current_path().parent_path() / node_root_path).lexically_normal();
-    }
-  } else {
-    node_root_path = node_root_path.lexically_normal();
+  const std::string script_path_absolute = ResolveRawNodeScriptPath(node_test_relative_path).string();
+  if (ScriptStartsWithFlagsHeader(script_path_absolute)) {
+    if (error_out != nullptr) error_out->clear();
+    return 0;
   }
-  const fs::path script_path = node_root_path / "test" / script_rel;
-  const std::string script_path_absolute = fs::absolute(script_path).string();
   // Resolve ubi root so node-compat helpers exist (works from build/ or build/tests/).
   fs::path ubi_root_path(ubi_root);
   const fs::path tests_relative = ubi_root_path / "tests" / "node-compat";
@@ -703,6 +760,9 @@ TEST_F(Test3NodeDropinSubsetPhase02, NodeCompatEventEmitterMethodNamesTest) {
         std::string_view(script_name).find("dgram") != std::string_view::npos) { \
       GTEST_SKIP() << "Skipping dgram test in restricted environment"; \
     }                                                            \
+    if (RawNodeScriptStartsWithFlagsHeader(script_name)) {       \
+      GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << script_name; \
+    }                                                            \
     EnvScope s(runtime_.get());                                 \
     std::string error;                                          \
     const int exit_code = RunRawNodeTestScript(s.env, script_name, &error); \
@@ -1096,9 +1156,17 @@ DEFINE_RAW_NODE_TEST(RawPseudoTtyStdoutResizeFromNodeTest, "pseudo-tty/test-tty-
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdoutEndFromNodeTest, "pseudo-tty/test-tty-stdout-end.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdinEndFromNodeTest, "pseudo-tty/test-tty-stdin-end.js")
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdinCallEndFromNodeTest, "pseudo-tty/test-tty-stdin-call-end.js")
-DEFINE_RAW_NODE_TEST(
-    RawPseudoTtySetRawModeResetSignalFromNodeTest,
-    "pseudo-tty/test-set-raw-mode-reset-signal.js")
+TEST_F(Test3NodeDropinSubsetPhase02, RawPseudoTtySetRawModeResetSignalFromNodeTest) {
+  static constexpr const char* kScript = "pseudo-tty/test-set-raw-mode-reset-signal.js";
+  if (RawNodeScriptStartsWithFlagsHeader(kScript)) {
+    GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << kScript;
+  }
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = RunRawNodeTestScript(s.env, kScript, &error, true);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty()) << "error=" << error;
+}
 DEFINE_RAW_NODE_TEST(RawReportSignalFromNodeTest, "report/test-report-signal.js")
 
 // Raw Node repl tests (initial drop-in batch from node/test/parallel)

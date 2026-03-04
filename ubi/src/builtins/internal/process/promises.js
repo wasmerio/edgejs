@@ -1,10 +1,4 @@
 'use strict';
 
-function noop() {}
-
-module.exports = {
-  setHasRejectionToWarn: noop,
-  hasRejectionToWarn() { return false; },
-  listenForRejections() {},
-  processPromiseRejections() { return false; },
-};
+const path = require('path');
+module.exports = require(path.resolve(__dirname, '../../../../../node-lib/internal/process/promises.js'));

@@ -7,6 +7,8 @@
 
 #include <uv.h>
 
+#include "ubi_runtime.h"
+
 namespace {
 
 struct TimersHostState {
@@ -141,7 +143,7 @@ bool CallImmediateCallback() {
   napi_value global = nullptr;
   napi_get_global(st.env, &global);
   napi_value ignored = nullptr;
-  const napi_status status = napi_call_function(st.env, global, cb, 0, nullptr, &ignored);
+  const napi_status status = UbiMakeCallback(st.env, global, cb, 0, nullptr, &ignored);
   if (status != napi_ok) {
     DebugLog("CallImmediateCallback JS error (status=%d), stopping loop turn", static_cast<int>(status));
     StopLoopOnJsError();
@@ -203,7 +205,7 @@ double CallTimersCallback(double now) {
   napi_value global = nullptr;
   napi_get_global(st.env, &global);
   napi_value result = nullptr;
-  const napi_status call_status = napi_call_function(st.env, global, cb, 1, &now_value, &result);
+  const napi_status call_status = UbiMakeCallback(st.env, global, cb, 1, &now_value, &result);
   if (call_status != napi_ok || result == nullptr) {
     DebugLog("CallTimersCallback JS error (status=%d), stopping loop turn", static_cast<int>(call_status));
     StopLoopOnJsError();

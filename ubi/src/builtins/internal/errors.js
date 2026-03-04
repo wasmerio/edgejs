@@ -36,88 +36,170 @@ class ERR_USE_AFTER_CLOSE extends Error {
   }
 }
 
+class ERR_AMBIGUOUS_ARGUMENT extends TypeError {
+  constructor(name, reason) {
+    super(`The "${name}" argument is ambiguous. ${reason}`);
+    this.code = 'ERR_AMBIGUOUS_ARGUMENT';
+  }
+}
+
+class ERR_CONSTRUCT_CALL_REQUIRED extends TypeError {
+  constructor(name) {
+    super(`Class constructor ${name} cannot be invoked without \`new\``);
+    this.code = 'ERR_CONSTRUCT_CALL_REQUIRED';
+  }
+}
+
+class ERR_INTERNAL_ASSERTION extends Error {
+  constructor(message = undefined) {
+    const suffix = 'This is caused by either a bug in Node.js ' +
+      'or incorrect usage of Node.js internals.\n' +
+      'Please open an issue with this stack trace at ' +
+      'https://github.com/nodejs/node/issues\n';
+    super(message === undefined ? suffix : `${message}\n${suffix}`);
+    this.code = 'ERR_INTERNAL_ASSERTION';
+  }
+}
+
+class ERR_UNAVAILABLE_DURING_EXIT extends Error {
+  constructor() {
+    super('Cannot call function in process exit handler');
+    this.code = 'ERR_UNAVAILABLE_DURING_EXIT';
+  }
+}
+
 class ERR_INVALID_ARG_TYPE extends TypeError {
   constructor(name, expected, actual) {
-    function formatName(n) {
-      const s = String(n);
-      if (s.includes('.')) return `The "${s}" property`;
-      if (s.endsWith(' argument')) return `The ${s}`;
-      return `The "${s}" argument`;
-    }
-    function formatExpected(exp) {
-      function joinWithOr(parts) {
-        if (parts.length <= 1) return parts[0] || '';
-        if (parts.length === 2) return `${parts[0]} or ${parts[1]}`;
-        return `${parts.slice(0, -1).join(', ')}, or ${parts[parts.length - 1]}`;
+    function formatList(array, type = 'and') {
+      switch (array.length) {
+        case 0:
+          return '';
+        case 1:
+          return `${array[0]}`;
+        case 2:
+          return `${array[0]} ${type} ${array[1]}`;
+        case 3:
+          return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
+        default:
+          return `${array.slice(0, -1).join(', ')}, ${type} ${array[array.length - 1]}`;
       }
-      if (Array.isArray(exp)) {
-        const parts = exp.map(String);
-        if (parts.length === 1) {
-          if (/^[A-Z]/.test(parts[0])) return `an instance of ${parts[0]}`;
-          return `of type ${parts[0]}`;
-        }
-        const classParts = parts.filter((p) => /^[A-Z]/.test(p));
-        const typeParts = parts.filter((p) => !/^[A-Z]/.test(p));
-        if (typeParts.length === 1 && classParts.length > 0) {
-          const specialArrayLike = classParts.find((p) => p.toLowerCase() === 'array-like object');
-          const filteredClasses = specialArrayLike ? classParts.filter((p) => p !== specialArrayLike) : classParts;
-          const cls = filteredClasses.length > 0
-            ? (filteredClasses.length === 1 ? filteredClasses[0] : joinWithOr(filteredClasses))
-            : '';
-          if (specialArrayLike) {
-            if (cls) {
-              return `of type ${typeParts[0]} or an instance of ${cls} or an ${specialArrayLike}`;
-            }
-            return `of type ${typeParts[0]} or an ${specialArrayLike}`;
+    }
+
+    function determineSpecificType(value) {
+      if (value === null) return 'null';
+      if (value === undefined) return 'undefined';
+
+      const type = typeof value;
+      switch (type) {
+        case 'bigint':
+          return `type bigint (${value})`;
+        case 'number':
+          if (value === 0) {
+            return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
           }
-          return `of type ${typeParts[0]} or an instance of ${cls}`;
+          if (Number.isNaN(value)) return 'type number (NaN)';
+          if (value === Infinity) return 'type number (Infinity)';
+          if (value === -Infinity) return 'type number (-Infinity)';
+          return `type number (${value})`;
+        case 'boolean':
+          return value ? 'type boolean (true)' : 'type boolean (false)';
+        case 'symbol':
+          return `type symbol (${String(value)})`;
+        case 'function':
+          return `function ${value.name || '<anonymous>'}`;
+        case 'object':
+          if (value.constructor && 'name' in value.constructor) {
+            return `an instance of ${value.constructor.name}`;
+          }
+          return 'object';
+        case 'string': {
+          let shown = value;
+          if (shown.length > 28) shown = `${shown.slice(0, 25)}...`;
+          if (!shown.includes("'")) return `type string ('${shown}')`;
+          return `type string (${JSON.stringify(shown)})`;
         }
-        if (typeParts.length > 1 && classParts.length > 0) {
-          const types = typeParts.length === 2
-            ? `${typeParts[0]} or ${typeParts[1]}`
-            : `${typeParts.slice(0, -1).join(', ')} or ${typeParts[typeParts.length - 1]}`;
-          const cls = classParts.length === 1 ? classParts[0] : joinWithOr(classParts);
-          return `one of type ${types} or an instance of ${cls}`;
+        default: {
+          let shown = String(value);
+          if (shown.length > 28) shown = `${shown.slice(0, 25)}...`;
+          return `type ${type} (${shown})`;
         }
-        if (parts.every((p) => /^[A-Z]/.test(p))) {
-          return `an instance of ${joinWithOr(parts)}`;
-        }
-        if (classParts.length === 0 && typeParts.length >= 2) {
-          const [first, ...rest] = typeParts;
-          if (rest.length === 1) return `of type ${first} or ${rest[0]}`;
-          return `of type ${first} or one of ${rest.slice(0, -1).join(', ')} or ${rest[rest.length - 1]}`;
-        }
-        return `one of type ${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`;
       }
-      const s = String(exp);
-      if (s === 'Object') return 'of type object';
-      if (s === 'Function') return 'of type function';
-      return `of type ${s}`;
     }
-    let received;
-    if (actual == null) {
-      received = ` Received ${actual}`;
-    } else if (typeof actual === 'function') {
-      received = ` Received function ${actual.name || '<anonymous>'}`;
-    } else if (typeof actual === 'object') {
-      if (actual.constructor?.name) {
-        received = ` Received an instance of ${actual.constructor.name}`;
-      } else {
-        received = ` Received ${typeof actual}`;
-      }
+
+    const classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
+    const kTypes = [
+      'string',
+      'function',
+      'number',
+      'object',
+      'Function',
+      'Object',
+      'boolean',
+      'bigint',
+      'symbol',
+    ];
+
+    if (!Array.isArray(expected)) expected = [expected];
+
+    let msg = 'The ';
+    const nameStr = String(name);
+    if (nameStr.endsWith(' argument')) {
+      msg += `${nameStr} `;
     } else {
-      const str = String(actual);
-      let shown = str.slice(0, 25);
-      if (str.length > 25) {
-        shown += '...';
-      }
-      if (typeof actual === 'string') {
-        shown = `'${shown}'`;
-      }
-      received = ` Received type ${typeof actual} (${shown})`;
+      const type = nameStr.includes('.') ? 'property' : 'argument';
+      msg += `"${nameStr}" ${type} `;
     }
-    super(`${formatName(name)} must be ${formatExpected(expected)}.${received}`);
+    msg += 'must be ';
+
+    const types = [];
+    const instances = [];
+    const other = [];
+
+    for (const value of expected.map(String)) {
+      if (kTypes.includes(value)) {
+        types.push(value.toLowerCase());
+      } else if (classRegExp.test(value)) {
+        instances.push(value);
+      } else {
+        other.push(value);
+      }
+    }
+
+    if (instances.length > 0) {
+      const objectPos = types.indexOf('object');
+      if (objectPos !== -1) {
+        types.splice(objectPos, 1);
+        instances.push('Object');
+      }
+    }
+
+    if (types.length > 0) {
+      msg += `${types.length > 1 ? 'one of type' : 'of type'} ${formatList(types, 'or')}`;
+      if (instances.length > 0 || other.length > 0) msg += ' or ';
+    }
+
+    if (instances.length > 0) {
+      msg += `an instance of ${formatList(instances, 'or')}`;
+      if (other.length > 0) msg += ' or ';
+    }
+
+    if (other.length > 0) {
+      if (other.length > 1) {
+        msg += `one of ${formatList(other, 'or')}`;
+      } else {
+        if (other[0].toLowerCase() !== other[0]) msg += 'an ';
+        msg += `${other[0]}`;
+      }
+    }
+
+    msg += `. Received ${determineSpecificType(actual)}`;
+    super(msg);
     this.code = 'ERR_INVALID_ARG_TYPE';
+    this.name = 'TypeError';
+  }
+
+  toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
   }
 }
 
@@ -142,6 +224,10 @@ class ERR_OUT_OF_RANGE extends RangeError {
     }
     super(`The value of "${name}" is out of range. It must be ${range}. Received ${formatReceived(actual)}`);
     this.code = 'ERR_OUT_OF_RANGE';
+  }
+
+  toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
   }
 }
 
@@ -180,9 +266,9 @@ class ERR_INVALID_BUFFER_SIZE extends RangeError {
   }
 }
 
-class ERR_FALSY_VALUE_REJECTION extends TypeError {
+class ERR_FALSY_VALUE_REJECTION extends Error {
   constructor(reason) {
-    super(`Promise was rejected with a falsy value: ${reason}`);
+    super('Promise was rejected with falsy value');
     this.code = 'ERR_FALSY_VALUE_REJECTION';
     this.reason = reason;
   }
@@ -284,11 +370,17 @@ class ERR_STREAM_CANNOT_PIPE extends Error {
   }
 }
 
+class ERR_STREAM_ALREADY_FINISHED extends Error {
+  constructor(name) {
+    super(`Cannot call ${name} after a stream was finished`);
+    this.code = 'ERR_STREAM_ALREADY_FINISHED';
+  }
+}
+
 class ERR_STREAM_DESTROYED extends Error {
-  constructor(name = 'stream') {
-    super(`Cannot call write after a stream was destroyed`);
+  constructor(name) {
+    super(`Cannot call ${name} after a stream was destroyed`);
     this.code = 'ERR_STREAM_DESTROYED';
-    this.name = `${name}Error`;
   }
 }
 
@@ -301,7 +393,7 @@ class ERR_STREAM_PREMATURE_CLOSE extends Error {
 
 class ERR_STREAM_UNABLE_TO_PIPE extends Error {
   constructor() {
-    super('Unable to pipe from a closed stream');
+    super('Cannot pipe to a closed or destroyed stream');
     this.code = 'ERR_STREAM_UNABLE_TO_PIPE';
   }
 }
@@ -403,6 +495,13 @@ class ERR_SERVER_ALREADY_LISTEN extends Error {
   }
 }
 
+class ERR_SERVER_NOT_RUNNING extends Error {
+  constructor() {
+    super('Server is not running.');
+    this.code = 'ERR_SERVER_NOT_RUNNING';
+  }
+}
+
 class ERR_SOCKET_CLOSED extends Error {
   constructor() {
     super('Socket is closed');
@@ -418,9 +517,13 @@ class ERR_SOCKET_CLOSED_BEFORE_CONNECTION extends Error {
 }
 
 class NodeAggregateError extends AggregateError {
-  constructor(errors, message, code = undefined) {
+  constructor(errors, message) {
     super(errors, message);
-    this.code = code;
+    this.code = errors && errors[0] ? errors[0].code : undefined;
+  }
+
+  get ['constructor']() {
+    return AggregateError;
   }
 }
 
@@ -462,13 +565,42 @@ class ErrnoException extends Error {
 
 class ExceptionWithHostPort extends Error {
   constructor(err, syscall, address, port, additional) {
-    let code = 'UNKNOWN';
-    if (typeof process?.binding === 'function') {
-      try {
-        code = process.binding('uv').errname(err);
-      } catch {}
+    let code = err;
+    if (typeof err === 'number') {
+      const uvEntry = getUvErrorEntry(err);
+      if (uvEntry) {
+        code = uvEntry[0];
+      }
+      const uv = typeof process?.binding === 'function' ? process.binding('uv') : undefined;
+      if (code === err && uv && (err === uv.UV_EAI_NODATA || err === uv.UV_EAI_NONAME)) {
+        code = 'ENOTFOUND';
+      } else if (code === err) {
+        try {
+          code = require('util').getSystemErrorName(err);
+        } catch {
+          try {
+            if (uv) code = uv.errname(err);
+          } catch {}
+        }
+      }
+      if (typeof code === 'string' && code.startsWith('Unknown system error')) {
+        try {
+          const errnoMap = require('os').constants?.errno;
+          const target = Math.abs(err);
+          if (errnoMap && typeof errnoMap === 'object') {
+            for (const [name, value] of Object.entries(errnoMap)) {
+              if (value === target) {
+                code = name;
+                break;
+              }
+            }
+          }
+        } catch {}
+      }
     }
-    if (code === 'UNKNOWN' && err === -17) code = 'EEXIST';
+    if (typeof code !== 'string') {
+      code = 'UNKNOWN';
+    }
     let details = '';
     if (port && port > 0) details = ` ${address}:${port}`;
     else if (address) details = ` ${address}`;
@@ -480,12 +612,20 @@ class ExceptionWithHostPort extends Error {
     this.address = address;
     if (port) this.port = port;
   }
+
+  get ['constructor']() {
+    return Error;
+  }
 }
 
 class ConnResetException extends Error {
   constructor(msg) {
     super(msg);
     this.code = 'ECONNRESET';
+  }
+
+  get ['constructor']() {
+    return Error;
   }
 }
 
@@ -702,8 +842,38 @@ function hideStackFrames(fn) {
   return fn;
 }
 
-function UVExceptionWithHostPort(err, syscall, address, port, additional) {
-  return new ExceptionWithHostPort(err, syscall, address, port, additional);
+function isErrorStackTraceLimitWritable() {
+  if (require('internal/v8/startup_snapshot').namespace.isBuildingSnapshot()) {
+    return false;
+  }
+  const desc = Object.getOwnPropertyDescriptor(Error, 'stackTraceLimit');
+  if (desc === undefined) {
+    return Object.isExtensible(Error);
+  }
+  return Object.prototype.hasOwnProperty.call(desc, 'writable') ?
+    desc.writable :
+    desc.set !== undefined;
+}
+
+class UVExceptionWithHostPort extends Error {
+  constructor(err, syscall, address, port) {
+    const uvEntry = getUvErrorEntry(err);
+    const code = uvEntry ? uvEntry[0] : 'UNKNOWN';
+    const uvmsg = uvEntry ? uvEntry[1] : 'unknown error';
+    let details = '';
+    if (port && port > 0) details = ` ${address}:${port}`;
+    else if (address) details = ` ${address}`;
+    super(`${syscall} ${code}: ${uvmsg}${details}`);
+    this.code = code;
+    this.errno = err;
+    this.syscall = syscall;
+    this.address = address;
+    if (port) this.port = port;
+  }
+
+  get ['constructor']() {
+    return Error;
+  }
 }
 
 function genericNodeError(message, errorProperties) {
@@ -731,15 +901,19 @@ module.exports = {
   ExceptionWithHostPort,
   UVExceptionWithHostPort,
   NodeAggregateError,
+  isErrorStackTraceLimitWritable,
   hideStackFrames,
   isStackOverflowError,
   uvErrmapGet,
   aggregateTwoErrors,
   genericNodeError,
   codes: {
+    ERR_AMBIGUOUS_ARGUMENT,
+    ERR_CONSTRUCT_CALL_REQUIRED,
     ERR_INVALID_ARG_VALUE,
     ERR_INVALID_CURSOR_POS,
     ERR_USE_AFTER_CLOSE,
+    ERR_INTERNAL_ASSERTION,
     ERR_INVALID_ARG_TYPE,
     ERR_OUT_OF_RANGE,
     ERR_BUFFER_OUT_OF_BOUNDS,
@@ -756,6 +930,7 @@ module.exports = {
     ERR_INVALID_FILE_URL_PATH,
     ERR_INVALID_FILE_URL_HOST,
     ERR_INVALID_URL_SCHEME,
+    ERR_STREAM_ALREADY_FINISHED,
     ERR_STREAM_CANNOT_PIPE,
     ERR_STREAM_DESTROYED,
     ERR_STREAM_PREMATURE_CLOSE,
@@ -768,6 +943,7 @@ module.exports = {
     ERR_INVALID_IP_ADDRESS,
     ERR_IP_BLOCKED,
     ERR_SERVER_ALREADY_LISTEN,
+    ERR_SERVER_NOT_RUNNING,
     ERR_SOCKET_BAD_PORT,
     ERR_SOCKET_ALREADY_BOUND,
     ERR_SOCKET_BAD_BUFFER_SIZE,
@@ -791,6 +967,7 @@ module.exports = {
     ERR_HTTP_CONTENT_LENGTH_MISMATCH,
     ERR_HTTP_HEADERS_SENT,
     ERR_HTTP_SOCKET_ASSIGNED,
+    ERR_UNAVAILABLE_DURING_EXIT,
     ERR_IPC_CHANNEL_CLOSED,
   },
   kEnhanceStackBeforeInspector,

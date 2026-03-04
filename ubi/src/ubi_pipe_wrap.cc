@@ -282,10 +282,10 @@ napi_value PipeBind(napi_env env, napi_callback_info info) {
   napi_unwrap(env, self, reinterpret_cast<void**>(&wrap));
   if (!wrap || argc < 1) return MakeInt32(env, UV_EINVAL);
   std::string path = ValueToUtf8(env, argv[0]);
-#if !defined(_WIN32)
-  unlink(path.c_str());
-#endif
-  int rc = uv_pipe_bind(&wrap->handle, path.c_str());
+  int rc = uv_pipe_bind2(&wrap->handle,
+                         path.c_str(),
+                         path.size(),
+                         UV_PIPE_NO_TRUNCATE);
   return MakeInt32(env, rc);
 }
 
@@ -345,9 +345,16 @@ napi_value PipeConnect(napi_env env, napi_callback_info info) {
   cr->req.data = cr;
   napi_create_reference(env, argv[0], 1, &cr->req_obj_ref);
   std::string path = ValueToUtf8(env, argv[1]);
-  uv_pipe_connect(&cr->req, &wrap->handle, path.c_str(), OnConnectDone);
-  int rc = 0;
-  // uv_pipe_connect is async and returns void in libuv.
+  int rc = uv_pipe_connect2(&cr->req,
+                            &wrap->handle,
+                            path.c_str(),
+                            path.size(),
+                            UV_PIPE_NO_TRUNCATE,
+                            OnConnectDone);
+  if (rc != 0) {
+    if (cr->req_obj_ref) napi_delete_reference(env, cr->req_obj_ref);
+    delete cr;
+  }
   return MakeInt32(env, rc);
 }
 
@@ -819,8 +826,6 @@ void UbiInstallPipeWrapBinding(napi_env env) {
       {"setPendingInstances", nullptr, PipeSetPendingInstances, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"fchmod", nullptr, PipeFchmod, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"useUserBuffer", nullptr, PipeUseUserBuffer, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"getsockname", nullptr, PipeGetSockName, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"getpeername", nullptr, PipeGetPeerName, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"acceptPendingHandle", nullptr, PipeAcceptPendingHandle, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"ref", nullptr, PipeRef, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"unref", nullptr, PipeUnref, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -865,6 +870,8 @@ void UbiInstallPipeWrapBinding(napi_env env) {
   SetNamedU32(env, constants, "SOCKET", kPipeSocket);
   SetNamedU32(env, constants, "SERVER", kPipeServer);
   SetNamedU32(env, constants, "IPC", kPipeIPC);
+  SetNamedU32(env, constants, "UV_READABLE", static_cast<uint32_t>(UV_READABLE));
+  SetNamedU32(env, constants, "UV_WRITABLE", static_cast<uint32_t>(UV_WRITABLE));
 
   napi_set_named_property(env, binding, "Pipe", pipe_ctor);
   napi_set_named_property(env, binding, "PipeConnectWrap", connect_wrap_ctor);

@@ -91,7 +91,7 @@ void UbiInstallUtilBinding(napi_env env) {
       "    };"
       "  }"
       "  function parseDotEnv(content) {"
-      "    const out = Object.create(null);"
+      "    const out = {};"
       "    const text = String(content);"
       "    let i = 0;"
       "    while (i < text.length) {"

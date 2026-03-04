@@ -1,5 +1,3 @@
 'use strict';
 
-const assert = require('assert');
-
-module.exports = assert.strict;
+module.exports = require('assert').strict;

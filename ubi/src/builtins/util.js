@@ -1,6 +1,8 @@
 'use strict';
 if (process && typeof process.off !== 'function' && typeof process.removeListener === 'function') {
-  process.off = process.removeListener.bind(process);
+  process.off = function off(type, listener) {
+    return this.removeListener(type, listener);
+  };
 }
 if (process && typeof process.kill !== 'function') {
   process.kill = function kill(pid, signal) {

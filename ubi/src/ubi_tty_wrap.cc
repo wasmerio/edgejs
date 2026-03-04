@@ -22,6 +22,12 @@ struct TtyWriteReqWrap {
   uint32_t nbufs = 0;
 };
 
+struct TtyShutdownReqWrap {
+  uv_shutdown_t req{};
+  napi_env env = nullptr;
+  napi_ref req_obj_ref = nullptr;
+};
+
 struct TtyWrap {
   napi_env env = nullptr;
   napi_ref wrapper_ref = nullptr;
@@ -172,6 +178,14 @@ void FreeWriteReq(TtyWriteReqWrap* req_wrap) {
   delete req_wrap;
 }
 
+void FreeShutdownReq(TtyShutdownReqWrap* req_wrap) {
+  if (req_wrap == nullptr) return;
+  if (req_wrap->req_obj_ref != nullptr) {
+    napi_delete_reference(req_wrap->env, req_wrap->req_obj_ref);
+  }
+  delete req_wrap;
+}
+
 void OnClosed(uv_handle_t* handle) {
   auto* wrap = static_cast<TtyWrap*>(handle->data);
   if (wrap == nullptr) return;
@@ -240,6 +254,19 @@ void OnWriteDone(uv_write_t* req, int status) {
   napi_value stream_obj = wrap != nullptr ? GetRefValue(req_wrap->env, wrap->wrapper_ref) : nullptr;
   InvokeReqOnComplete(req_wrap->env, req_obj, stream_obj, status);
   FreeWriteReq(req_wrap);
+}
+
+void OnShutdownDone(uv_shutdown_t* req, int status) {
+  auto* req_wrap = static_cast<TtyShutdownReqWrap*>(req->data);
+  if (req_wrap == nullptr) return;
+  napi_value req_obj = GetRefValue(req_wrap->env, req_wrap->req_obj_ref);
+  TtyWrap* wrap = nullptr;
+  if (req->handle != nullptr) {
+    wrap = static_cast<TtyWrap*>(req->handle->data);
+  }
+  napi_value stream_obj = wrap != nullptr ? GetRefValue(req_wrap->env, wrap->wrapper_ref) : nullptr;
+  InvokeReqOnComplete(req_wrap->env, req_obj, stream_obj, status);
+  FreeShutdownReq(req_wrap);
 }
 
 void OnAlloc(uv_handle_t* /*handle*/, size_t suggested_size, uv_buf_t* buf) {
@@ -572,6 +599,40 @@ napi_value TtyWritev(napi_env env, napi_callback_info info) {
   return MakeInt32(env, rc);
 }
 
+napi_value TtyShutdown(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value self = nullptr;
+  napi_get_cb_info(env, info, &argc, argv, &self, nullptr);
+  TtyWrap* wrap = nullptr;
+  napi_unwrap(env, self, reinterpret_cast<void**>(&wrap));
+  if (wrap == nullptr || argc < 1 || argv[0] == nullptr) return MakeInt32(env, UV_EINVAL);
+  if (!wrap->initialized && !wrap->emulated) return MakeInt32(env, UV_EBADF);
+
+  if (wrap->emulated) {
+    InvokeReqOnComplete(env, argv[0], GetRefValue(env, wrap->wrapper_ref), 0);
+    return MakeInt32(env, 0);
+  }
+
+  auto* req_wrap = new TtyShutdownReqWrap();
+  req_wrap->env = env;
+  napi_create_reference(env, argv[0], 1, &req_wrap->req_obj_ref);
+  req_wrap->req.data = req_wrap;
+
+  int rc = uv_shutdown(&req_wrap->req, reinterpret_cast<uv_stream_t*>(&wrap->handle), OnShutdownDone);
+  if (rc == UV_ENOTCONN) {
+    // Match Node behavior for stdio end paths: not connected is treated as a
+    // successful shutdown completion.
+    InvokeReqOnComplete(env, argv[0], GetRefValue(env, wrap->wrapper_ref), 0);
+    FreeShutdownReq(req_wrap);
+    rc = 0;
+  } else if (rc != 0) {
+    SetReqError(env, argv[0], rc);
+    FreeShutdownReq(req_wrap);
+  }
+  return MakeInt32(env, rc);
+}
+
 napi_value TtyClose(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -734,6 +795,7 @@ void UbiInstallTtyWrapBinding(napi_env env) {
       {"readStop", nullptr, TtyReadStop, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},
       {"writeBuffer", nullptr, TtyWriteBuffer, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},
       {"writev", nullptr, TtyWritev, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},
+      {"shutdown", nullptr, TtyShutdown, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},
       {"writeLatin1String", nullptr, TtyWriteString, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},
       {"writeUtf8String", nullptr, TtyWriteString, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},
       {"writeAsciiString", nullptr, TtyWriteString, nullptr, nullptr, nullptr, kMethodAttrs, nullptr},

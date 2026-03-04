@@ -5,12 +5,19 @@ const kUvErrMap = new Map([
   [-9, ['EBADF', 'bad file descriptor']],
   [-12, ['ENOMEM', 'out of memory']],
   [-13, ['EACCES', 'permission denied']],
+  [-48, ['EADDRINUSE', 'address already in use']],
   [-22, ['EINVAL', 'invalid argument']],
   [-38, ['ENOSYS', 'function not implemented']],
+  [-54, ['ECONNRESET', 'connection reset by peer']],
+  [-61, ['ECONNREFUSED', 'connection refused']],
+  [-49, ['EADDRNOTAVAIL', 'address not available']],
   [-55, ['ENOBUFS', 'no buffer space available']],
   [-60, ['ETIMEDOUT', 'connection timed out']],
+  [-98, ['EADDRINUSE', 'address already in use']],
+  [-104, ['ECONNRESET', 'connection reset by peer']],
   [-105, ['ENOBUFS', 'no buffer space available']],
   [-110, ['ETIMEDOUT', 'connection timed out']],
+  [-111, ['ECONNREFUSED', 'connection refused']],
   [-3007, ['ENOTFOUND', 'name does not resolve']],
   [-3008, ['ENOTFOUND', 'name does not resolve']],
 ]);
@@ -34,7 +41,22 @@ function getUvErrorEntry(err) {
   } catch {}
   if (!name) return undefined;
 
-  const entry = [name, name];
+  let message = name;
+  try {
+    if (typeof process?.binding === 'function') {
+      const uv = process.binding('uv');
+      if (uv && typeof uv.getErrorMessage === 'function') {
+        const maybeMessage = uv.getErrorMessage(n);
+        if (typeof maybeMessage === 'string' &&
+            maybeMessage.length > 0 &&
+            !maybeMessage.startsWith('Unknown system error')) {
+          message = maybeMessage;
+        }
+      }
+    }
+  } catch {}
+
+  const entry = [name, message];
   kUvErrMap.set(n, entry);
   return entry;
 }

@@ -606,68 +606,26 @@ function maybeClose(subprocess) {
   }
 }
 
-function createReadable() {
-  const stream = new EventEmitter();
-  stream.readable = true;
-  stream.readableEncoding = null;
-  stream._queue = [];
-  stream._handle = { readStart() {}, readStop() {} };
-  stream.setEncoding = (enc) => {
-    stream.readableEncoding = enc;
-    return stream;
-  };
-  stream.read = () => {
-    if (stream._queue.length === 0) return null;
-    const chunk = stream._queue.shift();
-    if (stream.readableEncoding && Buffer.isBuffer(chunk)) {
-      return chunk.toString(stream.readableEncoding);
-    }
-    return chunk;
-  };
-  stream.resume = () => stream;
-  stream.pause = () => stream;
-  stream._push = (chunk) => {
-    const normalized = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    stream._queue.push(normalized);
-    stream.emit('readable');
-    stream.emit('data', stream.readableEncoding ? normalized.toString(stream.readableEncoding) : normalized);
-  };
-  stream.pipe = (dest) => {
-    stream.on('data', (chunk) => {
-      if (dest && typeof dest.write === 'function') dest.write(chunk);
+function makeHandleMethodOverridable(handle, name) {
+  if (!handle || typeof handle[name] !== 'function') return;
+  try {
+    const original = handle[name].bind(handle);
+    Object.defineProperty(handle, name, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: original,
     });
-    return dest;
-  };
-  stream.destroy = () => {
-    process.nextTick(() => {
-      stream.emit('end');
-      stream.emit('close');
-    });
-  };
-  return stream;
+  } catch {}
 }
 
-function createWritable() {
-  const stream = new EventEmitter();
-  stream.writable = true;
-  stream.readable = false;
-  stream._chunks = [];
-  stream._handle = {};
-  stream.setEncoding = () => stream;
-  stream.write = (chunk) => {
-    if (chunk != null) {
-      stream._chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-    }
-    return true;
-  };
-  stream.end = () => {
-    stream.writable = false;
-    process.nextTick(() => stream.emit('finish'));
-  };
-  stream.destroy = () => {
-    process.nextTick(() => stream.emit('close'));
-  };
-  return stream;
+function createSocket(pipe, readable) {
+  const socket = net.Socket({ handle: pipe, readable });
+  if (socket && socket._handle) {
+    makeHandleMethodOverridable(socket._handle, 'readStart');
+    makeHandleMethodOverridable(socket._handle, 'readStop');
+  }
+  return socket;
 }
 
 class ChildProcess extends EventEmitter {
@@ -710,9 +668,14 @@ class ChildProcess extends EventEmitter {
       }
       if (typeof exitCode === 'number' && exitCode < 0) {
         const syscall = this.spawnfile ? `spawn ${this.spawnfile}` : 'spawn';
-        const err = new Error(`${syscall} ${exitCode}`);
-        err.code = exitCode;
+        let systemCode = null;
+        try {
+          systemCode = require('util').getSystemErrorName(exitCode);
+        } catch {}
+        const err = new Error(`${syscall} ${systemCode || exitCode}`);
+        err.code = systemCode || exitCode;
         err.errno = exitCode;
+        err.syscall = syscall;
         if (this.spawnfile) err.path = this.spawnfile;
         err.spawnargs = Array.isArray(this.spawnargs) ? this.spawnargs.slice(1) : [];
         this.emit('error', err);
@@ -773,34 +736,57 @@ class ChildProcess extends EventEmitter {
           this._handle.onexit(err, null);
         }
       });
-      return err;
     }
-    this.pid = this._handle.pid;
+    this.pid = err ? undefined : (this._handle ? this._handle.pid : undefined);
 
-    this.stdio = stdio.map((item, i) => {
-      if (item.type === 'ignore' || item.type === 'inherit' || item.type === 'fd') return null;
-      if (i === 0 || i > 2) return createWritable();
-      return createReadable();
-    });
+    this.stdio = [];
+    for (let i = 0; i < stdio.length; i++) {
+      const stream = stdio[i];
+      if (stream.type === 'ignore' || stream.type === 'inherit' || stream.type === 'fd') {
+        this.stdio.push(null);
+        continue;
+      }
+      if (stream.ipc) {
+        this._closesNeeded++;
+        this.stdio.push(null);
+        continue;
+      }
+      if (stream.type === 'wrap') {
+        if (stream.handle && typeof stream.handle.readStop === 'function') {
+          stream.handle.reading = false;
+          stream.handle.readStop();
+        }
+        if (stream._stdio && typeof stream._stdio.pause === 'function') {
+          stream._stdio.pause();
+        }
+        if (stream._stdio && typeof stream._stdio === 'object') {
+          stream._stdio.readableFlowing = false;
+          if (stream._stdio._readableState && typeof stream._stdio._readableState === 'object') {
+            stream._stdio._readableState.reading = false;
+          }
+        }
+        this.stdio.push(stream._stdio || null);
+        continue;
+      }
+      if (stream.handle) {
+        const socket = createSocket(this.pid !== 0 ? stream.handle : null, i > 0);
+        this.stdio.push(socket);
+        if (i > 0 && this.pid !== 0) {
+          this._closesNeeded++;
+          socket.on('close', () => {
+            maybeClose(this);
+          });
+        }
+        continue;
+      }
+      this.stdio.push(null);
+    }
+
     this.stdin = this.stdio[0] || null;
     this.stdout = this.stdio[1] || null;
     this.stderr = this.stdio[2] || null;
 
-    if (ipc) {
-      this._closesNeeded++;
-      setupChannel(this, ipc, serialization);
-    }
-
-    for (let i = 0; i < this.stdio.length; i++) {
-      const stream = this.stdio[i];
-      if (!stream) continue;
-      if (i > 0) {
-        this._closesNeeded++;
-        stream.on('close', () => {
-          maybeClose(this);
-        });
-      }
-    }
+    if (ipc) setupChannel(this, ipc, serialization);
 
     return err;
   }

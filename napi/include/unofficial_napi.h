@@ -19,6 +19,17 @@ NAPI_EXTERN napi_status unofficial_napi_request_gc_for_testing(napi_env env);
 // Unofficial/test-only helper. Processes pending microtasks.
 NAPI_EXTERN napi_status unofficial_napi_process_microtasks(napi_env env);
 
+// Unofficial helper. Enqueues a JS function into V8 microtask queue.
+NAPI_EXTERN napi_status unofficial_napi_enqueue_microtask(napi_env env, napi_value callback);
+
+// Unofficial helper. Sets the per-env PromiseReject callback used by
+// internal/process/promises via internalBinding('task_queue').
+NAPI_EXTERN napi_status unofficial_napi_set_promise_reject_callback(napi_env env,
+                                                                    napi_value callback);
+
+// Unofficial helper. Refreshes V8 date/timezone configuration after TZ changes.
+NAPI_EXTERN napi_status unofficial_napi_notify_datetime_configuration_change(napi_env env);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

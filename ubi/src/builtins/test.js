@@ -72,6 +72,32 @@ function beforeEach(fn) { runBody(fn); }
 function afterEach(fn) { runBody(fn); }
 
 const mock = {
+  fn(implementation) {
+    const calls = [];
+    function wrapped() {
+      const args = Array.prototype.slice.call(arguments);
+      const call = {
+        arguments: args,
+        result: undefined,
+        error: undefined,
+        this: this,
+      };
+      calls.push(call);
+      try {
+        if (typeof implementation === 'function') {
+          const result = implementation.apply(this, arguments);
+          call.result = result;
+          return result;
+        }
+      } catch (err) {
+        call.error = err;
+        throw err;
+      }
+      return undefined;
+    }
+    wrapped.mock = { calls };
+    return wrapped;
+  },
   method(object, key, implementation) {
     const original = object[key];
     const calls = [];

@@ -25,6 +25,22 @@ int UbiRunScriptFileWithLoop(napi_env env,
                                bool keep_event_loop_alive);
 void UbiSetScriptArgv(const std::vector<std::string>& script_argv);
 void UbiSetExecArgv(const std::vector<std::string>& exec_argv);
+
+enum UbiMakeCallbackFlags : int {
+  kUbiMakeCallbackNone = 0,
+  // Mirrors Node's InternalCallbackScope::kSkipTaskQueues for critical paths
+  // like HTTP parser callbacks that must not re-enter JS tick processing.
+  kUbiMakeCallbackSkipTaskQueues = 1 << 0,
+};
+
+napi_status UbiMakeCallbackWithFlags(napi_env env,
+                                     napi_value recv,
+                                     napi_value callback,
+                                     size_t argc,
+                                     napi_value* argv,
+                                     napi_value* result,
+                                     int flags);
+
 napi_status UbiMakeCallback(napi_env env,
                               napi_value recv,
                               napi_value callback,

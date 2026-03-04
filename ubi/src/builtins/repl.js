@@ -4,14 +4,17 @@ const EventEmitter = require('events');
 const { Console } = require('console');
 const fs = require('fs');
 const path = require('path');
+const domain = require('domain');
 const { builtinModules } = require('module');
 const { inspect, types } = require('util');
+const { shouldColorize } = require('internal/util/colors');
 
 const REPL_MODE_SLOPPY = 0;
 const REPL_MODE_STRICT = 1;
 const kPublicBuiltinModules = builtinModules.filter((m) => !m.startsWith('_'));
 const kBuiltinBase = kPublicBuiltinModules.slice();
 const kCompletionBlocked = Symbol('completionBlocked');
+const kGlobalBuiltins = new Set(Object.getOwnPropertyNames(globalThis));
 let gReplEvalId = 0;
 const alphaSort = (a, b) => (a < b ? -1 : (a > b ? 1 : 0));
 
@@ -33,18 +36,20 @@ class REPLServerImpl extends EventEmitter {
     this._initialPrompt = opts.prompt !== undefined ? String(opts.prompt) : '> ';
     this.prompt = this._initialPrompt;
     this.terminal = opts.terminal !== undefined ? !!opts.terminal : !!(this.output && this.output.isTTY);
-    this.useColors = opts.useColors !== undefined ? !!opts.useColors : (this.terminal && !!(this.output && this.output.isTTY));
+    this.useColors = opts.useColors !== undefined ? !!opts.useColors :
+      (this.terminal ? !!shouldColorize(this.output) : false);
     this.useGlobal = !!opts.useGlobal;
     this.ignoreUndefined = !!opts.ignoreUndefined;
     this.replMode = opts.replMode !== undefined ? opts.replMode :
       (opts.mode !== undefined ? opts.mode : REPL_MODE_SLOPPY);
     this.historySize = opts.historySize !== undefined ? opts.historySize : 30;
-    this.eval = typeof opts.eval === 'function' ? opts.eval : this._defaultEval.bind(this);
+    this._domain = opts.domain || domain.create();
+    const evalImpl = typeof opts.eval === 'function' ? opts.eval : this._defaultEval.bind(this);
+    this.eval = this._domain.bind(evalImpl);
     this.writer = typeof opts.writer === 'function' ? opts.writer : inspect;
     this._customCompleter = typeof opts.completer === 'function' ? opts.completer : null;
     this.context = null;
     this.closed = false;
-    this._domain = new EventEmitter();
     this._inTemplateLiteral = false;
     this.commands = { __proto__: null };
     this.lines = [];
@@ -73,6 +78,15 @@ class REPLServerImpl extends EventEmitter {
     }
     this.resetContext();
     this._defineDefaultCommands();
+    this._domain.on('error', (err) => {
+      if (!this.underscoreErrAssigned) this.lastError = err;
+      this._writeUncaught(err, '', { includeStack: false });
+      this._bufferedCommand = '';
+      this.lines.level = [];
+      if (!this.closed && this.prompt && this.output && typeof this.output.write === 'function') {
+        this.output.write(this.prompt);
+      }
+    });
 
     if (this.input && typeof this.input.on === 'function') {
       this.input.on('data', (chunk) => {
@@ -159,6 +173,13 @@ class REPLServerImpl extends EventEmitter {
   createContext() {
     if (this.useGlobal) return globalThis;
     const context = {};
+    for (const name of Object.getOwnPropertyNames(globalThis)) {
+      // Match Node REPL: inherit user-defined globals present at context creation,
+      // but do not shadow core global builtins.
+      if (kGlobalBuiltins.has(name)) continue;
+      const desc = Object.getOwnPropertyDescriptor(globalThis, name);
+      if (desc) Object.defineProperty(context, name, desc);
+    }
     context.global = context;
     context.globalThis = context;
     context.console = new Console(this.output);

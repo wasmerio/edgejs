@@ -293,6 +293,9 @@ target_compile_definitions(ubi_runtime
   PRIVATE
     UBI_EMBEDDED_V8_VERSION="${UBI_EMBEDDED_V8_VERSION}"
 )
+if(UBI_NAPI_PROVIDER STREQUAL "bundled-v8")
+  target_compile_definitions(ubi_runtime PRIVATE UBI_BUNDLED_NAPI_V8=1)
+endif()
 
 add_library(ubi_cli STATIC
   src/ubi_cli.cc

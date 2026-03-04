@@ -75,6 +75,52 @@ struct WrapFinalizerRecord {
 
 namespace {
 
+v8::MaybeLocal<v8::Promise> NapiHostImportModuleDynamically(
+    v8::Local<v8::Context> context, v8::Local<v8::Data> /*host_defined_options*/,
+    v8::Local<v8::Value> /*resource_name*/, v8::Local<v8::String> specifier,
+    v8::Local<v8::FixedArray> /*import_attributes*/) {
+  v8::Isolate* isolate = context->GetIsolate();
+  v8::EscapableHandleScope handle_scope(isolate);
+  v8::TryCatch try_catch(isolate);
+
+  v8::Local<v8::Promise::Resolver> resolver;
+  if (!v8::Promise::Resolver::New(context).ToLocal(&resolver)) {
+    return v8::MaybeLocal<v8::Promise>();
+  }
+  v8::Local<v8::Promise> promise = resolver->GetPromise();
+
+  v8::Local<v8::Object> global = context->Global();
+  v8::Local<v8::String> helper_name =
+      v8::String::NewFromUtf8Literal(isolate, "__napi_dynamic_import");
+  v8::Local<v8::Value> helper_value;
+  if (!global->Get(context, helper_name).ToLocal(&helper_value) || !helper_value->IsFunction()) {
+    v8::Local<v8::String> message = v8::String::NewFromUtf8Literal(isolate, "Not supported");
+    resolver->Reject(context, v8::Exception::Error(message)).FromMaybe(false);
+    return handle_scope.Escape(promise);
+  }
+
+  v8::Local<v8::Function> helper = helper_value.As<v8::Function>();
+  v8::Local<v8::Value> argv[1] = {specifier};
+  v8::Local<v8::Value> result;
+  if (!helper->Call(context, global, 1, argv).ToLocal(&result)) {
+    if (try_catch.HasCaught()) {
+      resolver->Reject(context, try_catch.Exception()).FromMaybe(false);
+      try_catch.Reset();
+    } else {
+      v8::Local<v8::String> message = v8::String::NewFromUtf8Literal(isolate, "Not supported");
+      resolver->Reject(context, v8::Exception::Error(message)).FromMaybe(false);
+    }
+    return handle_scope.Escape(promise);
+  }
+
+  if (result->IsPromise()) {
+    return handle_scope.Escape(result.As<v8::Promise>());
+  }
+
+  resolver->Resolve(context, result).FromMaybe(false);
+  return handle_scope.Escape(promise);
+}
+
 inline bool CanBeHeldWeakly(v8::Local<v8::Value> value) {
   return value->IsObject() || value->IsSymbol();
 }
@@ -446,6 +492,7 @@ napi_env__::napi_env__(v8::Local<v8::Context> context, int32_t module_api_versio
     : isolate(v8::Isolate::GetCurrent()),
       context_ref(isolate, context),
       module_api_version(module_api_version) {
+  isolate->SetHostImportModuleDynamicallyCallback(NapiHostImportModuleDynamically);
   v8::Local<v8::Private> wrapKey = v8::Private::ForApi(
       isolate, v8::String::NewFromUtf8Literal(isolate, "__napi_wrap"));
   wrap_private_key.Reset(isolate, wrapKey);
@@ -2731,8 +2778,6 @@ napi_status NAPI_CDECL napi_run_script(napi_env env,
     }
     return napi_generic_failure;
   }
-  // Match host behavior expected by tests: flush queued microtasks after script execution.
-  env->isolate->PerformMicrotaskCheckpoint();
   *result = napi_v8_wrap_value(env, out);
   return (*result == nullptr) ? napi_generic_failure : napi_ok;
 }

@@ -16,8 +16,10 @@ function validateFunction(value, name) {
 }
 
 function validateAbortSignal(value, name) {
-  if (value === undefined) return;
-  if (typeof value !== 'object' || typeof value.aborted !== 'boolean') {
+  if (value !== undefined &&
+      (value === null ||
+       typeof value !== 'object' ||
+       !('aborted' in value))) {
     throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal', value);
   }
 }

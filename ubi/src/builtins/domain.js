@@ -94,6 +94,12 @@ if (!globalThis.__ubi_domain_timer_patch_installed) {
       return nativeSetTimeout.call(this, bindCallbackToDomain(cb), ms, ...args);
     };
   }
+  const nativeNextTick = process.nextTick;
+  if (typeof nativeNextTick === 'function') {
+    process.nextTick = function domainNextTick(cb, ...args) {
+      return nativeNextTick.call(process, bindCallbackToDomain(cb), ...args);
+    };
+  }
 }
 
 function create() {

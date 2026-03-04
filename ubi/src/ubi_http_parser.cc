@@ -153,7 +153,7 @@ napi_value CreateBufferCopy(napi_env env, const char* data, size_t length) {
   return out;
 }
 
-int CallIndexedNoArgs(Parser* p, uint32_t index) {
+int CallIndexedNoArgs(Parser* p, uint32_t index, bool skip_task_queues = false) {
   napi_value self = GetWrappedObject(p->env, p->wrapper_ref);
   if (self == nullptr) return 0;
   napi_value cb = nullptr;
@@ -163,7 +163,9 @@ int CallIndexedNoArgs(Parser* p, uint32_t index) {
   if (t != napi_function) return 0;
   napi_value result = nullptr;
   bool has_pending = false;
-  if (UbiMakeCallback(p->env, self, cb, 0, nullptr, &result) != napi_ok ||
+  const int callback_flags =
+      skip_task_queues ? kUbiMakeCallbackSkipTaskQueues : kUbiMakeCallbackNone;
+  if (UbiMakeCallbackWithFlags(p->env, self, cb, 0, nullptr, &result, callback_flags) != napi_ok ||
       (napi_is_exception_pending(p->env, &has_pending) == napi_ok && has_pending)) {
     p->got_exception = true;
     llhttp_set_error_reason(&p->parser, "HPE_JS_EXCEPTION:JS Exception");
@@ -191,7 +193,7 @@ int ParserOnMessageBegin(llhttp_t* llp) {
     p->list->all.insert(p);
     p->list->active.insert(p);
   }
-  return CallIndexedNoArgs(p, kOnMessageBegin);
+  return CallIndexedNoArgs(p, kOnMessageBegin, true);
 }
 
 int TrackHeader(Parser* p, size_t len) {
@@ -328,7 +330,13 @@ int ParserOnHeadersComplete(llhttp_t* llp) {
 
   napi_value result = nullptr;
   bool has_pending = false;
-  if (UbiMakeCallback(p->env, self, cb, 9, argv, &result) != napi_ok ||
+  if (UbiMakeCallbackWithFlags(p->env,
+                               self,
+                               cb,
+                               9,
+                               argv,
+                               &result,
+                               kUbiMakeCallbackSkipTaskQueues) != napi_ok ||
       (napi_is_exception_pending(p->env, &has_pending) == napi_ok && has_pending)) {
     p->got_exception = true;
     llhttp_set_error_reason(&p->parser, "HPE_JS_EXCEPTION:JS Exception");
@@ -377,7 +385,7 @@ int ParserOnMessageComplete(llhttp_t* llp) {
   if (!p->fields.empty()) {
     // _http_common tolerates one-shot headers array.
   }
-  return CallIndexedNoArgs(p, kOnMessageComplete);
+  return CallIndexedNoArgs(p, kOnMessageComplete, true);
 }
 
 int ParserOnChunkExtension(llhttp_t* llp, const char* at, size_t length) {

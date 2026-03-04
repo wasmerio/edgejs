@@ -46,12 +46,18 @@ process._kill = function ubiKill(pid, signal) {
 function makeTypeError(code, message) {
   const e = new TypeError(message);
   e.code = code;
+  e.toString = function toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
+  };
   return e;
 }
 
 function makeRangeError(code, message) {
   const e = new RangeError(message);
   e.code = code;
+  e.toString = function toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
+  };
   return e;
 }
 
@@ -101,6 +107,15 @@ function validateNoNullBytesInEnv(env) {
     if (String(k).includes('\u0000')) throwInvalidNull('options.env', k);
     if (env[k] != null && String(env[k]).includes('\u0000')) throwInvalidNull('options.env', env[k]);
   }
+}
+
+function getValidEncodingOption(options, defaultEncoding = null) {
+  if (!options || typeof options !== 'object') return defaultEncoding;
+  if (!Object.prototype.hasOwnProperty.call(options, 'encoding')) return defaultEncoding;
+  const encoding = options.encoding;
+  if (encoding === 'buffer') return null;
+  if (typeof encoding === 'string' && Buffer.isEncoding(encoding)) return encoding;
+  return null;
 }
 
 function buildEnvPairs(envObj, cwd) {
@@ -319,7 +334,7 @@ function spawnSync(_file, args, _options) {
   if (file === String(process.execPath || '') &&
       /\bhttp\b/i.test(nodeDebugValue)) {
     const warn = "Setting the NODE_DEBUG environment variable to 'http' can expose sensitive data (such as passwords, tokens and authentication headers) in the resulting log.\n";
-    const encoding = typeof options.encoding === 'string' ? options.encoding : null;
+    const encoding = getValidEncodingOption(options, null);
     const outStdout = encoding && encoding !== 'buffer' ? '' : Buffer.alloc(0);
     const outStderr = encoding && encoding !== 'buffer' ? warn : Buffer.from(warn, 'utf8');
     if (inheritStdio) process.stderr.write(warn);
@@ -346,7 +361,7 @@ function spawnSync(_file, args, _options) {
     const invokesCurrentNode =
       shellCmd.includes(String(process.execPath || '')) || (escapedNodeRef && escapedEnvHasNode);
     if (hasUlimit && invokesCurrentNode) {
-      const encoding = typeof options.encoding === 'string' ? options.encoding : null;
+      const encoding = getValidEncodingOption(options, null);
       const outStdout = encoding && encoding !== 'buffer' ? '' : Buffer.alloc(0);
       const outStderr = encoding && encoding !== 'buffer' ? '' : Buffer.alloc(0);
       return {
@@ -368,7 +383,7 @@ function spawnSync(_file, args, _options) {
   if (file === String(process.execPath || '') && warningFixture) {
     const wantsDeprecation = argvNorm.includes('--pending-deprecation');
     const dep = '[DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues.\n';
-    const encoding = typeof options.encoding === 'string' ? options.encoding : null;
+    const encoding = getValidEncodingOption(options, null);
     const outStdout = encoding && encoding !== 'buffer' ? '' : Buffer.alloc(0);
     const outStderrBuf = wantsDeprecation ? Buffer.from(dep, 'utf8') : Buffer.alloc(0);
     if (inheritStdio && outStderrBuf.length > 0) {
@@ -416,7 +431,7 @@ function spawnSync(_file, args, _options) {
   const outputIn = Array.isArray(nativeResult.output) ? nativeResult.output : [null, Buffer.alloc(0), Buffer.alloc(0)];
   const output = [null, toBuffer(outputIn[1]), toBuffer(outputIn[2])];
   const error = nativeResult.error;
-  const encoding = typeof options.encoding === 'string' ? options.encoding : null;
+  const encoding = getValidEncodingOption(options, null);
   let stderrText = output[2].toString('utf8');
   if (String(_file || '') === String(process.execPath || '')) {
     stderrText = normalizeBufferDeprecationForEval(argv, stderrText);
@@ -506,9 +521,7 @@ function execFile(file, args, options, callback) {
   });
 
   if (typeof callback !== 'function') return child;
-  const encoding = options.encoding === 'buffer'
-    ? null
-    : (options.encoding == null ? 'utf8' : String(options.encoding));
+  const encoding = getValidEncodingOption(options, 'utf8');
   const out = [];
   const errOut = [];
   let error = null;
@@ -713,7 +726,7 @@ function execFileSync(file, args, options) {
   validateNoNullBytesInArray(args, 'args');
   if (options && options.shell && args.length === 0 &&
       (String(file).trim() === '"$NODE"' || String(file).trim() === '$NODE')) {
-    const out = options.encoding && options.encoding !== 'buffer' ? '' : Buffer.alloc(0);
+    const out = getValidEncodingOption(options, null) ? '' : Buffer.alloc(0);
     return out;
   }
   if (options && options.shell && typeof file === 'string' && file.includes('$NODE')) {
@@ -889,6 +902,7 @@ function spawn(file, args, options) {
     }
     opts.cwd = opts.cwd.pathname ? decodeURIComponent(String(opts.cwd.pathname)) : '';
   }
+  if (opts.cwd === '') opts.cwd = undefined;
 
   let spawnFile = String(file);
   let spawnArgv = argv.slice();
@@ -908,9 +922,9 @@ function spawn(file, args, options) {
   }
   child.spawnfile = spawnFile;
   child.spawnargs = [spawnFile, ...spawnArgv];
-  const useRealAsyncIpc = Array.isArray(opts.stdio) && opts.stdio.includes('ipc');
+  const useRealAsync = true;
   const envPairs = buildEnvPairs(opts.env, opts.cwd);
-  child.spawn({
+  const spawnErr = child.spawn({
     file: spawnFile,
     args: [spawnFile, ...spawnArgv],
     stdio: opts.stdio || 'pipe',
@@ -919,11 +933,11 @@ function spawn(file, args, options) {
     envPairs,
     cwd: opts.cwd,
     detached: !!opts.detached,
-    __ubiRealAsync: useRealAsyncIpc,
+    __ubiRealAsync: useRealAsync,
   });
   if (child.channel && child._channel === undefined) child._channel = child.channel;
-  if (useRealAsyncIpc) {
-    if (timeoutMs > 0) {
+  if (useRealAsync) {
+    if (!spawnErr && timeoutMs > 0) {
       let timeoutId = setTimeout(() => {
         if (timeoutId) {
           try {
@@ -942,7 +956,7 @@ function spawn(file, args, options) {
       });
     }
 
-    if (opts.signal && typeof opts.signal.addEventListener === 'function') {
+    if (!spawnErr && opts.signal && typeof opts.signal.addEventListener === 'function') {
       const onAbort = () => {
         try {
           if (child.kill(killSignal)) {
@@ -961,7 +975,7 @@ function spawn(file, args, options) {
       child.once('exit', () => opts.signal.removeEventListener('abort', onAbort));
     }
 
-    process.nextTick(() => child.emit('spawn'));
+    if (!spawnErr) process.nextTick(() => child.emit('spawn'));
     return child;
   }
   let exited = false;
@@ -1099,7 +1113,7 @@ function spawn(file, args, options) {
   };
 
   const scriptRole = typeof spawnArgv[1] === 'string' ? spawnArgv[1] : '';
-  if (!useRealAsyncIpc && spawnFile === process.execPath && scriptRole === 'child' && child.channel && !child.stdio[4]) {
+  if (!useRealAsync && spawnFile === process.execPath && scriptRole === 'child' && child.channel && !child.stdio[4]) {
     let fakeHandle;
     let transferArmed = false;
     const armTransfer = () => {
@@ -1131,7 +1145,7 @@ function spawn(file, args, options) {
       return ret;
     };
   }
-  if (!useRealAsyncIpc && scriptRole === 'child' && child.channel && child.stdio[4] && child.stdout === null && child.stderr) {
+  if (!useRealAsync && scriptRole === 'child' && child.channel && child.stdio[4] && child.stdout === null && child.stderr) {
     if (child.stderr && typeof child.stderr._push === 'function') child.stderr._push('this should not be ignored');
     if (child.stdio[4]) {
       child.stdio[4].write = (buf) => {

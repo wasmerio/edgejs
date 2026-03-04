@@ -11,4 +11,8 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path);
 void UbiSetPrimordials(napi_env env, napi_value primordials);
 void UbiSetInternalBinding(napi_env env, napi_value internal_binding);
 
+// Run the internal task_queue tick callback registered via setTickCallback().
+// When no callback is registered, `called` is set to false and napi_ok is returned.
+napi_status UbiRunTaskQueueTickCallback(napi_env env, bool* called);
+
 #endif  // UBI_MODULE_LOADER_H_

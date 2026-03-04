@@ -50,5 +50,6 @@ module.exports = {
   hasAsyncIdStack() { return false; },
   afterHooksExist() { return false; },
   emitAfter: noop,
+  pushAsyncContext: noop,
   popAsyncContext: noop,
 };

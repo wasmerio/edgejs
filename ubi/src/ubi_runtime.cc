@@ -18,6 +18,8 @@
 
 #include <uv.h>
 
+#include "unofficial_napi.h"
+
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -261,7 +263,7 @@ bool EmitProcessLifecycleEvent(napi_env env, const char* event_name, int exit_co
   }
   napi_value args[2] = {event_name_value, exit_code_value};
   napi_value ignored = nullptr;
-  return napi_call_function(env, process_obj, emit_fn, 2, args, &ignored) == napi_ok;
+  return UbiMakeCallback(env, process_obj, emit_fn, 2, args, &ignored) == napi_ok;
 }
 
 bool DispatchUncaughtException(napi_env env, napi_value exception, bool* handled_out) {
@@ -510,6 +512,72 @@ napi_value UbiProcessKillBinding(napi_env env, napi_callback_info info) {
   return out;
 }
 
+bool NapiValueToUtf8(napi_env env, napi_value value, std::string* out) {
+  if (env == nullptr || value == nullptr || out == nullptr) return false;
+  napi_value string_value = value;
+  napi_valuetype value_type = napi_undefined;
+  if (napi_typeof(env, value, &value_type) != napi_ok) return false;
+  if (value_type != napi_string) {
+    if (napi_coerce_to_string(env, value, &string_value) != napi_ok || string_value == nullptr) {
+      return false;
+    }
+  }
+  size_t length = 0;
+  if (napi_get_value_string_utf8(env, string_value, nullptr, 0, &length) != napi_ok) return false;
+  std::string text(length + 1, '\0');
+  size_t copied = 0;
+  if (napi_get_value_string_utf8(env, string_value, text.data(), text.size(), &copied) != napi_ok) return false;
+  text.resize(copied);
+  *out = std::move(text);
+  return true;
+}
+
+napi_value UbiProcessSetEnvBinding(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  int32_t rc = -1;
+  std::string key;
+  std::string value;
+  if (argc >= 2 &&
+      NapiValueToUtf8(env, argv[0], &key) &&
+      NapiValueToUtf8(env, argv[1], &value) &&
+      !key.empty()) {
+#if defined(_WIN32)
+    rc = (_putenv_s(key.c_str(), value.c_str()) == 0) ? 0 : -1;
+#else
+    rc = (setenv(key.c_str(), value.c_str(), 1) == 0) ? 0 : -1;
+#endif
+    if (rc == 0 && key == "TZ") {
+      (void)unofficial_napi_notify_datetime_configuration_change(env);
+    }
+  }
+  napi_value out = nullptr;
+  napi_create_int32(env, rc, &out);
+  return out;
+}
+
+napi_value UbiProcessUnsetEnvBinding(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  int32_t rc = -1;
+  std::string key;
+  if (argc >= 1 && NapiValueToUtf8(env, argv[0], &key) && !key.empty()) {
+#if defined(_WIN32)
+    rc = (_putenv_s(key.c_str(), "") == 0) ? 0 : -1;
+#else
+    rc = (unsetenv(key.c_str()) == 0) ? 0 : -1;
+#endif
+    if (rc == 0 && key == "TZ") {
+      (void)unofficial_napi_notify_datetime_configuration_change(env);
+    }
+  }
+  napi_value out = nullptr;
+  napi_create_int32(env, rc, &out);
+  return out;
+}
+
 int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
   bool has_pending = false;
   if (napi_is_exception_pending(env, &has_pending) != napi_ok || !has_pending) {
@@ -572,18 +640,31 @@ int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
   return 1;
 }
 
-void DrainProcessTickCallback(napi_env env) {
+// Mirrors Node's native tick dispatch by preferring the task_queue callback
+// registered through setTickCallback(), and falling back to process._tickCallback.
+napi_status DrainProcessTickCallback(napi_env env) {
+  bool called_task_queue_tick = false;
+  const napi_status task_queue_status = UbiRunTaskQueueTickCallback(env, &called_task_queue_tick);
+  if (task_queue_status != napi_ok) {
+    return task_queue_status;
+  }
+  if (called_task_queue_tick) {
+    return napi_ok;
+  }
+
   napi_value global = nullptr;
   napi_value process = nullptr;
   napi_value tick_cb = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  if (napi_get_named_property(env, global, "process", &process) != napi_ok || process == nullptr) return;
-  if (napi_get_named_property(env, process, "_tickCallback", &tick_cb) != napi_ok || tick_cb == nullptr) return;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return napi_ok;
+  if (napi_get_named_property(env, global, "process", &process) != napi_ok || process == nullptr) return napi_ok;
+  if (napi_get_named_property(env, process, "_tickCallback", &tick_cb) != napi_ok || tick_cb == nullptr) {
+    return napi_ok;
+  }
   napi_valuetype type = napi_undefined;
   napi_typeof(env, tick_cb, &type);
-  if (type != napi_function) return;
+  if (type != napi_function) return napi_ok;
   napi_value ignored = nullptr;
-  (void)napi_call_function(env, process, tick_cb, 0, nullptr, &ignored);
+  return napi_call_function(env, process, tick_cb, 0, nullptr, &ignored);
 }
 
 int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
@@ -728,8 +809,6 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
     } else {
       uv_run(loop, UV_RUN_DEFAULT);
     }
-    // Drain process.nextTick queue every turn (Node-equivalent turn semantics).
-    DrainProcessTickCallback(env);
     // Match Node's event-loop turn: drain platform tasks after libuv run.
     (void)UbiRuntimePlatformDrainTasks(env);
 
@@ -745,7 +824,6 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
 
     const int before_exit_code = GetProcessExitCodeOrZero(env);
     EmitProcessLifecycleEvent(env, "beforeExit", before_exit_code);
-    DrainProcessTickCallback(env);
     (void)UbiRuntimePlatformDrainTasks(env);
 
     async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
@@ -934,33 +1012,6 @@ int RunScriptWithGlobals(napi_env env,
   static const char kConsoleBootstrap[] =
       "(function(){"
       "if (typeof process !== 'object' || !process) return;"
-      "if (typeof process.nextTick !== 'function') {"
-      "  process.nextTick = function(fn){"
-      "    if (typeof fn !== 'function') {"
-      "      var e = new TypeError('The \"callback\" argument must be of type function.');"
-      "      e.code = 'ERR_INVALID_ARG_TYPE';"
-      "      throw e;"
-      "    }"
-      "    var args = Array.prototype.slice.call(arguments, 1);"
-      "    var invoke = function(){"
-      "      try {"
-      "        fn.apply(null, args);"
-      "      } catch (err) {"
-      "        if (process && typeof process.emit === 'function' && typeof process.listenerCount === 'function' && process.listenerCount('uncaughtException') > 0) {"
-      "          process.emit('uncaughtException', err);"
-      "        } else {"
-      "          try {"
-      "            var __text = (err && err.stack) ? String(err.stack) : String(err);"
-      "            if (process && process.stderr && typeof process.stderr.write === 'function') process.stderr.write(__text + '\\n');"
-      "          } catch (_) {}"
-      "          throw err;"
-      "        }"
-      "      }"
-      "    };"
-      "    if (typeof queueMicrotask === 'function') queueMicrotask(invoke);"
-      "    else invoke();"
-      "  };"
-      "}"
       "if (true) {"
       "  process.emitWarning = function(warning, type, code, ctor){"
       "    var makeTypeErr = function(){"
@@ -1170,6 +1221,7 @@ int RunScriptWithGlobals(napi_env env,
       "    if (typeof v !== 'boolean') {"
       "      var err = new TypeError('The \"enabled\" argument must be of type boolean.');"
       "      err.code = 'ERR_INVALID_ARG_TYPE';"
+      "      err.name = 'TypeError [ERR_INVALID_ARG_TYPE]';"
       "      throw err;"
       "    }"
       "    __sourceMapsEnabled = v;"
@@ -1391,6 +1443,12 @@ int RunScriptWithGlobals(napi_env env,
       "  process.abort = () => __nativeAbort();"
       "}"
       "try { Object.defineProperty(process, Symbol.toStringTag, { value: 'process', configurable: true }); } catch (_) {}"
+      "try {"
+      "  if (!process.constructor || process.constructor.name !== 'process') {"
+      "    var __processCtor = function process() {};"
+      "    Object.defineProperty(process, 'constructor', { value: __processCtor, writable: true, enumerable: false, configurable: true });"
+      "  }"
+      "} catch (_) {}"
       "if (typeof process.on !== 'function') process.on = function(){ return process; };"
       "if (typeof process.addListener !== 'function') process.addListener = process.on;"
       "if (typeof process.removeListener !== 'function') process.removeListener = function(){ return process; };"
@@ -1437,6 +1495,26 @@ int RunScriptWithGlobals(napi_env env,
       process_kill_fn != nullptr) {
     napi_set_named_property(env, global, "__ubi_process_kill", process_kill_fn);
   }
+  napi_value process_set_env_fn = nullptr;
+  if (napi_create_function(env,
+                           "__ubi_process_set_env",
+                           NAPI_AUTO_LENGTH,
+                           UbiProcessSetEnvBinding,
+                           nullptr,
+                           &process_set_env_fn) == napi_ok &&
+      process_set_env_fn != nullptr) {
+    napi_set_named_property(env, global, "__ubi_process_set_env", process_set_env_fn);
+  }
+  napi_value process_unset_env_fn = nullptr;
+  if (napi_create_function(env,
+                           "__ubi_process_unset_env",
+                           NAPI_AUTO_LENGTH,
+                           UbiProcessUnsetEnvBinding,
+                           nullptr,
+                           &process_unset_env_fn) == napi_ok &&
+      process_unset_env_fn != nullptr) {
+    napi_set_named_property(env, global, "__ubi_process_unset_env", process_unset_env_fn);
+  }
   napi_value primordials_container = nullptr;
   if (napi_create_object(env, &primordials_container) != napi_ok || primordials_container == nullptr) {
     if (error_out != nullptr) {
@@ -1461,6 +1539,16 @@ int RunScriptWithGlobals(napi_env env,
       "var __ib = __ubiBootstrapRequire('internal/bootstrap/realm');"
       "if (!__ib || typeof __ib.internalBinding !== 'function') throw new Error('internal/bootstrap/realm did not export internalBinding');"
       "globalThis.internalBinding = __ib.internalBinding;"
+      "try {"
+      "  var __taskQueues = __ubiBootstrapRequire('internal/process/task_queues');"
+      "  if (__taskQueues && typeof __taskQueues.setupTaskQueue === 'function') {"
+      "    var __taskQueueSetup = __taskQueues.setupTaskQueue();"
+      "    if (process && typeof process === 'object' && __taskQueueSetup) {"
+      "      if (typeof __taskQueueSetup.nextTick === 'function') process.nextTick = __taskQueueSetup.nextTick;"
+      "      if (typeof __taskQueueSetup.runNextTicks === 'function') process._tickCallback = __taskQueueSetup.runNextTicks;"
+      "    }"
+      "  }"
+      "} catch (_) {}"
       "if (__ib && __ib.primordials) globalThis.primordials = __ib.primordials;"
       "if (globalThis.__ubi_primordials && typeof globalThis.__ubi_primordials.SymbolFor === 'function') globalThis.primordials = globalThis.__ubi_primordials;"
       "else if (__ib && __ib.primordials) globalThis.primordials = __ib.primordials;"
@@ -1609,6 +1697,25 @@ int RunScriptWithGlobals(napi_env env,
       "try {"
       "if (typeof internalBinding === 'undefined' && typeof globalThis.internalBinding === 'function') internalBinding = globalThis.internalBinding;"
       "if (typeof primordials === 'undefined' && globalThis.primordials) primordials = globalThis.primordials;"
+      "if (typeof globalThis.__napi_dynamic_import !== 'function') {"
+      "  globalThis.__napi_dynamic_import = function(specifier) {"
+      "    return Promise.resolve().then(function() {"
+      "      var id = String(specifier);"
+      "      if (id.slice(0, 5) === 'node:') id = id.slice(5);"
+      "      var mod = require(id);"
+      "      var ns = Object.create(null);"
+      "      if (mod != null && (typeof mod === 'object' || typeof mod === 'function')) {"
+      "        var keys = Object.keys(mod);"
+      "        for (var i = 0; i < keys.length; i++) {"
+      "          var k = keys[i];"
+      "          try { ns[k] = mod[k]; } catch (_) {}"
+      "        }"
+      "      }"
+      "      ns.default = mod;"
+      "      return ns;"
+      "    });"
+      "  };"
+      "}"
       "if (typeof globalThis.eval === 'function') {"
       "  var __ubiEval = globalThis.eval;"
       "  globalThis.eval = function(src) {"
@@ -1616,25 +1723,30 @@ int RunScriptWithGlobals(napi_env env,
       "    return __ubiEval(src);"
       "  };"
       "}"
+      "if (typeof globalThis.AbortController === 'undefined' || typeof globalThis.AbortSignal === 'undefined') {"
+      "  try {"
+      "    var __acmod = require('internal/abort_controller');"
+      "    if (typeof globalThis.AbortController === 'undefined' && __acmod && typeof __acmod.AbortController === 'function') {"
+      "      globalThis.AbortController = __acmod.AbortController;"
+      "    }"
+      "    if (typeof globalThis.AbortSignal === 'undefined' && __acmod && typeof __acmod.AbortSignal === 'function') {"
+      "      globalThis.AbortSignal = __acmod.AbortSignal;"
+      "    }"
+      "  } catch (_) {}"
+      "}"
       "if (typeof globalThis.AbortController === 'undefined') {"
       "  globalThis.AbortController = function AbortController() {"
-      "    var E = null;"
-      "    try { E = require('events').EventEmitter; } catch (_) {}"
-      "    var s = (typeof E === 'function') ? new E() : {};"
-      "    s.aborted = false;"
-      "    s.reason = undefined;"
-      "    if (typeof s.addEventListener !== 'function') {"
-      "      s.addEventListener = function(type, fn) { if (type === 'abort' && typeof this.on === 'function') this.on('abort', fn); };"
-      "    }"
-      "    if (typeof s.removeEventListener !== 'function') {"
-      "      s.removeEventListener = function(type, fn) { if (type === 'abort' && typeof this.removeListener === 'function') this.removeListener('abort', fn); };"
-      "    }"
-      "    this.signal = s;"
+      "    var signal = (typeof globalThis.EventTarget === 'function') ? new globalThis.EventTarget() : {};"
+      "    signal.aborted = false;"
+      "    signal.reason = undefined;"
+      "    this.signal = signal;"
       "    this.abort = function(reason) {"
-      "      if (this.signal.aborted) return;"
-      "      this.signal.aborted = true;"
-      "      this.signal.reason = reason;"
-      "      if (typeof this.signal.emit === 'function') this.signal.emit('abort');"
+      "      if (signal.aborted) return;"
+      "      signal.aborted = true;"
+      "      signal.reason = reason;"
+      "      if (typeof signal.dispatchEvent === 'function' && typeof globalThis.Event === 'function') {"
+      "        signal.dispatchEvent(new globalThis.Event('abort'));"
+      "      }"
       "    };"
       "  };"
       "}"
@@ -1758,7 +1870,17 @@ int RunScriptWithGlobals(napi_env env,
       "  globalThis.__ubi_resource_tracking_ready = true;"
       "  }})();"
       "if (typeof globalThis.queueMicrotask === 'undefined') {"
-      "  globalThis.queueMicrotask = function(f) { if (typeof f === 'function') f(); };"
+      "  try {"
+      "    var __tq = require('internal/process/task_queues');"
+      "    if (__tq && typeof __tq.queueMicrotask === 'function') {"
+      "      globalThis.queueMicrotask = __tq.queueMicrotask;"
+      "    }"
+      "  } catch (_) {}"
+      "}"
+      "if (typeof globalThis.queueMicrotask === 'undefined') {"
+      "  globalThis.queueMicrotask = function(f) {"
+      "    if (typeof f === 'function') Promise.resolve().then(f);"
+      "  };"
       "}"
       "if (globalThis.process) {"
       "  try {"
@@ -1767,11 +1889,11 @@ int RunScriptWithGlobals(napi_env env,
       "    if (typeof __EE === 'function') {"
       "      var __proto = Object.getPrototypeOf(globalThis.process);"
       "      if (!(__proto instanceof __EE)) {"
-      "        function Process() {}"
-      "        Process.prototype = Object.create(__EE.prototype);"
-      "        Object.defineProperty(Process.prototype, 'constructor', { value: Process, writable: true, enumerable: false, configurable: true });"
-      "        Object.setPrototypeOf(globalThis.process, Process.prototype);"
-      "        globalThis.process.constructor = Process;"
+      "        function process() {}"
+      "        process.prototype = Object.create(__EE.prototype);"
+      "        Object.defineProperty(process.prototype, 'constructor', { value: process, writable: true, enumerable: false, configurable: true });"
+      "        Object.setPrototypeOf(globalThis.process, process.prototype);"
+      "        globalThis.process.constructor = process;"
       "      }"
       "      delete globalThis.process.on;"
       "      delete globalThis.process.addListener;"
@@ -1838,6 +1960,30 @@ int RunScriptWithGlobals(napi_env env,
       "      if (typeof obj.unref === 'function') return obj.unref();"
       "    };"
       "  }"
+      "  globalThis.process.loadEnvFile = function() {"
+      "    var path = (arguments.length > 0) ? arguments[0] : undefined;"
+      "    var resolved = '.env';"
+      "    if (path != null) {"
+      "      try {"
+      "        var __fsUtils = require('internal/fs/utils');"
+      "        if (__fsUtils && typeof __fsUtils.getValidatedPath === 'function') resolved = __fsUtils.getValidatedPath(path);"
+      "        else resolved = path;"
+      "      } catch (_) {"
+      "        resolved = path;"
+      "      }"
+      "    }"
+      "    var __fs = require('fs');"
+      "    var __content = __fs.readFileSync(resolved, 'utf8');"
+      "    var __util = require('util');"
+      "    var __parsed = (__util && typeof __util.parseEnv === 'function') ? __util.parseEnv(__content) : {};"
+      "    var __keys2 = Object.keys(__parsed);"
+      "    for (var __j = 0; __j < __keys2.length; __j++) {"
+      "      var __name2 = __keys2[__j];"
+      "      if (globalThis.process.env[__name2] === undefined) {"
+      "        globalThis.process.env[__name2] = __parsed[__name2];"
+      "      }"
+      "    }"
+      "  };"
       "  if (globalThis.process.env && !globalThis.process.__ubi_env_proxy_installed) {"
       "    globalThis.process.__ubi_env_proxy_installed = true;"
       "    var __rawEnv = globalThis.process.env;"
@@ -1859,6 +2005,9 @@ int RunScriptWithGlobals(napi_env env,
       "        var name = String(key);"
       "        if (name.length === 0) return true;"
       "        target[name] = String(value);"
+      "        if (typeof globalThis.__ubi_process_set_env === 'function') {"
+      "          try { globalThis.__ubi_process_set_env(name, target[name]); } catch (_) {}"
+      "        }"
       "        return true;"
       "      },"
       "      has: function(target, key) {"
@@ -1867,7 +2016,11 @@ int RunScriptWithGlobals(napi_env env,
       "      },"
       "      deleteProperty: function(target, key) {"
       "        if (typeof key === 'symbol') return true;"
-      "        delete target[String(key)];"
+      "        var name = String(key);"
+      "        delete target[name];"
+      "        if (typeof globalThis.__ubi_process_unset_env === 'function') {"
+      "          try { globalThis.__ubi_process_unset_env(name); } catch (_) {}"
+      "        }"
       "        return true;"
       "      },"
       "      defineProperty: function(target, key, desc) {"
@@ -1886,6 +2039,9 @@ int RunScriptWithGlobals(napi_env env,
       "          throw makeTypeErr(\"'process.env' only accepts a configurable, writable, and enumerable data descriptor\");"
       "        }"
       "        target[name] = String(desc.value);"
+      "        if (typeof globalThis.__ubi_process_set_env === 'function') {"
+      "          try { globalThis.__ubi_process_set_env(name, target[name]); } catch (_) {}"
+      "        }"
       "        return true;"
       "      },"
       "      getOwnPropertyDescriptor: function(target, key) {"
@@ -2006,7 +2162,7 @@ int RunScriptWithGlobals(napi_env env,
       "          throw e2;"
       "        }"
       "      }"
-      "      if (env === undefined) env = process.env;"
+      "      if (env === undefined) env = globalThis.process.env;"
       "      if (env === null || typeof env !== 'object' || Array.isArray(env)) {"
       "        var e3 = new TypeError('The \"env\" argument must be of type object. ' + argTail(env));"
       "        e3.code = 'ERR_INVALID_ARG_TYPE';"
@@ -2027,24 +2183,31 @@ int RunScriptWithGlobals(napi_env env,
       "          throw e4;"
       "        }"
       "      }"
-      "      if (Array.isArray(process.execArgv) && process.execArgv.indexOf('--permission') >= 0 &&"
-      "          process.execArgv.indexOf('--allow-child-process') < 0) {"
+      "      if (Array.isArray(globalThis.process.execArgv) && globalThis.process.execArgv.indexOf('--permission') >= 0 &&"
+      "          globalThis.process.execArgv.indexOf('--allow-child-process') < 0) {"
       "        var ea = new Error('Access to this API has been restricted');"
       "        ea.code = 'ERR_ACCESS_DENIED';"
       "        ea.permission = 'ChildProcess';"
       "        ea.resource = execPath;"
       "        throw ea;"
       "      }"
-      "      if (execPath !== process.execPath) {"
+      "      var __sameExec = (execPath === globalThis.process.execPath);"
+      "      if (!__sameExec) {"
+      "        try {"
+      "          var __path = require('path');"
+      "          __sameExec = __path.resolve(String(execPath)) === __path.resolve(String(globalThis.process.execPath));"
+      "        } catch (_) {}"
+      "      }"
+      "      if (!__sameExec) {"
       "        var ef = new Error('process.execve failed with error code ENOENT\\n    at execve (node:internal/process/per_thread:1:1)');"
       "        ef.code = 'ENOENT';"
       "        ef.stack = 'Error: process.execve failed with error code ENOENT\\n    at execve (node:internal/process/per_thread:1:1)';"
       "        throw ef;"
       "      }"
-      "      process.argv = args.slice();"
-      "      var oldKeys = Object.keys(process.env);"
-      "      for (var x = 0; x < oldKeys.length; x++) delete process.env[oldKeys[x]];"
-      "      for (var y = 0; y < envKeys.length; y++) process.env[envKeys[y]] = env[envKeys[y]];"
+      "      globalThis.process.argv = args.slice();"
+      "      var oldKeys = Object.keys(globalThis.process.env);"
+      "      for (var x = 0; x < oldKeys.length; x++) delete globalThis.process.env[oldKeys[x]];"
+      "      for (var y = 0; y < envKeys.length; y++) globalThis.process.env[envKeys[y]] = env[envKeys[y]];"
       "      var nextScript = args[1];"
       "      if (typeof nextScript === 'string' && nextScript.length > 0) {"
       "        try { delete require.cache[require.resolve(nextScript)]; } catch (_) {}"
@@ -2373,6 +2536,13 @@ int RunScriptWithGlobals(napi_env env,
   napi_value result = nullptr;
   status = napi_run_script(env, script, &result);
   if (status == napi_ok) {
+    // Node semantics: flush the task queues once after top-level script eval.
+    (void)DrainProcessTickCallback(env);
+    const int post_script_status = HandlePendingExceptionAfterLoopStep(env, error_out);
+    if (post_script_status >= 0) {
+      return post_script_status;
+    }
+
     if (keep_event_loop_alive) {
       // Mirror Node's embedder loop semantics for process lifetime and beforeExit handling.
       const int loop_result = RunEventLoopUntilQuiescent(env, error_out);
@@ -2413,12 +2583,13 @@ int RunScriptWithGlobals(napi_env env,
 
 }  // namespace
 
-napi_status UbiMakeCallback(napi_env env,
-                              napi_value recv,
-                              napi_value callback,
-                              size_t argc,
-                              napi_value* argv,
-                              napi_value* result) {
+napi_status UbiMakeCallbackWithFlags(napi_env env,
+                                     napi_value recv,
+                                     napi_value callback,
+                                     size_t argc,
+                                     napi_value* argv,
+                                     napi_value* result,
+                                     int flags) {
   if (env == nullptr || recv == nullptr || callback == nullptr) {
     return napi_invalid_arg;
   }
@@ -2427,17 +2598,32 @@ napi_status UbiMakeCallback(napi_env env,
   napi_status status = napi_call_function(env, recv, callback, argc, argv, result);
 
   bool has_pending = false;
+  const bool skip_task_queues = (flags & kUbiMakeCallbackSkipTaskQueues) != 0;
   if (status == napi_ok &&
       callback_scope_depth == 1 &&
+      !skip_task_queues &&
       napi_is_exception_pending(env, &has_pending) == napi_ok &&
       !has_pending) {
-    // Approximate Node's InternalCallbackScope queue-drain behavior:
-    // drain nextTick/rejection processing at the outermost callback scope.
-    DrainProcessTickCallback(env);
+    status = DrainProcessTickCallback(env);
   }
 
   callback_scope_depth--;
   return status;
+}
+
+napi_status UbiMakeCallback(napi_env env,
+                            napi_value recv,
+                            napi_value callback,
+                            size_t argc,
+                            napi_value* argv,
+                            napi_value* result) {
+  return UbiMakeCallbackWithFlags(env,
+                                  recv,
+                                  callback,
+                                  argc,
+                                  argv,
+                                  result,
+                                  kUbiMakeCallbackNone);
 }
 
 napi_status UbiInstallConsole(napi_env env) {

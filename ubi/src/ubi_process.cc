@@ -140,27 +140,27 @@ std::string ReadPackageVersionFromCandidates(const std::vector<std::filesystem::
   return "0.0.0";
 }
 
-// std::string GetUndiciVersion() {
-//   namespace fs = std::filesystem;
-//   const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / ".." / "..").lexically_normal();
-//   static const std::string version = ReadPackageVersionFromCandidates({
-//       source_root / "node" / "deps" / "undici" / "src" / "package.json",
-//       fs::current_path() / "node" / "deps" / "undici" / "src" / "package.json",
-//       fs::current_path().parent_path() / "node" / "deps" / "undici" / "src" / "package.json",
-//   });
-//   return version;
-// }
+std::string GetUndiciVersion() {
+  namespace fs = std::filesystem;
+  const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / ".." / "..").lexically_normal();
+  static const std::string version = ReadPackageVersionFromCandidates({
+      source_root / "node" / "deps" / "undici" / "src" / "package.json",
+      fs::current_path() / "node" / "deps" / "undici" / "src" / "package.json",
+      fs::current_path().parent_path() / "node" / "deps" / "undici" / "src" / "package.json",
+  });
+  return version;
+}
 
-// std::string GetAmaroVersion() {
-//   namespace fs = std::filesystem;
-//   const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / ".." / "..").lexically_normal();
-//   static const std::string version = ReadPackageVersionFromCandidates({
-//       source_root / "node" / "deps" / "amaro" / "package.json",
-//       fs::current_path() / "node" / "deps" / "amaro" / "package.json",
-//       fs::current_path().parent_path() / "node" / "deps" / "amaro" / "package.json",
-//   });
-//   return version;
-// }
+std::string GetAmaroVersion() {
+  namespace fs = std::filesystem;
+  const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / ".." / "..").lexically_normal();
+  static const std::string version = ReadPackageVersionFromCandidates({
+      source_root / "node" / "deps" / "amaro" / "package.json",
+      fs::current_path() / "node" / "deps" / "amaro" / "package.json",
+      fs::current_path().parent_path() / "node" / "deps" / "amaro" / "package.json",
+  });
+  return version;
+}
 
 std::string MaybePreferSiblingUbiBinary(const std::string& detected_exec_path) {
   if (detected_exec_path.empty()) return detected_exec_path;
@@ -171,15 +171,22 @@ std::string MaybePreferSiblingUbiBinary(const std::string& detected_exec_path) {
   if (filename.rfind("ubi_test_", 0) != 0) {
     return detected_exec_path;
   }
-  const fs::path sibling = detected.parent_path().parent_path() / "ubi";
-  if (!fs::exists(sibling, ec) || ec) {
-    return detected_exec_path;
+  const std::vector<fs::path> candidates = {
+      detected.parent_path() / "ubi",
+      detected.parent_path() / "ubi.exe",
+      detected.parent_path().parent_path() / "ubi",
+      detected.parent_path().parent_path() / "ubi.exe",
+  };
+  for (const fs::path& candidate : candidates) {
+    ec.clear();
+    if (!fs::exists(candidate, ec) || ec) continue;
+    ec.clear();
+    if (fs::is_directory(candidate, ec) || ec) continue;
+    const fs::path canonical = fs::weakly_canonical(candidate, ec);
+    if (!ec) return canonical.string();
+    return candidate.string();
   }
-  const fs::path canonical = fs::weakly_canonical(sibling, ec);
-  if (ec) {
-    return sibling.string();
-  }
-  return canonical.string();
+  return detected_exec_path;
 }
 
 const char* DetectPlatform() {
@@ -2142,7 +2149,7 @@ napi_status UbiInstallProcessObject(napi_env env,
       {"node", NODE_VERSION_STRING},
       {"acorn", ACORN_VERSION},
       {"ada", ADA_VERSION},
-      // {"amaro", GetAmaroVersion()},
+      {"amaro", GetAmaroVersion()},
       {"ares", ARES_VERSION_STR},
       {"brotli", GetBrotliVersion()},
       {"cjs_module_lexer", CJS_MODULE_LEXER_VERSION},
@@ -2155,7 +2162,7 @@ napi_status UbiInstallProcessObject(napi_env env,
       {"openssl", GetOpenSslVersion()},
       {"simdjson", SIMDJSON_VERSION},
       {"simdutf", SIMDUTF_VERSION},
-      // {"undici", GetUndiciVersion()},
+      {"undici", GetUndiciVersion()},
       {"uv", uv_version_string()},
       {"uvwasi", kUvwasiVersion},
       {"v8", UBI_EMBEDDED_V8_VERSION},
