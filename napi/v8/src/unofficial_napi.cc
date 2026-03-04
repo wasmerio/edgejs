@@ -278,6 +278,175 @@ napi_status NAPI_CDECL unofficial_napi_set_promise_reject_callback(napi_env env,
   return napi_ok;
 }
 
+napi_status NAPI_CDECL unofficial_napi_get_promise_details(napi_env env,
+                                                           napi_value promise,
+                                                           int32_t* state_out,
+                                                           napi_value* result_out,
+                                                           bool* has_result_out) {
+  if (env == nullptr || promise == nullptr || state_out == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(promise);
+  if (raw.IsEmpty() || !raw->IsPromise()) return napi_invalid_arg;
+
+  v8::Local<v8::Promise> p = raw.As<v8::Promise>();
+  const v8::Promise::PromiseState state = p->State();
+  *state_out = static_cast<int32_t>(state);
+
+  const bool has_result = state != v8::Promise::PromiseState::kPending;
+  if (has_result_out != nullptr) *has_result_out = has_result;
+
+  if (result_out != nullptr) {
+    *result_out = nullptr;
+    if (has_result) {
+      *result_out = napi_v8_wrap_value(env, p->Result());
+      if (*result_out == nullptr) return napi_generic_failure;
+    }
+  }
+
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_get_proxy_details(napi_env env,
+                                                         napi_value proxy,
+                                                         napi_value* target_out,
+                                                         napi_value* handler_out) {
+  if (env == nullptr || proxy == nullptr || target_out == nullptr || handler_out == nullptr) {
+    return napi_invalid_arg;
+  }
+
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(proxy);
+  if (raw.IsEmpty() || !raw->IsProxy()) return napi_invalid_arg;
+
+  v8::Local<v8::Proxy> p = raw.As<v8::Proxy>();
+  *target_out = napi_v8_wrap_value(env, p->GetTarget());
+  *handler_out = napi_v8_wrap_value(env, p->GetHandler());
+  if (*target_out == nullptr || *handler_out == nullptr) return napi_generic_failure;
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_preview_entries(napi_env env,
+                                                       napi_value value,
+                                                       napi_value* entries_out,
+                                                       bool* is_key_value_out) {
+  if (env == nullptr || value == nullptr || entries_out == nullptr || is_key_value_out == nullptr) {
+    return napi_invalid_arg;
+  }
+
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(value);
+  if (raw.IsEmpty() || !raw->IsObject()) return napi_invalid_arg;
+
+  bool is_key_value = false;
+  v8::Local<v8::Array> entries;
+  if (!raw.As<v8::Object>()->PreviewEntries(&is_key_value).ToLocal(&entries)) {
+    return napi_generic_failure;
+  }
+  *entries_out = napi_v8_wrap_value(env, entries);
+  if (*entries_out == nullptr) return napi_generic_failure;
+  *is_key_value_out = is_key_value;
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
+                                                      uint32_t frames,
+                                                      napi_value* callsites_out) {
+  if (env == nullptr || env->isolate == nullptr || callsites_out == nullptr) return napi_invalid_arg;
+  if (frames < 1 || frames > 200) return napi_invalid_arg;
+
+  v8::Isolate* isolate = env->isolate;
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = env->context();
+
+  v8::Local<v8::StackTrace> stack = v8::StackTrace::CurrentStackTrace(isolate, frames + 1);
+  const int frame_count = stack->GetFrameCount();
+  int start_index = 0;
+  if (frame_count > 0) {
+    v8::Local<v8::StackFrame> first_frame = stack->GetFrame(isolate, 0);
+    v8::Local<v8::Value> first_script_name = first_frame->GetScriptName();
+    if (!first_script_name.IsEmpty() && first_script_name->IsString()) {
+      v8::String::Utf8Value first_script_name_utf8(isolate, first_script_name);
+      if (*first_script_name_utf8 != nullptr) {
+        std::string script_name(*first_script_name_utf8,
+                                static_cast<size_t>(first_script_name_utf8.length()));
+        if (script_name.rfind("node:util", 0) == 0) {
+          start_index = 1;
+        }
+      }
+    }
+  }
+  const int available = frame_count - start_index;
+  uint32_t count = available > 0 ? static_cast<uint32_t>(available) : 0;
+  if (count > frames) count = frames;
+  v8::Local<v8::Array> out = v8::Array::New(isolate, count);
+
+  auto set_named = [&](v8::Local<v8::Object> obj, const char* key, v8::Local<v8::Value> value) -> bool {
+    v8::Local<v8::String> k;
+    if (!v8::String::NewFromUtf8(isolate, key, v8::NewStringType::kNormal).ToLocal(&k)) return false;
+    return obj->Set(context, k, value).FromMaybe(false);
+  };
+
+  for (uint32_t out_index = 0; out_index < count; ++out_index) {
+    const int i = start_index + static_cast<int>(out_index);
+    v8::Local<v8::StackFrame> frame = stack->GetFrame(isolate, i);
+    v8::Local<v8::Object> callsite = v8::Object::New(isolate);
+    if (callsite->SetPrototype(context, v8::Null(isolate)).IsNothing()) return napi_generic_failure;
+
+    v8::Local<v8::Value> function_name = frame->GetFunctionName();
+    if (function_name.IsEmpty()) function_name = v8::String::Empty(isolate);
+
+    v8::Local<v8::Value> script_name = frame->GetScriptName();
+    if (script_name.IsEmpty()) script_name = v8::String::Empty(isolate);
+    v8::Local<v8::Value> script_name_or_source_url = frame->GetScriptNameOrSourceURL();
+    if (script_name_or_source_url.IsEmpty()) script_name_or_source_url = v8::String::Empty(isolate);
+
+    const std::string script_id = std::to_string(frame->GetScriptId());
+    v8::Local<v8::String> script_id_v8;
+    if (!v8::String::NewFromUtf8(isolate,
+                                 script_id.data(),
+                                 v8::NewStringType::kNormal,
+                                 static_cast<int>(script_id.size()))
+             .ToLocal(&script_id_v8)) {
+      return napi_generic_failure;
+    }
+
+    const uint32_t line = frame->GetLineNumber();
+    const uint32_t col = frame->GetColumn();
+    if (!set_named(callsite, "functionName", function_name) ||
+        !set_named(callsite, "scriptId", script_id_v8) ||
+        !set_named(callsite, "scriptName", script_name) ||
+        !set_named(callsite, "scriptNameOrSourceURL", script_name_or_source_url) ||
+        !set_named(callsite, "lineNumber", v8::Integer::NewFromUnsigned(isolate, line)) ||
+        !set_named(callsite, "columnNumber", v8::Integer::NewFromUnsigned(isolate, col)) ||
+        !set_named(callsite, "column", v8::Integer::NewFromUnsigned(isolate, col)) ||
+        out->Set(context, out_index, callsite).IsNothing()) {
+      return napi_generic_failure;
+    }
+  }
+
+  *callsites_out = napi_v8_wrap_value(env, out);
+  if (*callsites_out == nullptr) return napi_generic_failure;
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_arraybuffer_view_has_buffer(napi_env env,
+                                                                   napi_value value,
+                                                                   bool* result_out) {
+  if (env == nullptr || value == nullptr || result_out == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(value);
+  if (raw.IsEmpty() || !raw->IsArrayBufferView()) return napi_invalid_arg;
+  *result_out = raw.As<v8::ArrayBufferView>()->HasBuffer();
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_get_constructor_name(napi_env env,
+                                                            napi_value value,
+                                                            napi_value* name_out) {
+  if (env == nullptr || value == nullptr || name_out == nullptr) return napi_invalid_arg;
+  v8::Local<v8::Value> raw = napi_v8_unwrap_value(value);
+  if (raw.IsEmpty() || !raw->IsObject()) return napi_invalid_arg;
+  v8::Local<v8::String> name = raw.As<v8::Object>()->GetConstructorName();
+  *name_out = napi_v8_wrap_value(env, name);
+  return *name_out == nullptr ? napi_generic_failure : napi_ok;
+}
+
 napi_status NAPI_CDECL unofficial_napi_notify_datetime_configuration_change(napi_env env) {
   if (env == nullptr || env->isolate == nullptr) return napi_invalid_arg;
 #if defined(__POSIX__)

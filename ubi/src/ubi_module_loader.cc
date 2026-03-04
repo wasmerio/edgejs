@@ -540,14 +540,224 @@ static bool AddUvErrorMapEntry(napi_env env, napi_value map, int32_t code, const
   return true;
 }
 
-static napi_value UvGetErrorMapCallback(napi_env env, napi_callback_info /*info*/) {
-  napi_value map_script = nullptr;
-  if (napi_create_string_utf8(env, "new Map()", NAPI_AUTO_LENGTH, &map_script) != napi_ok ||
-      map_script == nullptr) {
+static napi_value CreateMapObject(napi_env env) {
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
+  napi_value map_ctor = nullptr;
+  if (napi_get_named_property(env, global, "Map", &map_ctor) != napi_ok || map_ctor == nullptr) return nullptr;
+  napi_valuetype t = napi_undefined;
+  if (napi_typeof(env, map_ctor, &t) != napi_ok || t != napi_function) return nullptr;
+  napi_value out = nullptr;
+  if (napi_new_instance(env, map_ctor, 0, nullptr, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
+
+static napi_value UndefinedValue(napi_env env) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value GetGlobalNamedProperty(napi_env env, const char* key) {
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
+  bool has_prop = false;
+  if (napi_has_named_property(env, global, key, &has_prop) != napi_ok || !has_prop) return nullptr;
+  napi_value out = nullptr;
+  if (napi_get_named_property(env, global, key, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
+
+static napi_value CreateNullProtoObject(napi_env env) {
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
+  napi_value object_ctor = nullptr;
+  if (napi_get_named_property(env, global, "Object", &object_ctor) != napi_ok || object_ctor == nullptr) {
     return nullptr;
   }
-  napi_value err_map = nullptr;
-  if (napi_run_script(env, map_script, &err_map) != napi_ok || err_map == nullptr) return nullptr;
+  napi_value create_fn = nullptr;
+  if (napi_get_named_property(env, object_ctor, "create", &create_fn) != napi_ok || create_fn == nullptr) {
+    return nullptr;
+  }
+  napi_valuetype t = napi_undefined;
+  if (napi_typeof(env, create_fn, &t) != napi_ok || t != napi_function) return nullptr;
+  napi_value null_value = nullptr;
+  napi_get_null(env, &null_value);
+  napi_value argv[1] = {null_value};
+  napi_value out = nullptr;
+  if (napi_call_function(env, object_ctor, create_fn, 1, argv, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
+
+static bool MapSet(napi_env env, napi_value map, napi_value key, napi_value value) {
+  napi_value set_fn = nullptr;
+  if (napi_get_named_property(env, map, "set", &set_fn) != napi_ok || set_fn == nullptr) return false;
+  napi_value argv[2] = {key, value};
+  napi_value ignored = nullptr;
+  return napi_call_function(env, map, set_fn, 2, argv, &ignored) == napi_ok;
+}
+
+static bool MapSetStringKeyValue(napi_env env, napi_value map, const char* key, napi_value value) {
+  napi_value key_v = nullptr;
+  if (napi_create_string_utf8(env, key, NAPI_AUTO_LENGTH, &key_v) != napi_ok || key_v == nullptr) return false;
+  return MapSet(env, map, key_v, value);
+}
+
+static bool SetBoolProperty(napi_env env, napi_value target, const char* key, bool value) {
+  napi_value v = nullptr;
+  return napi_get_boolean(env, value, &v) == napi_ok &&
+         v != nullptr &&
+         napi_set_named_property(env, target, key, v) == napi_ok;
+}
+
+static bool SetNumberProperty(napi_env env, napi_value target, const char* key, double value) {
+  napi_value v = nullptr;
+  return napi_create_double(env, value, &v) == napi_ok &&
+         v != nullptr &&
+         napi_set_named_property(env, target, key, v) == napi_ok;
+}
+
+static bool SetStringProperty(napi_env env, napi_value target, const char* key, const char* value) {
+  napi_value v = nullptr;
+  return napi_create_string_utf8(env, value, NAPI_AUTO_LENGTH, &v) == napi_ok &&
+         v != nullptr &&
+         napi_set_named_property(env, target, key, v) == napi_ok;
+}
+
+static bool SetArrayProperty(napi_env env, napi_value target, const char* key) {
+  napi_value arr = nullptr;
+  return napi_create_array(env, &arr) == napi_ok &&
+         arr != nullptr &&
+         napi_set_named_property(env, target, key, arr) == napi_ok;
+}
+
+static bool PushArrayString(napi_env env, napi_value arr, const std::string& value) {
+  uint32_t len = 0;
+  if (napi_get_array_length(env, arr, &len) != napi_ok) return false;
+  napi_value str = nullptr;
+  if (napi_create_string_utf8(env, value.c_str(), value.size(), &str) != napi_ok || str == nullptr) return false;
+  return napi_set_element(env, arr, len, str) == napi_ok;
+}
+
+static std::vector<std::string> GetStringArrayProperty(napi_env env, napi_value obj, const char* key) {
+  std::vector<std::string> out;
+  if (obj == nullptr) return out;
+  bool has_prop = false;
+  if (napi_has_named_property(env, obj, key, &has_prop) != napi_ok || !has_prop) return out;
+  napi_value arr = nullptr;
+  if (napi_get_named_property(env, obj, key, &arr) != napi_ok || arr == nullptr) return out;
+  bool is_array = false;
+  if (napi_is_array(env, arr, &is_array) != napi_ok || !is_array) return out;
+  uint32_t len = 0;
+  if (napi_get_array_length(env, arr, &len) != napi_ok) return out;
+  out.reserve(len);
+  for (uint32_t i = 0; i < len; i++) {
+    napi_value item = nullptr;
+    if (napi_get_element(env, arr, i, &item) != napi_ok || item == nullptr) continue;
+    napi_value str = nullptr;
+    if (napi_coerce_to_string(env, item, &str) != napi_ok || str == nullptr) continue;
+    size_t n = 0;
+    if (napi_get_value_string_utf8(env, str, nullptr, 0, &n) != napi_ok) continue;
+    std::string s(n + 1, '\0');
+    size_t copied = 0;
+    if (napi_get_value_string_utf8(env, str, s.data(), s.size(), &copied) != napi_ok) continue;
+    s.resize(copied);
+    out.push_back(std::move(s));
+  }
+  return out;
+}
+
+static bool TryParseDouble(const std::string& text, double* out) {
+  if (out == nullptr || text.empty()) return false;
+  char* end = nullptr;
+  const double v = std::strtod(text.c_str(), &end);
+  if (end == nullptr || *end != '\0') return false;
+  *out = v;
+  return true;
+}
+
+static bool IsTruthyNestedProperty(napi_env env, napi_value obj, const std::vector<const char*>& path) {
+  napi_value cur = obj;
+  for (const char* key : path) {
+    if (cur == nullptr) return false;
+    bool has_prop = false;
+    if (napi_has_named_property(env, cur, key, &has_prop) != napi_ok || !has_prop) return false;
+    if (napi_get_named_property(env, cur, key, &cur) != napi_ok || cur == nullptr) return false;
+  }
+  bool out = false;
+  napi_get_value_bool(env, cur, &out);
+  return out;
+}
+
+static std::string ReadCliMarkdown() {
+  std::error_code ec;
+  const fs::path cwd = fs::current_path(ec);
+  if (ec) return "";
+  const std::vector<fs::path> candidates = {
+      cwd / "node" / "doc" / "api" / "cli.md",
+      cwd / ".." / "node" / "doc" / "api" / "cli.md",
+      cwd / ".." / ".." / "node" / "doc" / "api" / "cli.md",
+  };
+  for (const auto& path : candidates) {
+    const std::string text = ReadTextFile(path);
+    if (!text.empty()) return text;
+  }
+  return "";
+}
+
+static std::string NormalizeOptionNameFromDoc(const std::string& raw) {
+  std::string name = raw;
+  const size_t space = name.find(' ');
+  if (space != std::string::npos) name.resize(space);
+  const size_t comma = name.find(',');
+  if (comma != std::string::npos) name.resize(comma);
+  if (name.rfind("--no-", 0) == 0) {
+    name = "--" + name.substr(5);
+  }
+  return name;
+}
+
+static std::vector<std::string> ParseAllowedFlagsFromDocs() {
+  const std::string text = ReadCliMarkdown();
+  if (text.empty()) return {};
+
+  const std::vector<std::pair<std::string, std::string>> sections = {
+      {"<!-- node-options-node start -->", "<!-- node-options-node end -->"},
+      {"<!-- node-options-v8 start -->", "<!-- node-options-v8 end -->"},
+  };
+  std::unordered_map<std::string, bool> dedup;
+  std::vector<std::string> out;
+
+  for (const auto& section : sections) {
+    const size_t start = text.find(section.first);
+    if (start == std::string::npos) continue;
+    const size_t body_start = text.find('\n', start);
+    if (body_start == std::string::npos) continue;
+    const size_t end = text.find(section.second, body_start + 1);
+    if (end == std::string::npos || end <= body_start + 1) continue;
+    const std::string_view body(text.data() + body_start + 1, end - body_start - 1);
+
+    size_t pos = 0;
+    while (pos < body.size()) {
+      const size_t open = body.find('`', pos);
+      if (open == std::string_view::npos) break;
+      const size_t close = body.find('`', open + 1);
+      if (close == std::string_view::npos) break;
+      std::string candidate(body.substr(open + 1, close - open - 1));
+      if (!candidate.empty() && candidate[0] == '-') {
+        candidate = NormalizeOptionNameFromDoc(candidate);
+        if (!candidate.empty() && dedup.emplace(candidate, true).second) out.push_back(std::move(candidate));
+      }
+      pos = close + 1;
+    }
+  }
+
+  return out;
+}
+
+static napi_value UvGetErrorMapCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value err_map = CreateMapObject(env);
+  if (err_map == nullptr) return nullptr;
 #define UBI_SET_UV_ERRMAP_ENTRY(name, message)                                                   \
   if (!AddUvErrorMapEntry(env, err_map, static_cast<int32_t>(UV_##name), #name, message)) {     \
     return nullptr;                                                                               \
@@ -593,414 +803,439 @@ static napi_value UvErrNameCallback(napi_env env, napi_callback_info info) {
   return out;
 }
 
-static napi_value RunScriptAndReturnValue(napi_env env, const char* source) {
-  if (env == nullptr || source == nullptr) return nullptr;
-  napi_value script = nullptr;
-  if (napi_create_string_utf8(env, source, NAPI_AUTO_LENGTH, &script) != napi_ok || script == nullptr) {
-    return nullptr;
-  }
-  napi_value out = nullptr;
-  if (napi_run_script(env, script, &out) != napi_ok || out == nullptr) {
-    return nullptr;
-  }
-  return out;
-}
-
 static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback_info /*info*/) {
-  static constexpr const char* kScript = R"JS((function() {
-  const kArrayOptions = new Set([
-    '--conditions',
-    '--disable-warning',
-    '--env-file',
-    '--env-file-if-exists',
-    '--experimental-loader',
-    '--import',
-    '--require',
-    '--test-coverage-exclude',
-    '--test-coverage-include',
-    '--test-name-pattern',
-    '--test-reporter',
-    '--test-reporter-destination',
-    '--test-skip-pattern',
-    '--watch-path',
-  ]);
+  napi_value out = CreateNullProtoObject(env);
+  if (out == nullptr) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
 
-  const values = Object.assign(Object.create(null), {
-    '--abort-on-uncaught-exception': false,
-    '--async-context-frame': false,
-    '--conditions': [],
-    '--diagnostic-dir': '',
-    '--disable-warning': [],
-    '--dns-result-order': 'verbatim',
-    '--enable-source-maps': false,
-    '--entry-url': false,
-    '--env-file': [],
-    '--env-file-if-exists': [],
-    '--es-module-specifier-resolution': '',
-    '--eval': '',
-    '--experimental-addon-modules': false,
-    '--experimental-config-file': false,
-    '--experimental-default-config-file': false,
-    '--experimental-detect-module': false,
-    '--experimental-eventsource': false,
-    '--experimental-fetch': false,
-    '--experimental-global-customevent': false,
-    '--experimental-global-webcrypto': false,
-    '--experimental-import-meta-resolve': false,
-    '--experimental-inspector-network-resource': false,
-    '--experimental-loader': [],
-    '--experimental-network-inspection': false,
-    '--experimental-print-required-tla': false,
-    '--experimental-quic': false,
-    '--no-experimental-quic': false,
-    '--experimental-require-module': false,
-    '--experimental-report': false,
-    '--experimental-sqlite': false,
-    '--no-experimental-sqlite': false,
-    '--experimental-test-coverage': false,
-    '--experimental-test-module-mocks': false,
-    '--experimental-transform-types': false,
-    '--experimental-vm-modules': false,
-    '--experimental-wasm-modules': false,
-    '--experimental-webstorage': false,
-    '--experimental-worker': false,
-    '--expose-internals': false,
-    '--force-fips': false,
-    '--frozen-intrinsics': false,
-    '--heapsnapshot-near-heap-limit': 0,
-    '--heapsnapshot-signal': '',
-    '--icu-data-dir': '',
-    '--import': [],
-    '--insecure-http-parser': false,
-    '--input-type': '',
-    '--inspect-brk': false,
-    '--loader': [],
-    '--localstorage-file': '',
-    '--max-http-header-size': 16 * 1024,
-    '--network-family-autoselection': true,
-    '--network-family-autoselection-attempt-timeout': 250,
-    '--no-addons': false,
-    '--no-deprecation': false,
-    '--no-experimental-global-navigator': false,
-    '--no-experimental-websocket': false,
-    '--node-snapshot': false,
-    '--no-node-snapshot': false,
-    '--openssl-config': '',
-    '--openssl-legacy-provider': false,
-    '--openssl-shared-config': false,
-    '--pending-deprecation': false,
-    '--permission': false,
-    '--preserve-symlinks': false,
-    '--preserve-symlinks-main': false,
-    '--print': false,
-    '--redirect-warnings': '',
-    '--report-on-signal': false,
-    '--require': [],
-    '--secure-heap': 0,
-    '--secure-heap-min': 0,
-    '--stack-trace-limit': 10,
-    '--strip-types': false,
-    '--test': false,
-    '--test-concurrency': 0,
-    '--test-coverage-branches': 0,
-    '--test-coverage-exclude': [],
-    '--test-coverage-functions': 0,
-    '--test-coverage-include': [],
-    '--test-coverage-lines': 0,
-    '--test-force-exit': false,
-    '--test-global-setup': '',
-    '--test-isolation': 'process',
-    '--test-name-pattern': [],
-    '--test-only': false,
-    '--test-reporter': [],
-    '--test-reporter-destination': [],
-    '--test-rerun-failures': '',
-    '--test-shard': '',
-    '--test-skip-pattern': [],
-    '--test-timeout': 0,
-    '--test-update-snapshots': false,
-    '--throw-deprecation': false,
-    '--tls-cipher-list': '',
-    '--tls-keylog': '',
-    '--tls-max-v1.2': false,
-    '--tls-max-v1.3': false,
-    '--tls-min-v1.0': false,
-    '--tls-min-v1.1': false,
-    '--tls-min-v1.2': false,
-    '--tls-min-v1.3': false,
-    '--trace-deprecation': false,
-    '--trace-require-module': false,
-    '--trace-sigint': false,
-    '--trace-tls': false,
-    '--trace-warnings': false,
-    '--unhandled-rejections': 'throw',
-    '--use-bundled-ca': false,
-    '--use-env-proxy': false,
-    '--use-openssl-ca': false,
-    '--use-system-ca': false,
-    '--verify-base-objects': false,
-    '--no-verify-base-objects': false,
-    '--watch': false,
-    '--watch-kill-signal': 'SIGTERM',
-    '--watch-path': [],
-    '--watch-preserve-output': false,
-    '--warnings': true,
-    '[has_eval_string]': false,
-  });
+  const std::vector<const char*> bool_false = {
+      "--abort-on-uncaught-exception",
+      "--async-context-frame",
+      "--enable-source-maps",
+      "--entry-url",
+      "--experimental-addon-modules",
+      "--experimental-config-file",
+      "--experimental-default-config-file",
+      "--experimental-detect-module",
+      "--experimental-eventsource",
+      "--experimental-fetch",
+      "--experimental-global-customevent",
+      "--experimental-global-webcrypto",
+      "--experimental-import-meta-resolve",
+      "--experimental-inspector-network-resource",
+      "--experimental-network-inspection",
+      "--experimental-print-required-tla",
+      "--experimental-quic",
+      "--no-experimental-quic",
+      "--experimental-require-module",
+      "--experimental-report",
+      "--experimental-sqlite",
+      "--no-experimental-sqlite",
+      "--experimental-test-coverage",
+      "--experimental-test-module-mocks",
+      "--experimental-transform-types",
+      "--experimental-vm-modules",
+      "--experimental-wasm-modules",
+      "--experimental-webstorage",
+      "--experimental-worker",
+      "--expose-internals",
+      "--force-fips",
+      "--frozen-intrinsics",
+      "--insecure-http-parser",
+      "--inspect-brk",
+      "--no-addons",
+      "--no-deprecation",
+      "--no-experimental-global-navigator",
+      "--no-experimental-websocket",
+      "--node-snapshot",
+      "--no-node-snapshot",
+      "--openssl-legacy-provider",
+      "--openssl-shared-config",
+      "--pending-deprecation",
+      "--permission",
+      "--preserve-symlinks",
+      "--preserve-symlinks-main",
+      "--print",
+      "--report-on-signal",
+      "--strip-types",
+      "--test",
+      "--test-force-exit",
+      "--test-only",
+      "--test-update-snapshots",
+      "--throw-deprecation",
+      "--tls-max-v1.2",
+      "--tls-max-v1.3",
+      "--tls-min-v1.0",
+      "--tls-min-v1.1",
+      "--tls-min-v1.2",
+      "--tls-min-v1.3",
+      "--trace-deprecation",
+      "--trace-require-module",
+      "--trace-sigint",
+      "--trace-tls",
+      "--trace-warnings",
+      "--use-bundled-ca",
+      "--use-env-proxy",
+      "--use-openssl-ca",
+      "--use-system-ca",
+      "--verify-base-objects",
+      "--no-verify-base-objects",
+      "--watch",
+      "--watch-preserve-output",
+      "[has_eval_string]",
+  };
+  const std::vector<const char*> bool_true = {"--network-family-autoselection", "--warnings"};
+  const std::vector<std::pair<const char*, const char*>> string_defaults = {
+      {"--diagnostic-dir", ""},
+      {"--dns-result-order", "verbatim"},
+      {"--es-module-specifier-resolution", ""},
+      {"--eval", ""},
+      {"--heapsnapshot-signal", ""},
+      {"--icu-data-dir", ""},
+      {"--input-type", ""},
+      {"--localstorage-file", ""},
+      {"--openssl-config", ""},
+      {"--redirect-warnings", ""},
+      {"--test-global-setup", ""},
+      {"--test-isolation", "process"},
+      {"--test-rerun-failures", ""},
+      {"--test-shard", ""},
+      {"--tls-cipher-list", ""},
+      {"--tls-keylog", ""},
+      {"--unhandled-rejections", "throw"},
+      {"--watch-kill-signal", "SIGTERM"},
+  };
+  const std::vector<std::pair<const char*, double>> number_defaults = {
+      {"--heapsnapshot-near-heap-limit", 0},
+      {"--max-http-header-size", 16 * 1024},
+      {"--network-family-autoselection-attempt-timeout", 250},
+      {"--secure-heap", 0},
+      {"--secure-heap-min", 0},
+      {"--stack-trace-limit", 10},
+      {"--test-concurrency", 0},
+      {"--test-coverage-branches", 0},
+      {"--test-coverage-functions", 0},
+      {"--test-coverage-lines", 0},
+      {"--test-timeout", 0},
+  };
+  const std::vector<const char*> array_defaults = {
+      "--conditions",
+      "--disable-warning",
+      "--env-file",
+      "--env-file-if-exists",
+      "--experimental-loader",
+      "--import",
+      "--loader",
+      "--require",
+      "--test-coverage-exclude",
+      "--test-coverage-include",
+      "--test-name-pattern",
+      "--test-reporter",
+      "--test-reporter-destination",
+      "--test-skip-pattern",
+      "--watch-path",
+  };
 
-  const lists = [
-    Array.isArray(process && process.execArgv) ? process.execArgv : [],
-    Array.isArray(process && process.argv) ? process.argv : [],
-  ];
+  for (const char* key : bool_false) SetBoolProperty(env, out, key, false);
+  for (const char* key : bool_true) SetBoolProperty(env, out, key, true);
+  for (const auto& [key, value] : string_defaults) SetStringProperty(env, out, key, value);
+  for (const auto& [key, value] : number_defaults) SetNumberProperty(env, out, key, value);
+  for (const char* key : array_defaults) SetArrayProperty(env, out, key);
 
-  for (const list of lists) {
-    for (let i = 0; i < list.length; i++) {
-      const token = list[i];
-      if (typeof token !== 'string' || token.length === 0 || token[0] !== '-') continue;
+  const std::unordered_map<std::string, bool> array_option_set = {
+      {"--conditions", true},
+      {"--disable-warning", true},
+      {"--env-file", true},
+      {"--env-file-if-exists", true},
+      {"--experimental-loader", true},
+      {"--import", true},
+      {"--require", true},
+      {"--test-coverage-exclude", true},
+      {"--test-coverage-include", true},
+      {"--test-name-pattern", true},
+      {"--test-reporter", true},
+      {"--test-reporter-destination", true},
+      {"--test-skip-pattern", true},
+      {"--watch-path", true},
+  };
 
-      const eq = token.indexOf('=');
-      let key = eq === -1 ? token : token.slice(0, eq);
-      const raw = eq === -1 ? true : token.slice(eq + 1);
+  napi_value process = GetGlobalNamedProperty(env, "process");
+  const std::vector<std::vector<std::string>> lists = {
+      GetStringArrayProperty(env, process, "execArgv"),
+      GetStringArrayProperty(env, process, "argv"),
+  };
 
-      if (key === '-r') key = '--require';
-      if (key === '--loader') key = '--experimental-loader';
+  for (const auto& list : lists) {
+    for (size_t i = 0; i < list.size(); i++) {
+      const std::string& token = list[i];
+      if (token.empty() || token[0] != '-') continue;
 
-      if (kArrayOptions.has(key)) {
-        if (!Array.isArray(values[key])) values[key] = [];
-        if (eq !== -1) {
-          values[key].push(raw);
-        } else if (i + 1 < list.length) {
-          const next = list[i + 1];
-          if (typeof next === 'string' && next.length > 0 && next[0] !== '-') {
-            values[key].push(next);
+      const size_t eq = token.find('=');
+      std::string key = (eq == std::string::npos) ? token : token.substr(0, eq);
+      const std::string raw = (eq == std::string::npos) ? "true" : token.substr(eq + 1);
+
+      if (key == "-r") key = "--require";
+      if (key == "--loader") key = "--experimental-loader";
+
+      const bool is_array_opt = array_option_set.find(key) != array_option_set.end();
+      if (is_array_opt) {
+        napi_value arr = nullptr;
+        if (napi_get_named_property(env, out, key.c_str(), &arr) != napi_ok || arr == nullptr) continue;
+        if (eq != std::string::npos) {
+          PushArrayString(env, arr, raw);
+        } else if (i + 1 < list.size()) {
+          const std::string& next = list[i + 1];
+          if (!next.empty() && next[0] != '-') {
+            PushArrayString(env, arr, next);
             i++;
           }
         }
         continue;
       }
 
-      if (eq === -1) {
-        values[key] = true;
+      if (eq == std::string::npos) {
+        SetBoolProperty(env, out, key.c_str(), true);
       } else {
-        const maybeNum = Number(raw);
-        values[key] = Number.isNaN(maybeNum) ? raw : maybeNum;
+        double numeric = 0;
+        if (TryParseDouble(raw, &numeric)) {
+          SetNumberProperty(env, out, key.c_str(), numeric);
+        } else {
+          SetStringProperty(env, out, key.c_str(), raw.c_str());
+        }
       }
 
-      if (key === '--eval' || key === '-e') {
-        values['[has_eval_string]'] = true;
+      if (key == "--eval" || key == "-e") {
+        SetBoolProperty(env, out, "[has_eval_string]", true);
       }
     }
   }
 
-  return values;
-})())JS";
-  napi_value out = RunScriptAndReturnValue(env, kScript);
-  if (out != nullptr) return out;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
+  return out;
 }
 
 static napi_value OptionsGetCLIOptionsInfoCallback(napi_env env, napi_callback_info /*info*/) {
-  static constexpr const char* kScript = R"JS((function() {
-  const kAllowedInEnvvar = 0;
-  const kString = 5;
+  constexpr int32_t kAllowedInEnvvar = 0;
+  constexpr int32_t kString = 5;
 
-  function readCliMarkdown() {
-    const fs = require('fs');
-    const path = require('path');
-    const candidates = [
-      path.resolve(process.cwd(), 'node/doc/api/cli.md'),
-      path.resolve(process.cwd(), '../node/doc/api/cli.md'),
-      path.resolve(process.cwd(), '../../node/doc/api/cli.md'),
-    ];
-    for (const file of candidates) {
-      try {
-        return fs.readFileSync(file, 'utf8');
-      } catch {}
+  napi_value options_map = CreateMapObject(env);
+  napi_value aliases_map = CreateMapObject(env);
+  if (options_map == nullptr || aliases_map == nullptr) return UndefinedValue(env);
+
+  auto make_info = [&](napi_value* out) -> bool {
+    if (out == nullptr) return false;
+    napi_value info = nullptr;
+    if (napi_create_object(env, &info) != napi_ok || info == nullptr) return false;
+    if (!SetNumberProperty(env, info, "envVarSettings", kAllowedInEnvvar) ||
+        !SetNumberProperty(env, info, "type", kString)) {
+      return false;
     }
-    return '';
+    *out = info;
+    return true;
+  };
+
+  std::unordered_map<std::string, bool> seen;
+  auto add_option = [&](const std::string& name) {
+    if (name.empty() || seen.find(name) != seen.end()) return;
+    napi_value info = nullptr;
+    if (!make_info(&info)) return;
+    if (MapSetStringKeyValue(env, options_map, name.c_str(), info)) {
+      seen.emplace(name, true);
+    }
+  };
+
+  const std::vector<std::string> documented = ParseAllowedFlagsFromDocs();
+  for (const auto& opt : documented) add_option(opt);
+
+  const std::vector<std::string> extras = {
+      "--debug-arraybuffer-allocations",
+      "--no-debug-arraybuffer-allocations",
+      "--es-module-specifier-resolution",
+      "--experimental-fetch",
+      "--experimental-wasm-modules",
+      "--experimental-global-customevent",
+      "--experimental-global-webcrypto",
+      "--experimental-report",
+      "--experimental-worker",
+      "--node-snapshot",
+      "--no-node-snapshot",
+      "--loader",
+      "--verify-base-objects",
+      "--no-verify-base-objects",
+      "--trace-promises",
+      "--no-trace-promises",
+      "--experimental-quic",
+  };
+  for (const auto& opt : extras) add_option(opt);
+
+  napi_value process = GetGlobalNamedProperty(env, "process");
+  if (IsTruthyNestedProperty(env, process, {"config", "variables", "node_quic"})) {
+    add_option("--no-experimental-quic");
   }
 
-  function parseAllowedFlagsFromDocs() {
-    const text = readCliMarkdown();
-    if (!text) return new Set();
-    const sections = [
-      ['<!-- node-options-node start -->', '<!-- node-options-node end -->'],
-      ['<!-- node-options-v8 start -->', '<!-- node-options-v8 end -->'],
-    ];
-    const out = new Set();
-    for (const section of sections) {
-      const start = section[0];
-      const end = section[1];
-      const re = new RegExp(start + '\\r?\\n([^]*)\\r?\\n' + end);
-      const match = text.match(re);
-      if (!match) continue;
-      const lines = match[1].split(/\\r?\\n/);
-      for (const line of lines) {
-        if (!line || !line.trim()) continue;
-        for (const m of line.matchAll(/`(-[^`]+)`/g)) {
-          out.add(m[1].replace('--no-', '--'));
-        }
+  if (!IsTruthyNestedProperty(env, process, {"features", "inspector"})) {
+    const std::vector<std::string> inspector_only = {
+        "--cpu-prof-dir",
+        "--cpu-prof-interval",
+        "--cpu-prof-name",
+        "--cpu-prof",
+        "--heap-prof-dir",
+        "--heap-prof-interval",
+        "--heap-prof-name",
+        "--heap-prof",
+        "--inspect-brk",
+        "--inspect-port",
+        "--debug-port",
+        "--inspect-publish-uid",
+        "--inspect-wait",
+        "--inspect",
+    };
+    for (const auto& opt : inspector_only) {
+      seen.erase(opt);
+    }
+    // Rebuild map without deleted options to keep parity with previous behavior.
+    napi_value rebuilt = CreateMapObject(env);
+    if (rebuilt == nullptr) return UndefinedValue(env);
+    for (const auto& name : documented) {
+      if (seen.find(name) == seen.end()) continue;
+      napi_value info = nullptr;
+      if (!make_info(&info)) continue;
+      MapSetStringKeyValue(env, rebuilt, name.c_str(), info);
+    }
+    for (const auto& name : extras) {
+      if (seen.find(name) == seen.end()) continue;
+      napi_value info = nullptr;
+      if (!make_info(&info)) continue;
+      MapSetStringKeyValue(env, rebuilt, name.c_str(), info);
+    }
+    if (seen.find("--no-experimental-quic") != seen.end()) {
+      napi_value info = nullptr;
+      if (make_info(&info)) MapSetStringKeyValue(env, rebuilt, "--no-experimental-quic", info);
+    }
+    options_map = rebuilt;
+  }
+
+  add_option("--perf-basic-prof");
+  add_option("--stack-trace-limit");
+  add_option("-r");
+
+  if (!IsTruthyNestedProperty(env, process, {"config", "variables", "v8_enable_i18n_support"})) {
+    seen.erase("--icu-data-dir");
+    // Same rebuild approach for stability.
+    napi_value rebuilt = CreateMapObject(env);
+    if (rebuilt != nullptr) {
+      for (const auto& [name, _] : seen) {
+        napi_value info = nullptr;
+        if (!make_info(&info)) continue;
+        MapSetStringKeyValue(env, rebuilt, name.c_str(), info);
       }
+      options_map = rebuilt;
     }
-    return out;
   }
 
-  const options = new Map();
-  const aliases = new Map();
-  const documented = parseAllowedFlagsFromDocs();
-  const extras = [
-    '--debug-arraybuffer-allocations',
-    '--no-debug-arraybuffer-allocations',
-    '--es-module-specifier-resolution',
-    '--experimental-fetch',
-    '--experimental-wasm-modules',
-    '--experimental-global-customevent',
-    '--experimental-global-webcrypto',
-    '--experimental-report',
-    '--experimental-worker',
-    '--node-snapshot',
-    '--no-node-snapshot',
-    '--loader',
-    '--verify-base-objects',
-    '--no-verify-base-objects',
-    '--trace-promises',
-    '--no-trace-promises',
-    '--experimental-quic',
-  ];
-
-  for (const opt of documented) {
-    options.set(opt, { envVarSettings: kAllowedInEnvvar, type: kString });
-  }
-  for (const opt of extras) {
-    options.set(opt, { envVarSettings: kAllowedInEnvvar, type: kString });
-  }
-  if (process && process.config && process.config.variables && process.config.variables.node_quic) {
-    options.set('--no-experimental-quic', { envVarSettings: kAllowedInEnvvar, type: kString });
+  napi_value require_alias = nullptr;
+  if (napi_create_array_with_length(env, 1, &require_alias) == napi_ok && require_alias != nullptr) {
+    napi_value require_string = nullptr;
+    if (napi_create_string_utf8(env, "--require", NAPI_AUTO_LENGTH, &require_string) == napi_ok &&
+        require_string != nullptr) {
+      napi_set_element(env, require_alias, 0, require_string);
+      MapSetStringKeyValue(env, aliases_map, "-r", require_alias);
+    }
   }
 
-  if (!(process && process.features && process.features.inspector)) {
-    const inspectorOnly = [
-      '--cpu-prof-dir',
-      '--cpu-prof-interval',
-      '--cpu-prof-name',
-      '--cpu-prof',
-      '--heap-prof-dir',
-      '--heap-prof-interval',
-      '--heap-prof-name',
-      '--heap-prof',
-      '--inspect-brk',
-      '--inspect-port',
-      '--debug-port',
-      '--inspect-publish-uid',
-      '--inspect-wait',
-      '--inspect',
-    ];
-    for (const opt of inspectorOnly) options.delete(opt);
-  }
-
-  options.set('--perf-basic-prof', { envVarSettings: kAllowedInEnvvar, type: kString });
-  options.set('--stack-trace-limit', { envVarSettings: kAllowedInEnvvar, type: kString });
-  options.set('-r', { envVarSettings: kAllowedInEnvvar, type: kString });
-  if (!(process && process.config && process.config.variables &&
-        process.config.variables.v8_enable_i18n_support)) {
-    options.delete('--icu-data-dir');
-  }
-
-  aliases.set('-r', ['--require']);
-  return { options, aliases };
-})())JS";
-  napi_value out = RunScriptAndReturnValue(env, kScript);
-  if (out != nullptr) return out;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
+  napi_value out = CreateNullProtoObject(env);
+  if (out == nullptr) return UndefinedValue(env);
+  napi_set_named_property(env, out, "options", options_map);
+  napi_set_named_property(env, out, "aliases", aliases_map);
+  return out;
 }
 
 static napi_value OptionsGetOptionsAsFlagsCallback(napi_env env, napi_callback_info /*info*/) {
-  static constexpr const char* kScript = R"JS((function() {
-  return Array.isArray(process && process.execArgv) ? process.execArgv.slice() : [];
-})())JS";
-  napi_value out = RunScriptAndReturnValue(env, kScript);
-  if (out != nullptr) return out;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
+  napi_value process = GetGlobalNamedProperty(env, "process");
+  const std::vector<std::string> exec_argv = GetStringArrayProperty(env, process, "execArgv");
+  napi_value out = nullptr;
+  if (napi_create_array_with_length(env, exec_argv.size(), &out) != napi_ok || out == nullptr) {
+    return UndefinedValue(env);
+  }
+  for (size_t i = 0; i < exec_argv.size(); i++) {
+    napi_value item = nullptr;
+    if (napi_create_string_utf8(env, exec_argv[i].c_str(), exec_argv[i].size(), &item) != napi_ok ||
+        item == nullptr) {
+      continue;
+    }
+    napi_set_element(env, out, i, item);
+  }
+  return out;
 }
 
 static napi_value OptionsGetEmbedderOptionsCallback(napi_env env, napi_callback_info /*info*/) {
-  static constexpr const char* kScript = R"JS(({
-  hasEmbedderPreload: false,
-  noBrowserGlobals: false,
-  noGlobalSearchPaths: false,
-}))JS";
-  napi_value out = RunScriptAndReturnValue(env, kScript);
-  if (out != nullptr) return out;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
+  napi_value out = CreateNullProtoObject(env);
+  if (out == nullptr) return UndefinedValue(env);
+  SetBoolProperty(env, out, "shouldNotRegisterESMLoader", false);
+  SetBoolProperty(env, out, "noGlobalSearchPaths", false);
+  SetBoolProperty(env, out, "noBrowserGlobals", false);
+  SetBoolProperty(env, out, "hasEmbedderPreload", false);
+  return out;
 }
 
 static napi_value OptionsGetEnvOptionsInputTypeCallback(napi_env env, napi_callback_info /*info*/) {
-  static constexpr const char* kScript = R"JS((function() {
-  const map = new Map();
-  const stringOpts = [
-    '--conditions',
-    '--disable-warning',
-    '--diagnostic-dir',
-    '--dns-result-order',
-    '--env-file',
-    '--env-file-if-exists',
-    '--experimental-loader',
-    '--import',
-    '--input-type',
-    '--max-http-header-size',
-    '--network-family-autoselection-attempt-timeout',
-    '--redirect-warnings',
-    '--require',
-    '--secure-heap',
-    '--secure-heap-min',
-    '--stack-trace-limit',
-    '--test-concurrency',
-    '--test-coverage-branches',
-    '--test-coverage-exclude',
-    '--test-coverage-functions',
-    '--test-coverage-include',
-    '--test-coverage-lines',
-    '--test-global-setup',
-    '--test-name-pattern',
-    '--test-reporter',
-    '--test-reporter-destination',
-    '--test-rerun-failures',
-    '--test-shard',
-    '--test-skip-pattern',
-    '--test-timeout',
-    '--tls-cipher-list',
-    '--tls-keylog',
-    '--unhandled-rejections',
-    '--watch-kill-signal',
-    '--watch-path',
-  ];
-  for (const opt of stringOpts) {
-    map.set(opt, 'string');
+  napi_value map = CreateMapObject(env);
+  if (map == nullptr) return UndefinedValue(env);
+
+  const std::vector<std::string> string_opts = {
+      "--conditions",
+      "--disable-warning",
+      "--diagnostic-dir",
+      "--dns-result-order",
+      "--env-file",
+      "--env-file-if-exists",
+      "--experimental-loader",
+      "--import",
+      "--input-type",
+      "--max-http-header-size",
+      "--network-family-autoselection-attempt-timeout",
+      "--redirect-warnings",
+      "--require",
+      "--secure-heap",
+      "--secure-heap-min",
+      "--stack-trace-limit",
+      "--test-concurrency",
+      "--test-coverage-branches",
+      "--test-coverage-exclude",
+      "--test-coverage-functions",
+      "--test-coverage-include",
+      "--test-coverage-lines",
+      "--test-global-setup",
+      "--test-name-pattern",
+      "--test-reporter",
+      "--test-reporter-destination",
+      "--test-rerun-failures",
+      "--test-shard",
+      "--test-skip-pattern",
+      "--test-timeout",
+      "--tls-cipher-list",
+      "--tls-keylog",
+      "--unhandled-rejections",
+      "--watch-kill-signal",
+      "--watch-path",
+  };
+
+  for (const auto& opt : string_opts) {
+    napi_value type_v = nullptr;
+    if (napi_create_string_utf8(env, "string", NAPI_AUTO_LENGTH, &type_v) != napi_ok || type_v == nullptr) {
+      continue;
+    }
+    MapSetStringKeyValue(env, map, opt.c_str(), type_v);
   }
   return map;
-})())JS";
-  napi_value out = RunScriptAndReturnValue(env, kScript);
-  if (out != nullptr) return out;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
 }
 
 static napi_value OptionsGetNamespaceOptionsInputTypeCallback(napi_env env, napi_callback_info /*info*/) {
-  static constexpr const char* kScript = R"JS((new Map()))JS";
-  napi_value out = RunScriptAndReturnValue(env, kScript);
-  if (out != nullptr) return out;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
+  napi_value map = CreateMapObject(env);
+  if (map == nullptr) return UndefinedValue(env);
+  return map;
 }
 
 static napi_value ModulesReadPackageJSONCallback(napi_env env, napi_callback_info /*info*/) {

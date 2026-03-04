@@ -27,6 +27,36 @@ NAPI_EXTERN napi_status unofficial_napi_enqueue_microtask(napi_env env, napi_val
 NAPI_EXTERN napi_status unofficial_napi_set_promise_reject_callback(napi_env env,
                                                                     napi_value callback);
 
+// Unofficial helpers used by util/options parity work in ubi.
+// These expose engine-specific data that is not available in the public N-API.
+NAPI_EXTERN napi_status unofficial_napi_get_promise_details(napi_env env,
+                                                            napi_value promise,
+                                                            int32_t* state_out,
+                                                            napi_value* result_out,
+                                                            bool* has_result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_get_proxy_details(napi_env env,
+                                                          napi_value proxy,
+                                                          napi_value* target_out,
+                                                          napi_value* handler_out);
+
+NAPI_EXTERN napi_status unofficial_napi_preview_entries(napi_env env,
+                                                        napi_value value,
+                                                        napi_value* entries_out,
+                                                        bool* is_key_value_out);
+
+NAPI_EXTERN napi_status unofficial_napi_get_call_sites(napi_env env,
+                                                       uint32_t frames,
+                                                       napi_value* callsites_out);
+
+NAPI_EXTERN napi_status unofficial_napi_arraybuffer_view_has_buffer(napi_env env,
+                                                                    napi_value value,
+                                                                    bool* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_get_constructor_name(napi_env env,
+                                                             napi_value value,
+                                                             napi_value* name_out);
+
 // Unofficial helper. Refreshes V8 date/timezone configuration after TZ changes.
 NAPI_EXTERN napi_status unofficial_napi_notify_datetime_configuration_change(napi_env env);
 
