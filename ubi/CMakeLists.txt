@@ -103,13 +103,6 @@ set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LIBUV_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 add_subdirectory("${UBI_LIBUV_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
 
-set(CARES_STATIC ON CACHE BOOL "" FORCE)
-set(CARES_SHARED OFF CACHE BOOL "" FORCE)
-set(CARES_INSTALL OFF CACHE BOOL "" FORCE)
-set(CARES_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(CARES_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-add_subdirectory("${PROJECT_ROOT}/deps/cares" "${CMAKE_CURRENT_BINARY_DIR}/deps/cares")
-
 if(UBI_IS_WASIX_TARGET)
   set(UBI_OPENSSL_WASIX_ROOT
     "${PROJECT_ROOT}/deps/openssl-wasix"
@@ -292,7 +285,6 @@ target_link_libraries(ubi_runtime
     ubi_ada
     ubi_ncrypto
     uv_a
-    c-ares::cares
     OpenSSL::Crypto
 )
 if(UBI_NAPI_PROVIDER STREQUAL "bundled-v8")
