@@ -17,6 +17,7 @@ constexpr int kMissingBytes = 4;
 constexpr int kBufferedBytes = 5;
 constexpr int kEncodingField = 6;
 constexpr int kSize = 7;
+constexpr int kNumFields = 7;
 
 using ubi::encoding_ids::kEncAscii;
 using ubi::encoding_ids::kEncBase64;
@@ -630,6 +631,7 @@ void UbiInstallStringDecoderBinding(napi_env env) {
   set_i32("kBufferedBytes", kBufferedBytes);
   set_i32("kEncodingField", kEncodingField);
   set_i32("kSize", kSize);
+  set_i32("kNumFields", kNumFields);
 
   // Node's internal/util expects internalBinding('string_decoder').encodings.
   {

@@ -1572,9 +1572,10 @@ napi_value ProcessMethodsPatchProcessObjectCallback(napi_env env, napi_callback_
   CopyNamedProperty(env, process_obj, argv[0], "execArgv");
   CopyNamedProperty(env, process_obj, argv[0], "pid");
   CopyNamedProperty(env, process_obj, argv[0], "ppid");
+  CopyNamedProperty(env, process_obj, argv[0], "title");
+  CopyNamedProperty(env, process_obj, argv[0], "debugPort");
   CopyNamedProperty(env, process_obj, argv[0], "execPath");
   CopyNamedProperty(env, process_obj, argv[0], "versions");
-  CopyNamedProperty(env, process_obj, argv[0], "_rawDebug");
 
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
@@ -1919,6 +1920,12 @@ napi_value ProcessMethodsHrtimeBigIntCallback(napi_env env, napi_callback_info i
 }
 
 napi_value ProcessMethodsSetEmitWarningSyncCallback(napi_env env, napi_callback_info info) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ProcessMethodsResetStdioForTestingCallback(napi_env env, napi_callback_info info) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
@@ -2622,6 +2629,7 @@ napi_status UbiInstallProcessObject(napi_env env,
         {"patchProcessObject", ProcessMethodsPatchProcessObjectCallback},
         {"loadEnvFile", ProcessMethodsLoadEnvFileCallback},
         {"setEmitWarningSync", ProcessMethodsSetEmitWarningSyncCallback},
+        {"resetStdioForTesting", ProcessMethodsResetStdioForTestingCallback},
         {"hrtime", ProcessMethodsHrtimeCallback},
         {"hrtimeBigInt", ProcessMethodsHrtimeBigIntCallback},
     };
