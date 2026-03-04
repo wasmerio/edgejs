@@ -303,13 +303,31 @@ napi_value BuildMinimalProcessConfigObject(napi_env env) {
     if (napi_set_named_property(env, variables_obj, key, zero) != napi_ok) return nullptr;
   }
 
-  napi_value empty_shareable_builtins = nullptr;
-  if (napi_create_array_with_length(env, 0, &empty_shareable_builtins) != napi_ok ||
-      empty_shareable_builtins == nullptr) {
+  napi_value shareable_builtins = nullptr;
+  if (napi_create_array_with_length(env, 2, &shareable_builtins) != napi_ok ||
+      shareable_builtins == nullptr) {
     return nullptr;
   }
-  if (napi_set_named_property(env, variables_obj, "node_builtin_shareable_builtins", empty_shareable_builtins) !=
+  napi_value undici_builtin = nullptr;
+  if (napi_create_string_utf8(env, "deps/undici/undici.js", NAPI_AUTO_LENGTH, &undici_builtin) != napi_ok ||
+      undici_builtin == nullptr ||
+      napi_set_element(env, shareable_builtins, 0, undici_builtin) != napi_ok) {
+    return nullptr;
+  }
+  napi_value amaro_builtin = nullptr;
+  if (napi_create_string_utf8(env, "deps/amaro/dist/index.js", NAPI_AUTO_LENGTH, &amaro_builtin) != napi_ok ||
+      amaro_builtin == nullptr ||
+      napi_set_element(env, shareable_builtins, 1, amaro_builtin) != napi_ok) {
+    return nullptr;
+  }
+  if (napi_set_named_property(env, variables_obj, "node_builtin_shareable_builtins", shareable_builtins) !=
       napi_ok) {
+    return nullptr;
+  }
+
+  napi_value one = nullptr;
+  if (napi_create_int32(env, 1, &one) != napi_ok || one == nullptr) return nullptr;
+  if (napi_set_named_property(env, variables_obj, "node_use_amaro", one) != napi_ok) {
     return nullptr;
   }
 

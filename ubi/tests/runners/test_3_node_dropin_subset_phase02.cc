@@ -1161,6 +1161,11 @@ TEST_F(Test3NodeDropinSubsetPhase02, RawPseudoTtySetRawModeResetSignalFromNodeTe
   if (RawNodeScriptStartsWithFlagsHeader(kScript)) {
     GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << kScript;
   }
+#if !defined(_WIN32)
+  if (isatty(STDIN_FILENO) == 0) {
+    GTEST_SKIP() << "Skipping pseudo-tty raw mode reset test: stdin is not a TTY";
+  }
+#endif
   EnvScope s(runtime_.get());
   std::string error;
   const int exit_code = RunRawNodeTestScript(s.env, kScript, &error, true);

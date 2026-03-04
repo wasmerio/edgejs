@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cmath>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -549,6 +550,11 @@ napi_value UbiProcessSetEnvBinding(napi_env env, napi_callback_info info) {
     rc = (setenv(key.c_str(), value.c_str(), 1) == 0) ? 0 : -1;
 #endif
     if (rc == 0 && key == "TZ") {
+#if defined(_WIN32)
+      _tzset();
+#else
+      tzset();
+#endif
       (void)unofficial_napi_notify_datetime_configuration_change(env);
     }
   }
@@ -570,6 +576,11 @@ napi_value UbiProcessUnsetEnvBinding(napi_env env, napi_callback_info info) {
     rc = (unsetenv(key.c_str()) == 0) ? 0 : -1;
 #endif
     if (rc == 0 && key == "TZ") {
+#if defined(_WIN32)
+      _tzset();
+#else
+      tzset();
+#endif
       (void)unofficial_napi_notify_datetime_configuration_change(env);
     }
   }

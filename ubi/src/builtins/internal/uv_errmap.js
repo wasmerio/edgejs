@@ -22,39 +22,83 @@ const kUvErrMap = new Map([
   [-3008, ['ENOTFOUND', 'name does not resolve']],
 ]);
 
+let kDidPopulateErrnoMap = false;
+let kErrnoConstants;
+
+function getErrnoConstants() {
+  if (kErrnoConstants !== undefined) return kErrnoConstants;
+  try {
+    const os = require('os');
+    kErrnoConstants = os?.constants?.errno && typeof os.constants.errno === 'object' ?
+      os.constants.errno :
+      null;
+  } catch {
+    kErrnoConstants = null;
+  }
+  return kErrnoConstants;
+}
+
+function getUvMessageFromBinding(err) {
+  try {
+    if (typeof process?.binding === 'function') {
+      const uv = process.binding('uv');
+      if (uv && typeof uv.getErrorMessage === 'function') {
+        const message = uv.getErrorMessage(err);
+        if (typeof message === 'string' &&
+            message.length > 0 &&
+            !message.startsWith('Unknown system error')) {
+          return message;
+        }
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
+function maybePopulateUvErrMapFromErrnoConstants() {
+  if (kDidPopulateErrnoMap) return;
+  kDidPopulateErrnoMap = true;
+
+  const errno = getErrnoConstants();
+  if (!errno) return;
+
+  for (const key of Object.keys(errno)) {
+    // Skip getaddrinfo symbolic names; these do not map 1:1 to libuv errno
+    // negatives and can collide with standard errno values.
+    if (!key.startsWith('E') || key.startsWith('EAI_')) continue;
+    const raw = Number(errno[key]);
+    if (!Number.isFinite(raw) || raw === 0) continue;
+    const uvCode = raw > 0 ? -raw : raw;
+    if (kUvErrMap.has(uvCode)) continue;
+    const message = getUvMessageFromBinding(uvCode) ?? key;
+    kUvErrMap.set(uvCode, [key, message]);
+  }
+}
+
 function getUvErrorEntry(err) {
+  maybePopulateUvErrMapFromErrnoConstants();
+
   const n = Number(err);
   if (!Number.isFinite(n)) return undefined;
   if (kUvErrMap.has(n)) return kUvErrMap.get(n);
 
   let name;
-  try {
-    const errno = require('os').constants && require('os').constants.errno;
-    if (errno && typeof errno === 'object') {
-      for (const key of Object.keys(errno)) {
-        if (-Number(errno[key]) === n) {
-          name = key;
-          break;
-        }
+  const errno = getErrnoConstants();
+  if (errno) {
+    for (const key of Object.keys(errno)) {
+      if (!key.startsWith('E') || key.startsWith('EAI_')) continue;
+      const raw = Number(errno[key]);
+      if (!Number.isFinite(raw) || raw === 0) continue;
+      const uvCode = raw > 0 ? -raw : raw;
+      if (uvCode === n) {
+        name = key;
+        break;
       }
     }
-  } catch {}
+  }
   if (!name) return undefined;
 
-  let message = name;
-  try {
-    if (typeof process?.binding === 'function') {
-      const uv = process.binding('uv');
-      if (uv && typeof uv.getErrorMessage === 'function') {
-        const maybeMessage = uv.getErrorMessage(n);
-        if (typeof maybeMessage === 'string' &&
-            maybeMessage.length > 0 &&
-            !maybeMessage.startsWith('Unknown system error')) {
-          message = maybeMessage;
-        }
-      }
-    }
-  } catch {}
+  const message = getUvMessageFromBinding(n) ?? name;
 
   const entry = [name, message];
   kUvErrMap.set(n, entry);
@@ -62,6 +106,7 @@ function getUvErrorEntry(err) {
 }
 
 function getUvErrorMap() {
+  maybePopulateUvErrMapFromErrnoConstants();
   return kUvErrMap;
 }
 
