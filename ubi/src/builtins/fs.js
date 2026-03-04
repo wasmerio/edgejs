@@ -94,8 +94,17 @@ function getValidatedPath(path, argName) {
       err.code = 'ERR_INVALID_URL_SCHEME';
       throw err;
     }
-    path = path.pathname || path.href;
-    if (typeof path === 'string' && path.startsWith('file://')) path = path.slice(7) || '/';
+    try {
+      path = require('url').fileURLToPath(path);
+    } catch {
+      path = path.pathname || path.href;
+      if (typeof path === 'string' && path.startsWith('file://')) path = path.slice(7) || '/';
+      if (typeof path === 'string') {
+        try {
+          path = decodeURIComponent(path);
+        } catch {}
+      }
+    }
   } else if (typeof path === 'object' && path && typeof path.length === 'number' && path.toString && path.constructor && path.constructor.name === 'Buffer') {
     path = path.toString('utf8');
   } else if (typeof path === 'object' && path && typeof path.byteLength === 'number') {
@@ -685,7 +694,7 @@ function readFileSync(path, options) {
   const encoding = options.encoding;
   path = getValidatedPath(path);
   const flags = stringToFlags(options.flag);
-  if (encoding === undefined || encoding === 'buffer') {
+  const readBuffer = () => {
     const fd = openSync(path, options.flag || 'r');
     const chunks = [];
     const buf = Buffer.allocUnsafe(8192);
@@ -698,11 +707,16 @@ function readFileSync(path, options) {
       closeSync(fd);
     }
     return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
+  };
+
+  if (encoding === undefined || encoding === null || encoding === 'buffer') {
+    return readBuffer();
   }
-  if (encoding === 'utf8' || encoding === 'utf-8') {
+  const normalized = String(encoding).toLowerCase();
+  if (normalized === 'utf8' || normalized === 'utf-8') {
     return binding.readFileUtf8(path, flags);
   }
-  throw new Error('Only utf8 and buffer encoding are supported in this build');
+  return readBuffer().toString(normalized);
 }
 
 function writeFileSync(path, data, options) {

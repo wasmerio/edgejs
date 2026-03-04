@@ -501,7 +501,7 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
     '--localstorage-file': '',
     '--max-http-header-size': 16 * 1024,
     '--network-family-autoselection': true,
-    '--network-family-autoselection-attempt-timeout': 2500,
+    '--network-family-autoselection-attempt-timeout': 250,
     '--no-addons': false,
     '--no-deprecation': false,
     '--no-experimental-global-navigator': false,
@@ -726,7 +726,10 @@ static napi_value OptionsGetCLIOptionsInfoCallback(napi_env env, napi_callback_i
   options.set('--perf-basic-prof', { envVarSettings: kAllowedInEnvvar, type: kString });
   options.set('--stack-trace-limit', { envVarSettings: kAllowedInEnvvar, type: kString });
   options.set('-r', { envVarSettings: kAllowedInEnvvar, type: kString });
-  options.delete('--icu-data-dir');
+  if (!(process && process.config && process.config.variables &&
+        process.config.variables.v8_enable_i18n_support)) {
+    options.delete('--icu-data-dir');
+  }
 
   aliases.set('-r', ['--require']);
   return { options, aliases };
@@ -821,6 +824,266 @@ static napi_value OptionsGetNamespaceOptionsInputTypeCallback(napi_env env, napi
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
+}
+
+static napi_value ModulesReadPackageJSONCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value ModulesGetNearestParentPackageJSONTypeCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, "none", NAPI_AUTO_LENGTH, &out) != napi_ok || out == nullptr) {
+    napi_get_undefined(env, &out);
+  }
+  return out;
+}
+
+static napi_value ModulesGetNearestParentPackageJSONCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value ModulesGetPackageScopeConfigCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+  if (argc >= 1 && argv[0] != nullptr) return argv[0];
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &out) != napi_ok || out == nullptr) {
+    napi_get_undefined(env, &out);
+  }
+  return out;
+}
+
+static napi_value ModulesGetPackageTypeCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, "none", NAPI_AUTO_LENGTH, &out) != napi_ok || out == nullptr) {
+    napi_get_undefined(env, &out);
+  }
+  return out;
+}
+
+static napi_value ModulesEnableCompileCacheCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+  napi_value out = nullptr;
+  if (napi_create_array_with_length(env, 3, &out) != napi_ok || out == nullptr) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+  napi_value status = nullptr;
+  // CompileCacheEnableStatus::DISABLED
+  napi_create_int32(env, 3, &status);
+  napi_set_element(env, out, 0, status);
+  napi_value empty = nullptr;
+  napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &empty);
+  napi_set_element(env, out, 1, empty);
+  if (argc >= 1 && argv[0] != nullptr) {
+    napi_set_element(env, out, 2, argv[0]);
+  } else {
+    napi_set_element(env, out, 2, empty);
+  }
+  return out;
+}
+
+static napi_value ModulesGetCompileCacheDirCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &out) != napi_ok || out == nullptr) {
+    napi_get_undefined(env, &out);
+  }
+  return out;
+}
+
+static napi_value ModulesFlushCompileCacheCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value ModulesGetCompileCacheEntryCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value ModulesSaveCompileCacheEntryCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value ModulesSetLazyPathHelpersCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
+    return nullptr;
+  }
+
+  napi_value code = nullptr;
+  if (argc >= 1 && argv[0] != nullptr) {
+    napi_coerce_to_string(env, argv[0], &code);
+  }
+  if (code == nullptr) {
+    napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &code);
+  }
+
+  napi_value filename = nullptr;
+  if (argc >= 2 && argv[1] != nullptr) {
+    napi_coerce_to_string(env, argv[1], &filename);
+  }
+  if (filename == nullptr) {
+    napi_create_string_utf8(env, "[eval]", NAPI_AUTO_LENGTH, &filename);
+  }
+
+  napi_set_named_property(env, this_arg, "__ubi_code", code);
+  napi_set_named_property(env, this_arg, "__ubi_filename", filename);
+  napi_set_named_property(env, this_arg, "sourceURL", filename);
+  return this_arg;
+}
+
+static napi_value ContextifyScriptRunInContextCallback(napi_env env, napi_callback_info info) {
+  napi_value this_arg = nullptr;
+  size_t argc = 0;
+  if (napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
+    return nullptr;
+  }
+
+  napi_value code_value = nullptr;
+  if (napi_get_named_property(env, this_arg, "__ubi_code", &code_value) != napi_ok || code_value == nullptr) {
+    napi_get_undefined(env, &code_value);
+  }
+  napi_value filename_value = nullptr;
+  if (napi_get_named_property(env, this_arg, "__ubi_filename", &filename_value) != napi_ok ||
+      filename_value == nullptr) {
+    napi_get_undefined(env, &filename_value);
+  }
+
+  const std::string code = ValueToUtf8(env, code_value);
+  const std::string filename = ValueToUtf8(env, filename_value);
+  std::string source = code;
+  if (!filename.empty()) {
+    source.append("\n//# sourceURL=");
+    source.append(filename);
+  }
+
+  napi_value script = nullptr;
+  if (napi_create_string_utf8(env, source.c_str(), source.size(), &script) != napi_ok || script == nullptr) {
+    return nullptr;
+  }
+  napi_value result = nullptr;
+  if (napi_run_script(env, script, &result) != napi_ok) {
+    return nullptr;
+  }
+  return result;
+}
+
+static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 10;
+  napi_value argv[10] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) {
+    return nullptr;
+  }
+
+  napi_value code = nullptr;
+  if (argc >= 1 && argv[0] != nullptr) {
+    napi_coerce_to_string(env, argv[0], &code);
+  }
+  if (code == nullptr) {
+    napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &code);
+  }
+
+  napi_value params = nullptr;
+  if (argc >= 9 && argv[8] != nullptr) {
+    params = argv[8];
+  } else {
+    napi_create_array_with_length(env, 0, &params);
+  }
+
+  static constexpr const char* kFactorySource =
+      "(function(__code,__params){"
+      "  const p = Array.isArray(__params) ? __params : [];"
+      "  return Function(...p, __code);"
+      "})";
+  napi_value factory_script = nullptr;
+  if (napi_create_string_utf8(env, kFactorySource, NAPI_AUTO_LENGTH, &factory_script) != napi_ok ||
+      factory_script == nullptr) {
+    return nullptr;
+  }
+  napi_value factory = nullptr;
+  if (napi_run_script(env, factory_script, &factory) != napi_ok || factory == nullptr) {
+    return nullptr;
+  }
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
+    return nullptr;
+  }
+  napi_value fn = nullptr;
+  napi_value call_argv[2] = {code, params};
+  if (napi_call_function(env, global, factory, 2, call_argv, &fn) != napi_ok || fn == nullptr) {
+    return nullptr;
+  }
+
+  napi_value out = nullptr;
+  if (napi_create_object(env, &out) != napi_ok || out == nullptr) return nullptr;
+  napi_set_named_property(env, out, "function", fn);
+  napi_value cached_data_produced = nullptr;
+  napi_get_boolean(env, false, &cached_data_produced);
+  napi_set_named_property(env, out, "cachedDataProduced", cached_data_produced);
+  return out;
+}
+
+static napi_value ContextifyCompileFunctionForCJSLoaderCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) {
+    return nullptr;
+  }
+  napi_value content_value = nullptr;
+  if (argc >= 1 && argv[0] != nullptr) {
+    napi_coerce_to_string(env, argv[0], &content_value);
+  }
+  if (content_value == nullptr) {
+    napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &content_value);
+  }
+  const std::string content = ValueToUtf8(env, content_value);
+  const std::string wrapped =
+      "(function (exports, require, module, __filename, __dirname) { " + content + "\n});";
+  napi_value wrapped_script = nullptr;
+  if (napi_create_string_utf8(env, wrapped.c_str(), wrapped.size(), &wrapped_script) != napi_ok ||
+      wrapped_script == nullptr) {
+    return nullptr;
+  }
+  napi_value compiled_wrapper = nullptr;
+  if (napi_run_script(env, wrapped_script, &compiled_wrapper) != napi_ok || compiled_wrapper == nullptr) {
+    return nullptr;
+  }
+  napi_value out = nullptr;
+  if (napi_create_object(env, &out) != napi_ok || out == nullptr) return nullptr;
+  napi_set_named_property(env, out, "function", compiled_wrapper);
+  napi_value can_parse_as_esm = nullptr;
+  napi_get_boolean(env, false, &can_parse_as_esm);
+  napi_set_named_property(env, out, "canParseAsESM", can_parse_as_esm);
+  return out;
 }
 
 static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderState* state) {
@@ -1364,6 +1627,19 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
     return out;
   }
   if (name == "contextify") {
+    napi_value global = nullptr;
+    if (napi_get_global(env, &global) == napi_ok && global != nullptr) {
+      bool has_binding = false;
+      if (napi_has_named_property(env, global, "__ubi_contextify_binding", &has_binding) == napi_ok &&
+          has_binding) {
+        napi_value existing = nullptr;
+        if (napi_get_named_property(env, global, "__ubi_contextify_binding", &existing) == napi_ok &&
+            existing != nullptr) {
+          return existing;
+        }
+      }
+    }
+
     napi_value out = nullptr;
     if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
     napi_value contains_module_syntax = nullptr;
@@ -1376,6 +1652,101 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
         contains_module_syntax != nullptr) {
       napi_set_named_property(env, out, "containsModuleSyntax", contains_module_syntax);
     }
+
+    napi_value contextify_script_ctor = nullptr;
+    if (napi_create_function(env,
+                             "ContextifyScript",
+                             NAPI_AUTO_LENGTH,
+                             ContextifyScriptConstructorCallback,
+                             nullptr,
+                             &contextify_script_ctor) == napi_ok &&
+        contextify_script_ctor != nullptr) {
+      napi_value proto = nullptr;
+      if (napi_get_named_property(env, contextify_script_ctor, "prototype", &proto) == napi_ok && proto != nullptr) {
+        napi_value run_in_context = nullptr;
+        if (napi_create_function(env,
+                                 "runInContext",
+                                 NAPI_AUTO_LENGTH,
+                                 ContextifyScriptRunInContextCallback,
+                                 nullptr,
+                                 &run_in_context) == napi_ok &&
+            run_in_context != nullptr) {
+          napi_set_named_property(env, proto, "runInContext", run_in_context);
+        }
+      }
+      napi_set_named_property(env, out, "ContextifyScript", contextify_script_ctor);
+    }
+
+    napi_value compile_function = nullptr;
+    if (napi_create_function(env,
+                             "compileFunction",
+                             NAPI_AUTO_LENGTH,
+                             ContextifyCompileFunctionCallback,
+                             nullptr,
+                             &compile_function) == napi_ok &&
+        compile_function != nullptr) {
+      napi_set_named_property(env, out, "compileFunction", compile_function);
+    }
+
+    napi_value compile_function_for_cjs = nullptr;
+    if (napi_create_function(env,
+                             "compileFunctionForCJSLoader",
+                             NAPI_AUTO_LENGTH,
+                             ContextifyCompileFunctionForCJSLoaderCallback,
+                             nullptr,
+                             &compile_function_for_cjs) == napi_ok &&
+        compile_function_for_cjs != nullptr) {
+      napi_set_named_property(env, out, "compileFunctionForCJSLoader", compile_function_for_cjs);
+    }
+
+    if (global != nullptr) {
+      napi_set_named_property(env, global, "__ubi_contextify_binding", out);
+    }
+    return out;
+  }
+  if (name == "symbols") {
+    napi_value global = nullptr;
+    if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
+      return undefined;
+    }
+    bool has_binding = false;
+    if (napi_has_named_property(env, global, "__ubi_symbols_binding", &has_binding) == napi_ok &&
+        has_binding) {
+      napi_value existing = nullptr;
+      if (napi_get_named_property(env, global, "__ubi_symbols_binding", &existing) == napi_ok &&
+          existing != nullptr) {
+        return existing;
+      }
+    }
+
+    napi_value out = nullptr;
+    if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
+    auto set_symbol = [&](const char* key, const char* description) {
+      napi_value desc = nullptr;
+      napi_value sym = nullptr;
+      if (napi_create_string_utf8(env, description, NAPI_AUTO_LENGTH, &desc) == napi_ok &&
+          desc != nullptr &&
+          napi_create_symbol(env, desc, &sym) == napi_ok &&
+          sym != nullptr) {
+        napi_set_named_property(env, out, key, sym);
+      }
+    };
+
+    set_symbol("vm_dynamic_import_default_internal", "vm_dynamic_import_default_internal");
+    set_symbol("vm_dynamic_import_main_context_default", "vm_dynamic_import_main_context_default");
+    set_symbol("vm_dynamic_import_no_callback", "vm_dynamic_import_no_callback");
+    set_symbol("vm_dynamic_import_missing_flag", "vm_dynamic_import_missing_flag");
+    set_symbol("source_text_module_default_hdo", "source_text_module_default_hdo");
+    set_symbol("resource_symbol", "resource_symbol");
+    set_symbol("owner_symbol", "owner_symbol");
+    set_symbol("async_id_symbol", "async_id_symbol");
+    set_symbol("trigger_async_id_symbol", "trigger_async_id_symbol");
+    set_symbol("onpskexchange", "onpskexchange");
+    set_symbol("messaging_transfer_list_symbol", "messaging_transfer_list_symbol");
+    set_symbol("no_message_symbol", "no_message_symbol");
+    set_symbol("imported_cjs_symbol", "imported_cjs_symbol");
+
+    napi_set_named_property(env, global, "__ubi_symbols_binding", out);
     return out;
   }
   if (name == "module_wrap") {
@@ -1394,6 +1765,56 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
         create_required_module_facade != nullptr) {
       napi_set_named_property(env, out, "createRequiredModuleFacade", create_required_module_facade);
     }
+    return out;
+  }
+  if (name == "modules") {
+    napi_value out = nullptr;
+    if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
+
+    auto define_method = [&](const char* method_name, napi_callback cb) -> bool {
+      napi_value fn = nullptr;
+      return napi_create_function(env, method_name, NAPI_AUTO_LENGTH, cb, nullptr, &fn) == napi_ok &&
+             fn != nullptr &&
+             napi_set_named_property(env, out, method_name, fn) == napi_ok;
+    };
+
+    if (!define_method("readPackageJSON", ModulesReadPackageJSONCallback) ||
+        !define_method("getNearestParentPackageJSONType", ModulesGetNearestParentPackageJSONTypeCallback) ||
+        !define_method("getNearestParentPackageJSON", ModulesGetNearestParentPackageJSONCallback) ||
+        !define_method("getPackageScopeConfig", ModulesGetPackageScopeConfigCallback) ||
+        !define_method("getPackageType", ModulesGetPackageTypeCallback) ||
+        !define_method("enableCompileCache", ModulesEnableCompileCacheCallback) ||
+        !define_method("getCompileCacheDir", ModulesGetCompileCacheDirCallback) ||
+        !define_method("flushCompileCache", ModulesFlushCompileCacheCallback) ||
+        !define_method("getCompileCacheEntry", ModulesGetCompileCacheEntryCallback) ||
+        !define_method("saveCompileCacheEntry", ModulesSaveCompileCacheEntryCallback) ||
+        !define_method("setLazyPathHelpers", ModulesSetLazyPathHelpersCallback)) {
+      return undefined;
+    }
+
+    napi_value status = nullptr;
+    if (napi_create_array_with_length(env, 4, &status) != napi_ok || status == nullptr) return undefined;
+    auto set_status = [&](uint32_t idx, const char* value) {
+      napi_value v = nullptr;
+      if (napi_create_string_utf8(env, value, NAPI_AUTO_LENGTH, &v) == napi_ok && v != nullptr) {
+        napi_set_element(env, status, idx, v);
+      }
+    };
+    set_status(0, "FAILED");
+    set_status(1, "ENABLED");
+    set_status(2, "ALREADY_ENABLED");
+    set_status(3, "DISABLED");
+    if (napi_set_named_property(env, out, "compileCacheStatus", status) != napi_ok) return undefined;
+
+    napi_value cached_types = nullptr;
+    if (napi_create_object(env, &cached_types) != napi_ok || cached_types == nullptr) return undefined;
+    set_int32(cached_types, "kCommonJS", 0);
+    set_int32(cached_types, "kESM", 1);
+    set_int32(cached_types, "kStrippedTypeScript", 2);
+    set_int32(cached_types, "kTransformedTypeScript", 3);
+    set_int32(cached_types, "kTransformedTypeScriptWithSourceMaps", 4);
+    if (napi_set_named_property(env, out, "cachedCodeTypes", cached_types) != napi_ok) return undefined;
+
     return out;
   }
   if (name == "options") {
@@ -1623,39 +2044,11 @@ napi_value CreateResolvedPathString(napi_env env, const fs::path& resolved_path)
   return out;
 }
 
-// When running a raw Node test (entry under node/test/parallel/), redirect
-// require('../common') and require('../common/fixtures') to ubi's minimal
-// common shims so Node's heavy common/index.js is not loaded.
-static bool ApplyNodeTestCommonRedirect(ModuleLoaderState* state, fs::path* resolved_path) {
-  if (state == nullptr || state->entry_dir.empty()) return false;
-
-  fs::path entry_dir = fs::path(state->entry_dir).lexically_normal();
-  if (entry_dir.filename() != "parallel") return false;
-  if (entry_dir.parent_path().filename() != "test") return false;
-
-  // Redirect node/test/common/* to ubi's minimal common (not node/common).
-  fs::path node_test_dir = entry_dir.parent_path();
-  fs::path node_common_dir = node_test_dir / "common";
-
-  fs::path normalized = fs::absolute(*resolved_path).lexically_normal();
-  fs::path rel = normalized.lexically_relative(node_common_dir);
-  if (rel.empty() || rel.string().find("..") == 0) return false;
-
-  static const fs::path ubi_common_dir =
-      fs::absolute(fs::path(__FILE__).parent_path() / ".." / "tests" / "node-compat" / "common").lexically_normal();
-  if (!PathExistsDirectory(ubi_common_dir)) {
-    return false;
-  }
-  *resolved_path = (ubi_common_dir / rel).lexically_normal();
-  return true;
-}
-
 napi_value ResolveSpecifierForContext(napi_env env, RequireContext* context, const std::string& specifier, bool throw_on_error) {
   fs::path resolved_path;
   if (ResolveBuiltinPath(specifier, context->base_dir, &resolved_path) ||
       ResolveModulePath(specifier, context->base_dir, &resolved_path) ||
       ResolveNodeModules(specifier, context->base_dir, &resolved_path)) {
-    ApplyNodeTestCommonRedirect(context->state, &resolved_path);
     return CreateResolvedPathString(env, resolved_path);
   }
   if (throw_on_error) {
@@ -1832,12 +2225,7 @@ bool ParseJsonModule(napi_env env, const fs::path& resolved_path, napi_value mod
         napi_value exc_msg = nullptr;
         if (napi_coerce_to_string(env, exc, &exc_msg) == napi_ok && exc_msg != nullptr) {
           const std::string msg_str = ValueToUtf8(env, exc_msg);
-          std::string path_for_msg = resolved_path.string();
-          // Compat tests run from node-compat/ so paths contain "node-compat"; regex expects "test".
-          const size_t node_compat = path_for_msg.find("node-compat");
-          if (node_compat != std::string::npos) {
-            path_for_msg.replace(node_compat, 11, "test");
-          }
+          const std::string path_for_msg = resolved_path.string();
           const std::string prefixed = path_for_msg + ": " + (msg_str.empty() ? "JSON parse error" : msg_str);
           napi_value new_msg = nullptr;
           if (napi_create_string_utf8(env, prefixed.c_str(), NAPI_AUTO_LENGTH, &new_msg) == napi_ok && new_msg != nullptr) {

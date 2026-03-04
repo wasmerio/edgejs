@@ -160,61 +160,13 @@ class ScopedExclusiveFileLock {
   int fd_ = -1;
 };
 
+int RunRawNodeTestScript(napi_env env,
+                         const char* node_test_relative_path,
+                         std::string* error_out,
+                         bool keep_event_loop_alive = false);
+
 int RunNodeCompatScript(napi_env env, const char* relative_path, std::string* error_out) {
-  namespace fs = std::filesystem;
-  const std::string ubi_root(NAPI_V8_ROOT_PATH);
-  fs::path ubi_root_path(ubi_root);
-  const fs::path tests_relative = ubi_root_path / "tests" / "node-compat";
-  if (!ubi_root_path.is_absolute()) {
-    fs::path search = fs::current_path();
-    bool found = false;
-    for (; !search.empty() && search != search.parent_path(); search = search.parent_path()) {
-      fs::path candidate = (search / tests_relative).lexically_normal();
-      if (fs::exists(candidate)) {
-        ubi_root_path = fs::absolute(search / ubi_root_path);
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      ubi_root_path = fs::absolute(fs::current_path().parent_path() / ubi_root_path);
-    }
-  } else {
-    ubi_root_path = fs::absolute(ubi_root_path);
-  }
-  const std::string script_path =
-      (ubi_root_path / "tests" / "node-compat" / relative_path).string();
-  if (ScriptStartsWithFlagsHeader(script_path)) {
-    if (error_out != nullptr) error_out->clear();
-    return 0;
-  }
-  std::string prior_test_serial_id;
-  bool had_prior_test_serial_id = false;
-  if (const char* existing = std::getenv("TEST_SERIAL_ID")) {
-    prior_test_serial_id = existing;
-    had_prior_test_serial_id = true;
-  }
-  std::string prior_test_thread_id;
-  bool had_prior_test_thread_id = false;
-  if (const char* existing = std::getenv("TEST_THREAD_ID")) {
-    prior_test_thread_id = existing;
-    had_prior_test_thread_id = true;
-  }
-  std::string prior_test_parallel;
-  bool had_prior_test_parallel = false;
-  if (const char* existing = std::getenv("TEST_PARALLEL")) {
-    prior_test_parallel = existing;
-    had_prior_test_parallel = true;
-  }
-  const std::string test_serial_id = MakeTestSerialId(std::string("compat:") + relative_path);
-  setenv("TEST_SERIAL_ID", test_serial_id.c_str(), 1);
-  setenv("TEST_THREAD_ID", test_serial_id.c_str(), 1);
-  setenv("TEST_PARALLEL", "0", 1);
-  const int exit_code = UbiRunScriptFile(env, script_path.c_str(), error_out);
-  SetOrUnsetEnv("TEST_SERIAL_ID", had_prior_test_serial_id ? &prior_test_serial_id : nullptr);
-  SetOrUnsetEnv("TEST_THREAD_ID", had_prior_test_thread_id ? &prior_test_thread_id : nullptr);
-  SetOrUnsetEnv("TEST_PARALLEL", had_prior_test_parallel ? &prior_test_parallel : nullptr);
-  return exit_code;
+  return RunRawNodeTestScript(env, relative_path, error_out, false);
 }
 
 // Run a Node test script from the node repo (raw drop-in).
@@ -222,7 +174,7 @@ int RunNodeCompatScript(napi_env env, const char* relative_path, std::string* er
 int RunRawNodeTestScript(napi_env env,
                          const char* node_test_relative_path,
                          std::string* error_out,
-                         bool keep_event_loop_alive = false) {
+                         bool keep_event_loop_alive) {
 #if defined(NAPI_V8_NODE_ROOT_PATH) || defined(PROJECT_ROOT_PATH)
   namespace fs = std::filesystem;
   const std::string rel_path = node_test_relative_path ? std::string(node_test_relative_path) : std::string();
@@ -234,31 +186,10 @@ int RunRawNodeTestScript(napi_env env,
   ScopedExclusiveFileLock suite_lock(
       needs_global_serialization ? "/tmp/ubi-node-suite-serial.lock" : nullptr);
   const fs::path node_root_path = ResolveNodeRootPathForRawScript(script_rel);
-  const std::string ubi_root(NAPI_V8_ROOT_PATH);
   const std::string script_path_absolute = ResolveRawNodeScriptPath(node_test_relative_path).string();
   if (ScriptStartsWithFlagsHeader(script_path_absolute)) {
     if (error_out != nullptr) error_out->clear();
     return 0;
-  }
-  // Resolve ubi root so node-compat helpers exist (works from build/ or build/tests/).
-  fs::path ubi_root_path(ubi_root);
-  const fs::path tests_relative = ubi_root_path / "tests" / "node-compat";
-  if (!ubi_root_path.is_absolute()) {
-    fs::path search = fs::current_path();
-    bool found = false;
-    for (; !search.empty() && search != search.parent_path(); search = search.parent_path()) {
-      fs::path candidate = (search / tests_relative).lexically_normal();
-      if (fs::exists(candidate)) {
-        ubi_root_path = fs::absolute(search / ubi_root_path);
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      ubi_root_path = fs::absolute(fs::current_path().parent_path() / ubi_root_path);
-    }
-  } else {
-    ubi_root_path = fs::absolute(ubi_root_path);
   }
   const std::string node_test_dir = (node_root_path / "test").string();
   std::string prior_test_serial_id;
@@ -364,7 +295,7 @@ int RunRawNodeTestScript(napi_env env,
 TEST_F(Test3NodeDropinSubsetPhase02, NodeAssertSubsetTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-node-assert.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-assert-if-error.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
@@ -388,7 +319,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, RequireJsonSubsetTest) {
 TEST_F(Test3NodeDropinSubsetPhase02, ModuleLoadingSubsetTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-module-loading-subset.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-module-cache.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
@@ -396,7 +327,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, ModuleLoadingSubsetTest) {
 TEST_F(Test3NodeDropinSubsetPhase02, FsPhaseCSubsetTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-fs-phase-c-subset.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-fs-append-file-sync.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
@@ -404,7 +335,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, FsPhaseCSubsetTest) {
 TEST_F(Test3NodeDropinSubsetPhase02, ConsoleCompatTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-console.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-console-methods.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
@@ -444,7 +375,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, ConsoleMethodsCompatTest) {
 TEST_F(Test3NodeDropinSubsetPhase02, ConsoleInstanceCompatTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-console-instance.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-console-group.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
@@ -452,7 +383,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, ConsoleInstanceCompatTest) {
 TEST_F(Test3NodeDropinSubsetPhase02, ConsoleTableCompatTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-console-table.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-console-clear.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }
@@ -460,7 +391,7 @@ TEST_F(Test3NodeDropinSubsetPhase02, ConsoleTableCompatTest) {
 TEST_F(Test3NodeDropinSubsetPhase02, BufferBase64HardeningCompatTest) {
   EnvScope s(runtime_.get());
   std::string error;
-  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-buffer-base64-hardening.js", &error);
+  const int exit_code = RunNodeCompatScript(s.env, "parallel/test-buffer-badhex.js", &error);
   EXPECT_EQ(exit_code, 0) << "error=" << error;
   EXPECT_TRUE(error.empty()) << "error=" << error;
 }

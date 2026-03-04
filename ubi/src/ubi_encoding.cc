@@ -580,9 +580,7 @@ napi_value BindingToASCII(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, "", 0, &out);
     return out;
   }
-  auto parsed = ada::parse<ada::url>("ws://x");
-  std::string result;
-  if (parsed && parsed->set_hostname(input)) result = parsed->get_hostname();
+  const std::string result = ada::idna::to_ascii(input);
   napi_create_string_utf8(env, result.c_str(), result.size(), &out);
   return out;
 }
@@ -605,9 +603,7 @@ napi_value BindingToUnicode(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, "", 0, &out);
     return out;
   }
-  auto parsed = ada::parse<ada::url>("ws://x");
-  std::string result;
-  if (parsed && parsed->set_hostname(input)) result = ada::idna::to_unicode(parsed->get_hostname());
+  const std::string result = ada::idna::to_unicode(input);
   napi_create_string_utf8(env, result.c_str(), result.size(), &out);
   return out;
 }

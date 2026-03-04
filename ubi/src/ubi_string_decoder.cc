@@ -41,6 +41,7 @@ size_t TypedArrayElementSize(napi_typedarray_type t) {
       return 1;
     case napi_int16_array:
     case napi_uint16_array:
+    case napi_float16_array:
       return 2;
     case napi_int32_array:
     case napi_uint32_array:
@@ -90,8 +91,18 @@ bool ReadState(napi_env env, napi_value state_value, uint8_t** state, size_t* st
     napi_value ab = nullptr;
     size_t byte_offset = 0;
     if (napi_get_dataview_info(env, state_value, &len, &data, &ab, &byte_offset) == napi_ok &&
-        data != nullptr &&
         len >= kSize) {
+      if (ab != nullptr) {
+        void* ab_data = nullptr;
+        size_t ab_len = 0;
+        if (napi_get_arraybuffer_info(env, ab, &ab_data, &ab_len) == napi_ok &&
+            ab_data != nullptr &&
+            byte_offset <= ab_len &&
+            len <= (ab_len - byte_offset)) {
+          data = static_cast<uint8_t*>(ab_data) + byte_offset;
+        }
+      }
+      if (data == nullptr) return false;
       *state = static_cast<uint8_t*>(data);
       *state_len = len;
       return true;
@@ -132,6 +143,17 @@ bool ReadView(napi_env env, napi_value value, const uint8_t** data, size_t* len)
     napi_value ab = nullptr;
     size_t byte_offset = 0;
     if (napi_get_dataview_info(env, value, &byte_len, &ptr, &ab, &byte_offset) != napi_ok) return false;
+    if (ab != nullptr) {
+      void* ab_data = nullptr;
+      size_t ab_len = 0;
+      if (napi_get_arraybuffer_info(env, ab, &ab_data, &ab_len) == napi_ok &&
+          ab_data != nullptr &&
+          byte_offset <= ab_len &&
+          byte_len <= (ab_len - byte_offset)) {
+        ptr = static_cast<uint8_t*>(ab_data) + byte_offset;
+      }
+    }
+    if (ptr == nullptr) return false;
     *data = static_cast<const uint8_t*>(ptr);
     *len = byte_len;
     return true;

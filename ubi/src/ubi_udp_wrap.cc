@@ -948,16 +948,8 @@ void UbiInstallUdpWrapBinding(napi_env env) {
 
   napi_value constants = nullptr;
   napi_create_object(env, &constants);
-#ifdef UV_UDP_IPV6ONLY
   SetNamedU32(env, constants, "UV_UDP_IPV6ONLY", UV_UDP_IPV6ONLY);
-#else
-  SetNamedU32(env, constants, "UV_UDP_IPV6ONLY", 0);
-#endif
-#ifdef UV_UDP_REUSEPORT
   SetNamedU32(env, constants, "UV_UDP_REUSEPORT", UV_UDP_REUSEPORT);
-#else
-  SetNamedU32(env, constants, "UV_UDP_REUSEPORT", 0);
-#endif
 
   napi_set_named_property(env, binding, "UDP", udp_ctor);
   napi_set_named_property(env, binding, "SendWrap", send_wrap_ctor);

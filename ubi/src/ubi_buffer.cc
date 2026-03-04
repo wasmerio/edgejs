@@ -24,6 +24,7 @@ using ubi::encoding_ids::kEncUtf8;
 
 constexpr double kUbiBufferMaxLength = 9007199254740991.0;
 constexpr double kUbiUnsafeArrayBufferAllocCap = 2147483647.0;
+constexpr size_t kUbiStringMaxLength = 0x1fffffe8;
 
 std::string GetUtf8String(napi_env env, napi_value value);
 
@@ -107,6 +108,7 @@ bool ExtractBytesFromValue(napi_env env, napi_value value, uint8_t** data, size_
   switch (type) {
     case napi_int16_array:
     case napi_uint16_array:
+    case napi_float16_array:
       bytes_per_element = 2;
       break;
     case napi_int32_array:
@@ -115,6 +117,8 @@ bool ExtractBytesFromValue(napi_env env, napi_value value, uint8_t** data, size_
       bytes_per_element = 4;
       break;
     case napi_float64_array:
+    case napi_bigint64_array:
+    case napi_biguint64_array:
       bytes_per_element = 8;
       break;
     default:
@@ -798,6 +802,15 @@ napi_value SliceByEncoding(napi_env env, napi_callback_info info, int32_t enc) {
   end = std::max<int32_t>(start, std::min<int32_t>(end, static_cast<int32_t>(len)));
   const uint8_t* p = data + start;
   const size_t n = static_cast<size_t>(end - start);
+
+  if ((enc == kEncUtf8 || enc == kEncAscii || enc == kEncLatin1) && n > kUbiStringMaxLength) {
+    napi_throw_error(env, "ERR_STRING_TOO_LONG", "Cannot create a string longer than 0x1fffffe8 characters");
+    return nullptr;
+  }
+  if (enc == kEncUtf16Le && (n / 2) > kUbiStringMaxLength) {
+    napi_throw_error(env, "ERR_STRING_TOO_LONG", "Cannot create a string longer than 0x1fffffe8 characters");
+    return nullptr;
+  }
 
   if (enc == kEncHex) return MakeStringUtf8(env, HexSlice(p, n));
   if (enc == kEncBase64 || enc == kEncBase64Url) {
