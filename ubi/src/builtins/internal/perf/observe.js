@@ -1,11 +1,12 @@
 'use strict';
 
 const active = new Map();
+const kPerfObservers = Symbol.for('node.perfObservers');
 
 function observersFor(type) {
-  if (!globalThis.__ubi_perf_observers) globalThis.__ubi_perf_observers = new Map();
-  if (!globalThis.__ubi_perf_observers.has(type)) globalThis.__ubi_perf_observers.set(type, new Set());
-  return globalThis.__ubi_perf_observers.get(type);
+  if (!globalThis[kPerfObservers]) globalThis[kPerfObservers] = new Map();
+  if (!globalThis[kPerfObservers].has(type)) globalThis[kPerfObservers].set(type, new Set());
+  return globalThis[kPerfObservers].get(type);
 }
 
 module.exports = {

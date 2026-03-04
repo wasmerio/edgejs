@@ -175,17 +175,6 @@ napi_value GetUsePromisesSymbol(napi_env env) {
   if (st == nullptr) return nullptr;
   napi_value symbol = GetRefValue(env, st->k_use_promises_symbol_ref);
   if (symbol != nullptr) return symbol;
-
-  napi_value symbols_binding = GetGlobalNamed(env, "__ubi_symbols");
-  if (symbols_binding != nullptr && !IsUndefined(env, symbols_binding)) {
-    napi_value candidate = nullptr;
-    if (napi_get_named_property(env, symbols_binding, "fs_use_promises_symbol", &candidate) == napi_ok &&
-        candidate != nullptr) {
-      st->k_use_promises_symbol_ref = nullptr;
-      napi_create_reference(env, candidate, 1, &st->k_use_promises_symbol_ref);
-      return candidate;
-    }
-  }
   napi_value description = nullptr;
   napi_create_string_utf8(env, "fs_use_promises_symbol", NAPI_AUTO_LENGTH, &description);
   napi_create_symbol(env, description, &symbol);
@@ -1221,8 +1210,9 @@ void EnsureClassProperty(napi_env env,
 
 }  // namespace
 
-napi_value ResolveFs(napi_env env, const ResolveOptions& /*options*/) {
-  napi_value binding = GetGlobalNamed(env, "__ubi_fs");
+napi_value ResolveFs(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value binding = options.callbacks.resolve_binding(env, options.state, "fs");
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
 
   auto& state = g_fs_states[env];
@@ -1240,6 +1230,16 @@ napi_value ResolveFs(napi_env env, const ResolveOptions& /*options*/) {
   for (const char* name : raw_names) CaptureRawMethod(env, &state, binding, name);
 
   // Constants/symbols.
+  if (state.k_use_promises_symbol_ref == nullptr && options.callbacks.resolve_binding != nullptr) {
+    napi_value symbols_binding = options.callbacks.resolve_binding(env, options.state, "symbols");
+    if (symbols_binding != nullptr && !IsUndefined(env, symbols_binding)) {
+      napi_value candidate = nullptr;
+      if (napi_get_named_property(env, symbols_binding, "fs_use_promises_symbol", &candidate) == napi_ok &&
+          candidate != nullptr) {
+        napi_create_reference(env, candidate, 1, &state.k_use_promises_symbol_ref);
+      }
+    }
+  }
   bool has_k_use_promises = false;
   if (napi_has_named_property(env, binding, "kUsePromises", &has_k_use_promises) == napi_ok && !has_k_use_promises) {
     napi_value symbol = GetUsePromisesSymbol(env);

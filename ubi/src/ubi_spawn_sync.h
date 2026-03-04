@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallSpawnSyncBinding(napi_env env);
+napi_value UbiInstallSpawnSyncBinding(napi_env env);
 
 #endif  // UBI_SPAWN_SYNC_H_

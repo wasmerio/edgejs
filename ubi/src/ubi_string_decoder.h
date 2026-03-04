@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallStringDecoderBinding(napi_env env);
+napi_value UbiInstallStringDecoderBinding(napi_env env);
 
 #endif  // UBI_STRING_DECODER_H_

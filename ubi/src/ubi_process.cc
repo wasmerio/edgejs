@@ -33,6 +33,7 @@
 #include "acorn_version.h"
 #include "cjs_module_lexer_version.h"
 #include "node_version.h"
+#include "unofficial_napi.h"
 
 #if defined(_WIN32)
 #include <stdlib.h>
@@ -1495,6 +1496,67 @@ napi_value ProcessMethodsKillCallback(napi_env env, napi_callback_info info) {
   return out;
 }
 
+napi_value ProcessMethodsSetEnvCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int32_t rc = -1;
+  if (argc >= 2 && argv[0] != nullptr && argv[1] != nullptr) {
+    const std::string key = NapiValueToUtf8(env, argv[0]);
+    const std::string value = NapiValueToUtf8(env, argv[1]);
+    if (!key.empty()) {
+#if defined(_WIN32)
+      rc = (_putenv_s(key.c_str(), value.c_str()) == 0) ? 0 : -1;
+#else
+      rc = (setenv(key.c_str(), value.c_str(), 1) == 0) ? 0 : -1;
+#endif
+      if (rc == 0 && key == "TZ") {
+#if defined(_WIN32)
+        _tzset();
+#else
+        tzset();
+#endif
+        (void)unofficial_napi_notify_datetime_configuration_change(env);
+      }
+    }
+  }
+
+  napi_value out = nullptr;
+  napi_create_int32(env, rc, &out);
+  return out;
+}
+
+napi_value ProcessMethodsUnsetEnvCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int32_t rc = -1;
+  if (argc >= 1 && argv[0] != nullptr) {
+    const std::string key = NapiValueToUtf8(env, argv[0]);
+    if (!key.empty()) {
+#if defined(_WIN32)
+      rc = (_putenv_s(key.c_str(), "") == 0) ? 0 : -1;
+#else
+      rc = (unsetenv(key.c_str()) == 0) ? 0 : -1;
+#endif
+      if (rc == 0 && key == "TZ") {
+#if defined(_WIN32)
+        _tzset();
+#else
+        tzset();
+#endif
+        (void)unofficial_napi_notify_datetime_configuration_change(env);
+      }
+    }
+  }
+
+  napi_value out = nullptr;
+  napi_create_int32(env, rc, &out);
+  return out;
+}
+
 napi_value ProcessMethodsRawDebugCallback(napi_env env, napi_callback_info info) {
   size_t argc = 8;
   napi_value argv[8] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
@@ -1605,7 +1667,29 @@ napi_value ProcessMethodsLoadEnvFileCallback(napi_env env, napi_callback_info in
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
 
   napi_value util_binding = nullptr;
-  if (napi_get_named_property(env, global, "__ubi_util", &util_binding) != napi_ok || util_binding == nullptr) {
+  napi_value internal_binding = nullptr;
+  napi_valuetype internal_binding_type = napi_undefined;
+  if (napi_get_named_property(env, global, "internalBinding", &internal_binding) == napi_ok &&
+      internal_binding != nullptr &&
+      napi_typeof(env, internal_binding, &internal_binding_type) == napi_ok &&
+      internal_binding_type == napi_function) {
+    napi_value util_name = nullptr;
+    if (napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &util_name) != napi_ok || util_name == nullptr) {
+      return nullptr;
+    }
+    napi_value argv_ib[1] = {util_name};
+    if (napi_call_function(env, global, internal_binding, 1, argv_ib, &util_binding) != napi_ok) {
+      return nullptr;
+    }
+  }
+
+  if (util_binding == nullptr) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+  napi_valuetype util_binding_type = napi_undefined;
+  if (napi_typeof(env, util_binding, &util_binding_type) != napi_ok || util_binding_type != napi_object) {
     napi_value undefined = nullptr;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -1704,7 +1788,7 @@ napi_value ProcessMethodsGetActiveRequestsCallback(napi_env env, napi_callback_i
   static constexpr const char* kScript =
       "(function(){"
       "  try {"
-      "    const reqs = globalThis.__ubi_active_requests;"
+      "    const reqs = globalThis[Symbol.for('node.activeRequests')];"
       "    return Array.isArray(reqs) ? reqs.slice() : [];"
       "  } catch {"
       "    return [];"
@@ -1717,7 +1801,7 @@ napi_value ProcessMethodsGetActiveHandlesCallback(napi_env env, napi_callback_in
   static constexpr const char* kScript =
       "(function(){"
       "  try {"
-      "    const handles = globalThis.__ubi_active_handles;"
+      "    const handles = globalThis[Symbol.for('node.activeHandles')];"
       "    return Array.isArray(handles) ? handles.slice() : [];"
       "  } catch {"
       "    return [];"
@@ -1731,13 +1815,13 @@ napi_value ProcessMethodsGetActiveResourcesInfoCallback(napi_env env, napi_callb
       "(function(){"
       "  const out = [];"
       "  try {"
-      "    const resources = globalThis.__ubi_active_resources;"
+      "    const resources = globalThis[Symbol.for('node.activeResources')];"
       "    if (resources && typeof resources.values === 'function') {"
       "      for (const type of resources.values()) {"
       "        out.push(String(type));"
       "      }"
       "    }"
-      "    const reqs = globalThis.__ubi_active_requests;"
+      "    const reqs = globalThis[Symbol.for('node.activeRequests')];"
       "    if (Array.isArray(reqs)) {"
       "      for (let i = 0; i < reqs.length; i++) {"
       "        const req = reqs[i];"
@@ -2620,6 +2704,8 @@ napi_status UbiInstallProcessObject(napi_env env,
         {"_getActiveHandles", ProcessMethodsGetActiveHandlesCallback},
         {"getActiveResourcesInfo", ProcessMethodsGetActiveResourcesInfoCallback},
         {"_kill", ProcessMethodsKillCallback},
+        {"_setEnv", ProcessMethodsSetEnvCallback},
+        {"_unsetEnv", ProcessMethodsUnsetEnvCallback},
         {"_rawDebug", ProcessMethodsRawDebugCallback},
         {"cwd", ProcessCwdCallback},
         {"dlopen", ProcessMethodsDlopenCallback},
@@ -2643,9 +2729,6 @@ napi_status UbiInstallProcessObject(napi_env env,
     }
     UpdateHrtimeBuffer(env, false);
     if (napi_create_reference(env, binding, 1, &state.binding_ref) != napi_ok || state.binding_ref == nullptr) {
-      return napi_generic_failure;
-    }
-    if (napi_set_named_property(env, global, "__ubi_process_methods_binding", binding) != napi_ok) {
       return napi_generic_failure;
     }
   }
@@ -2710,10 +2793,23 @@ napi_status UbiInstallProcessObject(napi_env env,
     if (napi_create_reference(env, binding, 1, &state.binding_ref) != napi_ok || state.binding_ref == nullptr) {
       return napi_generic_failure;
     }
-    if (napi_set_named_property(env, global, "__ubi_report_binding", binding) != napi_ok) {
-      return napi_generic_failure;
-    }
   }
 
   return napi_ok;
+}
+
+napi_value UbiGetProcessMethodsBinding(napi_env env) {
+  ProcessMethodsBindingState* state = GetProcessMethodsState(env);
+  if (state == nullptr || state->binding_ref == nullptr) return nullptr;
+  napi_value binding = nullptr;
+  if (napi_get_reference_value(env, state->binding_ref, &binding) != napi_ok || binding == nullptr) return nullptr;
+  return binding;
+}
+
+napi_value UbiGetReportBinding(napi_env env) {
+  ReportBindingState* state = GetReportState(env);
+  if (state == nullptr || state->binding_ref == nullptr) return nullptr;
+  napi_value binding = nullptr;
+  if (napi_get_reference_value(env, state->binding_ref, &binding) != napi_ok || binding == nullptr) return nullptr;
+  return binding;
 }

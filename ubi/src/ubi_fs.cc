@@ -1455,10 +1455,10 @@ void SetInt32Constant(napi_env env, napi_value obj, const char* name,
 
 }  // namespace
 
-void UbiInstallFsBinding(napi_env env) {
+napi_value UbiInstallFsBinding(napi_env env) {
   napi_value binding = nullptr;
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) {
-    return;
+    return nullptr;
   }
 
   SetMethod(env, binding, "readFileUtf8", BindingReadFileUtf8);
@@ -1556,9 +1556,5 @@ void UbiInstallFsBinding(napi_env env) {
   SetInt32Constant(env, binding, "UV_FS_SYMLINK_DIR", UV_FS_SYMLINK_DIR);
   SetInt32Constant(env, binding, "UV_FS_SYMLINK_JUNCTION", UV_FS_SYMLINK_JUNCTION);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
-    return;
-  }
-  napi_set_named_property(env, global, "__ubi_fs", binding);
+  return binding;
 }

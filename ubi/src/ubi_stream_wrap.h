@@ -11,7 +11,7 @@ enum UbiStreamStateIndex : int {
   kUbiStreamStateLength = 4,
 };
 
-void UbiInstallStreamWrapBinding(napi_env env);
+napi_value UbiInstallStreamWrapBinding(napi_env env);
 int32_t* UbiGetStreamBaseState();
 
 #endif  // UBI_STREAM_WRAP_H_

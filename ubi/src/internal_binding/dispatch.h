@@ -13,6 +13,9 @@ struct ResolveCallbacks {
   napi_value (*get_or_create_errors)(napi_env env) = nullptr;
   napi_value (*get_or_create_trace_events)(napi_env env) = nullptr;
 
+  // Canonical native resolver for concrete binding exports (one source of truth).
+  napi_value (*resolve_binding)(napi_env env, void* state, const char* name) = nullptr;
+
   // Keep complex binding builders in module_loader for now.
   napi_value (*resolve_uv)(napi_env env) = nullptr;
   napi_value (*resolve_contextify)(napi_env env) = nullptr;

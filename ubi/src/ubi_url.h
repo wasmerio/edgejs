@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallUrlBinding(napi_env env);
+napi_value UbiInstallUrlBinding(napi_env env);
 
 #endif  // UBI_URL_H_

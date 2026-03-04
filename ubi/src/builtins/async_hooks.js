@@ -2,10 +2,13 @@
 
 const { AsyncResource } = require('internal/async_hooks');
 
-let currentAlsStores = globalThis.__ubi_als_current_stores;
+const kAlsStores = Symbol.for('node.alsCurrentStores');
+const kAlsTimersPatched = Symbol.for('node.alsTimersPatched');
+
+let currentAlsStores = globalThis[kAlsStores];
 if (!(currentAlsStores instanceof Map)) {
   currentAlsStores = new Map();
-  globalThis.__ubi_als_current_stores = currentAlsStores;
+  globalThis[kAlsStores] = currentAlsStores;
 }
 
 function patchTimerForAls(name) {
@@ -19,23 +22,23 @@ function patchTimerForAls(name) {
     const wrapped = function(...cbArgs) {
       const prev = currentAlsStores;
       currentAlsStores = new Map(snapshot);
-      globalThis.__ubi_als_current_stores = currentAlsStores;
+      globalThis[kAlsStores] = currentAlsStores;
       try {
         return callback.apply(this, cbArgs);
       } finally {
         currentAlsStores = prev;
-        globalThis.__ubi_als_current_stores = currentAlsStores;
+        globalThis[kAlsStores] = currentAlsStores;
       }
     };
     return original.call(this, wrapped, ...args);
   };
 }
 
-if (!globalThis.__ubi_als_timers_patched) {
+if (!globalThis[kAlsTimersPatched]) {
   patchTimerForAls('setImmediate');
   patchTimerForAls('setTimeout');
   patchTimerForAls('setInterval');
-  globalThis.__ubi_als_timers_patched = true;
+  globalThis[kAlsTimersPatched] = true;
 }
 
 class AsyncLocalStorage {

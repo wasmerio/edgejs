@@ -13,6 +13,95 @@ bool IsObjectLike(napi_env env, napi_value value) {
   return type == napi_object || type == napi_function;
 }
 
+napi_value GetNamedProperty(napi_env env, napi_value target, const char* key) {
+  if (target == nullptr) return nullptr;
+  napi_value out = nullptr;
+  if (napi_get_named_property(env, target, key, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
+
+napi_value CreateNullPrototypeObject(napi_env env) {
+  const napi_value undefined = Undefined(env);
+  const napi_value global = GetGlobal(env);
+  if (global == nullptr) return undefined;
+
+  napi_value object_ctor = nullptr;
+  if (napi_get_named_property(env, global, "Object", &object_ctor) != napi_ok ||
+      object_ctor == nullptr || !IsObjectLike(env, object_ctor)) {
+    return undefined;
+  }
+
+  napi_value create_fn = nullptr;
+  if (napi_get_named_property(env, object_ctor, "create", &create_fn) != napi_ok ||
+      create_fn == nullptr) {
+    return undefined;
+  }
+  napi_valuetype fn_type = napi_undefined;
+  if (napi_typeof(env, create_fn, &fn_type) != napi_ok || fn_type != napi_function) {
+    return undefined;
+  }
+
+  napi_value null_value = nullptr;
+  if (napi_get_null(env, &null_value) != napi_ok || null_value == nullptr) return undefined;
+
+  napi_value out = nullptr;
+  napi_value argv[1] = {null_value};
+  if (napi_call_function(env, object_ctor, create_fn, 1, argv, &out) != napi_ok || out == nullptr) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+      napi_value ignored = nullptr;
+      napi_get_and_clear_last_exception(env, &ignored);
+    }
+    return undefined;
+  }
+  return out;
+}
+
+napi_value CreatePlainObject(napi_env env) {
+  napi_value out = nullptr;
+  if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
+  return out;
+}
+
+napi_value CreateBestEffortNullProtoObject(napi_env env) {
+  napi_value out = CreateNullPrototypeObject(env);
+  if (out == nullptr || IsUndefined(env, out) || !IsObjectLike(env, out)) {
+    out = CreatePlainObject(env);
+  }
+  return out;
+}
+
+napi_value EnsureObjectProperty(napi_env env, napi_value target, const char* key) {
+  napi_value current = GetNamedProperty(env, target, key);
+  if (!IsObjectLike(env, current)) {
+    current = CreatePlainObject(env);
+    if (IsObjectLike(env, current)) napi_set_named_property(env, target, key, current);
+  }
+  return current;
+}
+
+void EnsureInt32Default(napi_env env, napi_value target, const char* key, int32_t value) {
+  if (!IsObjectLike(env, target)) return;
+  bool has_key = false;
+  if (napi_has_named_property(env, target, key, &has_key) != napi_ok || has_key) return;
+  SetInt32(env, target, key, value);
+}
+
+void CopyOwnProperties(napi_env env, napi_value src, napi_value dst) {
+  if (!IsObjectLike(env, src) || !IsObjectLike(env, dst)) return;
+  napi_value keys = nullptr;
+  if (napi_get_property_names(env, src, &keys) != napi_ok || keys == nullptr) return;
+  uint32_t key_count = 0;
+  if (napi_get_array_length(env, keys, &key_count) != napi_ok) return;
+  for (uint32_t i = 0; i < key_count; i++) {
+    napi_value key = nullptr;
+    if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) continue;
+    napi_value value = nullptr;
+    if (napi_get_property(env, src, key, &value) != napi_ok || value == nullptr) continue;
+    napi_set_property(env, dst, key, value);
+  }
+}
+
 napi_value TryRequireModule(napi_env env, const char* module_name) {
   const napi_value undefined = Undefined(env);
   const napi_value global = GetGlobal(env);
@@ -96,8 +185,8 @@ napi_value CreateTraceConstants(napi_env env) {
 }
 
 napi_value CreateDefaultFsConstants(napi_env env) {
-  napi_value fs_obj = nullptr;
-  if (napi_create_object(env, &fs_obj) != napi_ok || fs_obj == nullptr) return Undefined(env);
+  napi_value fs_obj = CreatePlainObject(env);
+  if (!IsObjectLike(env, fs_obj)) return Undefined(env);
   SetInt32(env, fs_obj, "F_OK", 0);
   SetInt32(env, fs_obj, "R_OK", 4);
   SetInt32(env, fs_obj, "W_OK", 2);
@@ -106,16 +195,14 @@ napi_value CreateDefaultFsConstants(napi_env env) {
 }
 
 napi_value CreateEmptyObject(napi_env env) {
-  napi_value out = nullptr;
-  if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
-  return out;
+  return CreatePlainObject(env);
 }
 
 napi_value CreateDefaultOsConstants(napi_env env) {
-  napi_value os_obj = nullptr;
-  if (napi_create_object(env, &os_obj) != napi_ok || os_obj == nullptr) return Undefined(env);
-  napi_value signals = nullptr;
-  if (napi_create_object(env, &signals) == napi_ok && signals != nullptr) {
+  napi_value os_obj = CreatePlainObject(env);
+  if (!IsObjectLike(env, os_obj)) return Undefined(env);
+  napi_value signals = CreateBestEffortNullProtoObject(env);
+  if (IsObjectLike(env, signals)) {
     napi_set_named_property(env, os_obj, "signals", signals);
   }
   return os_obj;
@@ -127,9 +214,30 @@ void SetNamedObjectIfValid(napi_env env, napi_value target, const char* key, nap
   }
 }
 
+void NormalizeConstantsShape(napi_env env, napi_value constants) {
+  if (!IsObjectLike(env, constants)) return;
+
+  // Ensure fs access constants are always available.
+  napi_value fs_obj = EnsureObjectProperty(env, constants, "fs");
+  EnsureInt32Default(env, fs_obj, "F_OK", 0);
+  EnsureInt32Default(env, fs_obj, "R_OK", 4);
+  EnsureInt32Default(env, fs_obj, "W_OK", 2);
+  EnsureInt32Default(env, fs_obj, "X_OK", 1);
+
+  // Keep os.signals as a clean map-like object.
+  napi_value os_obj = EnsureObjectProperty(env, constants, "os");
+  napi_value src_signals = GetNamedProperty(env, os_obj, "signals");
+  if (!IsObjectLike(env, src_signals)) src_signals = CreatePlainObject(env);
+
+  napi_value normalized_signals = CreateBestEffortNullProtoObject(env);
+  if (!IsObjectLike(env, normalized_signals)) return;
+  CopyOwnProperties(env, src_signals, normalized_signals);
+  napi_set_named_property(env, os_obj, "signals", normalized_signals);
+}
+
 }  // namespace
 
-napi_value ResolveConstants(napi_env env, const ResolveOptions& /*options*/) {
+napi_value ResolveConstants(napi_env env, const ResolveOptions& options) {
   const napi_value undefined = Undefined(env);
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
@@ -140,10 +248,16 @@ napi_value ResolveConstants(napi_env env, const ResolveOptions& /*options*/) {
   SetNamedObjectIfValid(env, out, "zlib", CreateEmptyObject(env));
 
   // Prefer native ubi constants when present.
-  const napi_value os_constants = GetGlobalNamed(env, "__ubi_os_constants");
+  napi_value os_constants = nullptr;
+  if (options.callbacks.resolve_binding != nullptr) {
+    os_constants = options.callbacks.resolve_binding(env, options.state, "os_constants");
+  }
   SetNamedObjectIfValid(env, out, "os", os_constants);
 
-  const napi_value fs_binding = GetGlobalNamed(env, "__ubi_fs");
+  napi_value fs_binding = nullptr;
+  if (options.callbacks.resolve_binding != nullptr) {
+    fs_binding = options.callbacks.resolve_binding(env, options.state, "fs");
+  }
   if (!IsUndefined(env, fs_binding) && IsObjectLike(env, fs_binding)) {
     napi_value fs_constants_obj = nullptr;
     if (napi_create_object(env, &fs_constants_obj) == napi_ok && fs_constants_obj != nullptr) {
@@ -167,6 +281,7 @@ napi_value ResolveConstants(napi_env env, const ResolveOptions& /*options*/) {
 
   SetNamedObjectIfValid(env, out, "internal", CreateInternalConstants(env));
   SetNamedObjectIfValid(env, out, "trace", CreateTraceConstants(env));
+  NormalizeConstantsShape(env, out);
 
   return out;
 }

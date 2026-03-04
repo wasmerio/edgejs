@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallTtyWrapBinding(napi_env env);
+napi_value UbiInstallTtyWrapBinding(napi_env env);
 
 #endif  // UBI_TTY_WRAP_H_

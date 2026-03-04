@@ -384,9 +384,9 @@ napi_value BindingUpdate(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-void UbiInstallUrlBinding(napi_env env) {
+napi_value UbiInstallUrlBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_value components = nullptr;
   void* components_data = nullptr;
@@ -416,7 +416,5 @@ void UbiInstallUrlBinding(napi_env env) {
   SetMethod(env, binding, "canParse", BindingCanParse);
   SetMethod(env, binding, "getOrigin", BindingGetOrigin);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_url", binding);
+  return binding;
 }

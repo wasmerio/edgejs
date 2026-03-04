@@ -2,4 +2,4 @@
 
 #include "node_api.h"
 
-void UbiInstallBufferBinding(napi_env env);
+napi_value UbiInstallBufferBinding(napi_env env);

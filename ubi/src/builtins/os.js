@@ -58,10 +58,10 @@ const {
   validateInt32,
 } = require('internal/validators');
 
-const binding = globalThis.__ubi_os;
-const constants = globalThis.__ubi_os_constants || {};
+const binding = internalBinding('os');
+const constants = (internalBinding('constants') || {}).os || {};
 if (!binding) {
-  throw new Error('os builtin requires __ubi_os binding');
+  throw new Error('os builtin requires os binding');
 }
 
 const isWindows = process.platform === 'win32';

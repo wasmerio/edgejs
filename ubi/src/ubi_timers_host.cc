@@ -388,8 +388,8 @@ void AttachInfoArrays(napi_env env, napi_value binding) {
 
 }  // namespace
 
-void UbiInstallTimersHostBinding(napi_env env) {
-  if (env == nullptr) return;
+napi_value UbiInstallTimersHostBinding(napi_env env) {
+  if (env == nullptr) return nullptr;
 
   g_timers_state.env = env;
   EnsureTimerHandle();
@@ -399,7 +399,7 @@ void UbiInstallTimersHostBinding(napi_env env) {
 
   napi_value binding = nullptr;
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) {
-    return;
+    return nullptr;
   }
   SetMethod(env, binding, "setupTimers", SetupTimers);
   SetMethod(env, binding, "scheduleTimer", ScheduleTimer);
@@ -408,9 +408,5 @@ void UbiInstallTimersHostBinding(napi_env env) {
   SetMethod(env, binding, "getLibuvNow", GetLibuvNow);
   AttachInfoArrays(env, binding);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
-    return;
-  }
-  napi_set_named_property(env, global, "__ubi_timers_binding", binding);
+  return binding;
 }

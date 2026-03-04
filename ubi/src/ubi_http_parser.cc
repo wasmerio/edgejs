@@ -838,9 +838,9 @@ napi_value CreateMethodsArray(napi_env env, bool all_methods) {
 
 }  // namespace
 
-void UbiInstallHttpParserBinding(napi_env env) {
+napi_value UbiInstallHttpParserBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_property_descriptor parser_props[] = {
       {"close", nullptr, ParserClose, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -866,7 +866,7 @@ void UbiInstallHttpParserBinding(napi_env env) {
                         parser_props,
                         &parser_ctor) != napi_ok ||
       parser_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   SetNamedU32(env, parser_ctor, "REQUEST", HTTP_REQUEST);
@@ -909,7 +909,7 @@ void UbiInstallHttpParserBinding(napi_env env) {
                         list_props,
                         &list_ctor) != napi_ok ||
       list_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   SetNamedValue(env, binding, "HTTPParser", parser_ctor);
@@ -917,7 +917,5 @@ void UbiInstallHttpParserBinding(napi_env env) {
   SetNamedValue(env, binding, "methods", CreateMethodsArray(env, false));
   SetNamedValue(env, binding, "allMethods", CreateMethodsArray(env, true));
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_http_parser", binding);
+  return binding;
 }

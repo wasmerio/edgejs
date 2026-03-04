@@ -2,7 +2,11 @@
 
 const EventEmitter = require('events');
 
-const kDomainStack = globalThis.__ubi_domain_stack || (globalThis.__ubi_domain_stack = []);
+const kDomainStackKey = Symbol.for('node.domainStack');
+const kDomainEmit = Symbol('domainEmit');
+const kDomainTimerPatchInstalled = Symbol.for('node.domainTimerPatchInstalled');
+
+const kDomainStack = globalThis[kDomainStackKey] || (globalThis[kDomainStackKey] = []);
 let kActiveDomain = null;
 
 if (!Object.getOwnPropertyDescriptor(process, 'domain') ||
@@ -40,8 +44,8 @@ class Domain extends EventEmitter {
     if (!emitter || typeof emitter.emit !== 'function') return;
     const domain = this;
     const originalEmit = emitter.emit;
-    if (typeof emitter.__ubi_domain_emit === 'function') return;
-    emitter.__ubi_domain_emit = originalEmit;
+    if (typeof emitter[kDomainEmit] === 'function') return;
+    emitter[kDomainEmit] = originalEmit;
     emitter.emit = function domainEmit(type, ...args) {
       if (type === 'error' && emitter.listenerCount('error') === 0) {
         let err = args[0];
@@ -74,8 +78,8 @@ class Domain extends EventEmitter {
   }
 }
 
-if (!globalThis.__ubi_domain_timer_patch_installed) {
-  globalThis.__ubi_domain_timer_patch_installed = true;
+if (!globalThis[kDomainTimerPatchInstalled]) {
+  globalThis[kDomainTimerPatchInstalled] = true;
   const bindCallbackToDomain = (cb) => {
     if (typeof cb !== 'function') return cb;
     const d = process.domain;

@@ -1,13 +1,19 @@
 'use strict';
 
 const { EventEmitter } = require('events');
-const binding = globalThis.__ubi_fs;
-const encodingBinding = globalThis.__ubi_encoding || null;
+const binding = internalBinding('fs');
+let encodingBinding = null;
+try {
+  encodingBinding = internalBinding('encoding_binding');
+} catch {
+  encodingBinding = null;
+}
 let warnedInvalidExistsSyncPath = false;
-const activeRequests = globalThis.__ubi_active_requests || [];
-globalThis.__ubi_active_requests = activeRequests;
+const kActiveRequests = Symbol.for('node.activeRequests');
+const activeRequests = globalThis[kActiveRequests] || [];
+globalThis[kActiveRequests] = activeRequests;
 if (!binding) {
-  throw new Error('fs builtin requires __ubi_fs binding');
+  throw new Error('fs builtin requires fs binding');
 }
 
 if (typeof globalThis.TextEncoder === 'undefined') {

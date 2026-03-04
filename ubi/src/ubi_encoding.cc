@@ -610,9 +610,9 @@ napi_value BindingToUnicode(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-void UbiInstallEncodingBinding(napi_env env) {
+napi_value UbiInstallEncodingBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_value encode_into_results = nullptr;
   if (napi_create_array_with_length(env, 2, &encode_into_results) == napi_ok && encode_into_results != nullptr) {
@@ -644,7 +644,5 @@ void UbiInstallEncodingBinding(napi_env env) {
   SetMethod(env, binding, "encodeBase64", BindingEncodeBase64);
   SetMethod(env, binding, "decodeBase64", BindingDecodeBase64);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_encoding", binding);
+  return binding;
 }

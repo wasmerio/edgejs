@@ -689,16 +689,10 @@ napi_value PipeAcceptPendingHandle(napi_env env, napi_callback_info info) {
   uv_stream_t* stream = nullptr;
 
   if (pending_type == UV_TCP) {
-    napi_value global = nullptr;
-    napi_value tcp_binding = nullptr;
     napi_value tcp_ctor = nullptr;
     napi_value arg = nullptr;
-    if (napi_get_global(env, &global) != napi_ok ||
-        global == nullptr ||
-        napi_get_named_property(env, global, "__ubi_tcp_wrap", &tcp_binding) != napi_ok ||
-        tcp_binding == nullptr ||
-        napi_get_named_property(env, tcp_binding, "TCP", &tcp_ctor) != napi_ok ||
-        tcp_ctor == nullptr ||
+    tcp_ctor = UbiGetTcpWrapConstructor(env);
+    if (tcp_ctor == nullptr ||
         napi_create_int32(env, 0, &arg) != napi_ok ||
         arg == nullptr ||
         napi_new_instance(env, tcp_ctor, 1, &arg, &handle_obj) != napi_ok ||
@@ -804,9 +798,9 @@ uv_stream_t* UbiPipeWrapGetStream(napi_env env, napi_value value) {
   return reinterpret_cast<uv_stream_t*>(&wrap->handle);
 }
 
-void UbiInstallPipeWrapBinding(napi_env env) {
+napi_value UbiInstallPipeWrapBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_property_descriptor pipe_props[] = {
       {"open", nullptr, PipeOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -847,7 +841,7 @@ void UbiInstallPipeWrapBinding(napi_env env) {
                         pipe_props,
                         &pipe_ctor) != napi_ok ||
       pipe_ctor == nullptr) {
-    return;
+    return nullptr;
   }
   if (g_pipe_ctor_ref != nullptr) napi_delete_reference(env, g_pipe_ctor_ref);
   napi_create_reference(env, pipe_ctor, 1, &g_pipe_ctor_ref);
@@ -862,7 +856,7 @@ void UbiInstallPipeWrapBinding(napi_env env) {
                         nullptr,
                         &connect_wrap_ctor) != napi_ok ||
       connect_wrap_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   napi_value constants = nullptr;
@@ -877,7 +871,5 @@ void UbiInstallPipeWrapBinding(napi_env env) {
   napi_set_named_property(env, binding, "PipeConnectWrap", connect_wrap_ctor);
   napi_set_named_property(env, binding, "constants", constants);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_pipe_wrap", binding);
+  return binding;
 }

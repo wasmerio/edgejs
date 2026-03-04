@@ -1251,7 +1251,6 @@ class REPLServerImpl extends EventEmitter {
     const { own, inherited } = this._propertyNames(base);
     const filter = (name) => {
       if (/^\d/.test(name)) return false;
-      if (name.startsWith('__ubi_')) return false;
       if (name === '__defineGetter__' || name === '__defineSetter__' ||
           name === '__lookupGetter__' || name === '__lookupSetter__') return false;
       if (/[^A-Za-z0-9_$]/.test(name)) return false;

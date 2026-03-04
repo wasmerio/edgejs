@@ -80,10 +80,23 @@ napi_value ContextifyMakeContextFallback(napi_env env, napi_callback_info info) 
     napi_create_object(env, &sandbox);
   }
 
-  napi_value util = GetGlobalNamed(env, "__ubi_util");
+  napi_value util = nullptr;
+  napi_value global = GetGlobal(env);
+  if (global != nullptr) {
+    napi_get_named_property(env, global, "internalBinding", &util);
+  }
   napi_value private_symbols = nullptr;
   if (util != nullptr && !IsUndefined(env, util)) {
-    napi_get_named_property(env, util, "privateSymbols", &private_symbols);
+    napi_valuetype t = napi_undefined;
+    if (napi_typeof(env, util, &t) == napi_ok && t == napi_function) {
+      napi_value util_name = nullptr;
+      napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &util_name);
+      napi_value util_binding = nullptr;
+      napi_call_function(env, global, util, 1, &util_name, &util_binding);
+      if (util_binding != nullptr && !IsUndefined(env, util_binding)) {
+        napi_get_named_property(env, util_binding, "privateSymbols", &private_symbols);
+      }
+    }
   }
   napi_value context_symbol = nullptr;
   if (private_symbols != nullptr) {

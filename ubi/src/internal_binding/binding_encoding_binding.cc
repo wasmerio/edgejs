@@ -135,8 +135,9 @@ void EnsureDecodeLatin1(napi_env env, napi_value binding) {
 
 }  // namespace
 
-napi_value ResolveEncodingBinding(napi_env env, const ResolveOptions& /*options*/) {
-  napi_value binding = GetGlobalNamed(env, "__ubi_encoding");
+napi_value ResolveEncodingBinding(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value binding = options.callbacks.resolve_binding(env, options.state, "encoding_binding");
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
   EnsureDecodeLatin1(env, binding);
   return binding;

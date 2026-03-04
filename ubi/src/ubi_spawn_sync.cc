@@ -673,13 +673,10 @@ void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback cb)
 
 }  // namespace
 
-void UbiInstallSpawnSyncBinding(napi_env env) {
-  if (env == nullptr) return;
+napi_value UbiInstallSpawnSyncBinding(napi_env env) {
+  if (env == nullptr) return nullptr;
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
   SetMethod(env, binding, "spawn", SpawnSync);
-
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_spawn_sync", binding);
+  return binding;
 }

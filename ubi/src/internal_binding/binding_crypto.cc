@@ -991,9 +991,9 @@ void EnsureClass(napi_env env,
 
 }  // namespace
 
-napi_value ResolveCrypto(napi_env env, const ResolveOptions& /*options*/) {
-  napi_value out = GetGlobalNamed(env, "__ubi_crypto_binding");
-  if (out == nullptr || IsUndefined(env, out)) out = GetGlobalNamed(env, "__ubi_crypto");
+napi_value ResolveCrypto(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value out = options.callbacks.resolve_binding(env, options.state, "crypto");
   if (out == nullptr || IsUndefined(env, out)) return Undefined(env);
 
   auto& st = g_crypto_states[env];

@@ -16,14 +16,18 @@ if (typeof globalThis.DOMException !== 'function') {
   globalThis.DOMException = UbiDOMException;
 }
 
-const processTable = globalThis.__ubi_process_table || new Map();
-globalThis.__ubi_process_table = processTable;
-const longRunningScriptCache = globalThis.__ubi_long_running_script_cache || new Map();
-globalThis.__ubi_long_running_script_cache = longRunningScriptCache;
-let nextPid = typeof globalThis.__ubi_next_pid === 'number' ? globalThis.__ubi_next_pid : 1000;
+const kProcessTable = Symbol.for('node.processTable');
+const kLongRunningScriptCache = Symbol.for('node.longRunningScriptCache');
+const kNextPid = Symbol.for('node.nextPid');
+
+const processTable = globalThis[kProcessTable] || new Map();
+globalThis[kProcessTable] = processTable;
+const longRunningScriptCache = globalThis[kLongRunningScriptCache] || new Map();
+globalThis[kLongRunningScriptCache] = longRunningScriptCache;
+let nextPid = typeof globalThis[kNextPid] === 'number' ? globalThis[kNextPid] : 1000;
 function allocatePid() {
   nextPid += 1;
-  globalThis.__ubi_next_pid = nextPid;
+  globalThis[kNextPid] = nextPid;
   return nextPid;
 }
 function registerProcess(pid, onSignal) {

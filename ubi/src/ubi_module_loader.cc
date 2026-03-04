@@ -1,9 +1,30 @@
 #include "ubi_module_loader.h"
+#include "ubi_buffer.h"
+#include "ubi_cares_wrap.h"
+#include "ubi_crypto.h"
 #include "ubi_errors_binding.h"
+#include "ubi_encoding.h"
+#include "ubi_fs.h"
+#include "ubi_http_parser.h"
+#include "ubi_os.h"
+#include "ubi_pipe_wrap.h"
+#include "ubi_process.h"
+#include "ubi_process_wrap.h"
+#include "ubi_signal_wrap.h"
+#include "ubi_spawn_sync.h"
+#include "ubi_stream_wrap.h"
+#include "ubi_string_decoder.h"
+#include "ubi_tcp_wrap.h"
+#include "ubi_timers_host.h"
+#include "ubi_tty_wrap.h"
+#include "ubi_udp_wrap.h"
+#include "ubi_url.h"
+#include "ubi_util.h"
 #include "internal_binding/dispatch.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,10 +42,13 @@ namespace fs = std::filesystem;
 
 struct ModuleLoaderState {
   std::unordered_map<std::string, napi_ref> module_cache;
+  std::unordered_map<std::string, napi_ref> binding_cache;
   napi_ref cache_object_ref = nullptr;
   napi_ref primordials_ref = nullptr;
   napi_ref internal_binding_ref = nullptr;
   napi_ref native_builtins_binding_ref = nullptr;
+  napi_ref internal_binding_loader_ref = nullptr;
+  napi_ref require_builtin_loader_ref = nullptr;
   std::string entry_dir;
 };
 
@@ -52,6 +76,7 @@ struct TraceEventsBindingState {
 std::unordered_map<napi_env, ModuleLoaderState> g_loader_states;
 std::unordered_map<napi_env, TaskQueueBindingState> g_task_queue_states;
 std::unordered_map<napi_env, TraceEventsBindingState> g_trace_events_states;
+std::unordered_map<napi_env, napi_ref> g_contextify_binding_refs;
 std::vector<RequireContext*> g_require_contexts;
 
 std::string ReadTextFile(const fs::path& path) {
@@ -498,16 +523,24 @@ static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_in
 static napi_value BuiltinsSetInternalLoadersCallback(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
+  void* data = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, &data) != napi_ok) return nullptr;
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
-
-  if (argc >= 1 && argv[0] != nullptr) {
-    napi_set_named_property(env, global, "__ubi_internal_binding_loader", argv[0]);
-  }
-  if (argc >= 2 && argv[1] != nullptr) {
-    napi_set_named_property(env, global, "__ubi_require_builtin_loader", argv[1]);
+  auto* state = static_cast<ModuleLoaderState*>(data);
+  if (state != nullptr) {
+    auto set_loader_ref = [&](napi_ref* slot, napi_value fn) {
+      if (slot == nullptr) return;
+      if (*slot != nullptr) {
+        napi_delete_reference(env, *slot);
+        *slot = nullptr;
+      }
+      if (fn == nullptr) return;
+      napi_valuetype t = napi_undefined;
+      if (napi_typeof(env, fn, &t) != napi_ok || t != napi_function) return;
+      napi_create_reference(env, fn, 1, slot);
+    };
+    if (argc >= 1) set_loader_ref(&state->internal_binding_loader_ref, argv[0]);
+    if (argc >= 2) set_loader_ref(&state->require_builtin_loader_ref, argv[1]);
   }
 
   napi_value undefined = nullptr;
@@ -566,6 +599,49 @@ static napi_value GetGlobalNamedProperty(napi_env env, const char* key) {
   napi_value out = nullptr;
   if (napi_get_named_property(env, global, key, &out) != napi_ok || out == nullptr) return nullptr;
   return out;
+}
+
+static bool IsUndefinedValue(napi_env env, napi_value value) {
+  if (value == nullptr) return false;
+  napi_valuetype t = napi_undefined;
+  return napi_typeof(env, value, &t) == napi_ok && t == napi_undefined;
+}
+
+static napi_value GetCachedBinding(ModuleLoaderState* state, napi_env env, const char* name) {
+  if (state == nullptr || name == nullptr) return nullptr;
+  auto it = state->binding_cache.find(name);
+  if (it == state->binding_cache.end() || it->second == nullptr) return nullptr;
+  napi_value out = nullptr;
+  if (napi_get_reference_value(env, it->second, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
+
+static napi_value CacheBinding(ModuleLoaderState* state, napi_env env, const char* name, napi_value binding) {
+  if (state == nullptr || name == nullptr || binding == nullptr || IsUndefinedValue(env, binding)) return nullptr;
+  auto it = state->binding_cache.find(name);
+  if (it != state->binding_cache.end() && it->second != nullptr) {
+    napi_delete_reference(env, it->second);
+    it->second = nullptr;
+  }
+  napi_ref ref = nullptr;
+  if (napi_create_reference(env, binding, 1, &ref) != napi_ok || ref == nullptr) return nullptr;
+  state->binding_cache[name] = ref;
+  return binding;
+}
+
+using BindingFactory = napi_value (*)(napi_env env);
+
+static napi_value GetOrCreateBinding(ModuleLoaderState* state,
+                                     napi_env env,
+                                     const char* cache_key,
+                                     BindingFactory factory) {
+  napi_value cached = GetCachedBinding(state, env, cache_key);
+  if (cached != nullptr) return cached;
+
+  if (factory == nullptr) return nullptr;
+  napi_value created = factory(env);
+  if (created == nullptr || IsUndefinedValue(env, created)) return nullptr;
+  return CacheBinding(state, env, cache_key, created);
 }
 
 static napi_value CreateNullProtoObject(napi_env env) {
@@ -1367,8 +1443,8 @@ static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callbac
     napi_create_string_utf8(env, "[eval]", NAPI_AUTO_LENGTH, &filename);
   }
 
-  napi_set_named_property(env, this_arg, "__ubi_code", code);
-  napi_set_named_property(env, this_arg, "__ubi_filename", filename);
+  napi_set_named_property(env, this_arg, "contextifyCode", code);
+  napi_set_named_property(env, this_arg, "contextifyFilename", filename);
   napi_set_named_property(env, this_arg, "sourceURL", filename);
   return this_arg;
 }
@@ -1381,11 +1457,11 @@ static napi_value ContextifyScriptRunInContextCallback(napi_env env, napi_callba
   }
 
   napi_value code_value = nullptr;
-  if (napi_get_named_property(env, this_arg, "__ubi_code", &code_value) != napi_ok || code_value == nullptr) {
+  if (napi_get_named_property(env, this_arg, "contextifyCode", &code_value) != napi_ok || code_value == nullptr) {
     napi_get_undefined(env, &code_value);
   }
   napi_value filename_value = nullptr;
-  if (napi_get_named_property(env, this_arg, "__ubi_filename", &filename_value) != napi_ok ||
+  if (napi_get_named_property(env, this_arg, "contextifyFilename", &filename_value) != napi_ok ||
       filename_value == nullptr) {
     napi_get_undefined(env, &filename_value);
   }
@@ -1558,7 +1634,7 @@ static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderSta
                            "setInternalLoaders",
                            NAPI_AUTO_LENGTH,
                            BuiltinsSetInternalLoadersCallback,
-                           nullptr,
+                           state,
                            &set_internal_loaders_fn) != napi_ok ||
       set_internal_loaders_fn == nullptr ||
       napi_set_named_property(env, binding, "setInternalLoaders", set_internal_loaders_fn) != napi_ok) {
@@ -2104,16 +2180,11 @@ static napi_value ResolveContextifyBinding(napi_env env) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) == napi_ok && global != nullptr) {
-    bool has_binding = false;
-    if (napi_has_named_property(env, global, "__ubi_contextify_binding", &has_binding) == napi_ok &&
-        has_binding) {
-      napi_value existing = nullptr;
-      if (napi_get_named_property(env, global, "__ubi_contextify_binding", &existing) == napi_ok &&
-          existing != nullptr) {
-        return existing;
-      }
+  auto cached_it = g_contextify_binding_refs.find(env);
+  if (cached_it != g_contextify_binding_refs.end() && cached_it->second != nullptr) {
+    napi_value cached = nullptr;
+    if (napi_get_reference_value(env, cached_it->second, &cached) == napi_ok && cached != nullptr) {
+      return cached;
     }
   }
 
@@ -2176,8 +2247,13 @@ static napi_value ResolveContextifyBinding(napi_env env) {
     napi_set_named_property(env, out, "compileFunctionForCJSLoader", compile_function_for_cjs);
   }
 
-  if (global != nullptr) {
-    napi_set_named_property(env, global, "__ubi_contextify_binding", out);
+  if (cached_it != g_contextify_binding_refs.end() && cached_it->second != nullptr) {
+    napi_delete_reference(env, cached_it->second);
+    cached_it->second = nullptr;
+  }
+  napi_ref out_ref = nullptr;
+  if (napi_create_reference(env, out, 1, &out_ref) == napi_ok && out_ref != nullptr) {
+    g_contextify_binding_refs[env] = out_ref;
   }
   return out;
 }
@@ -2291,6 +2367,89 @@ static napi_value ResolveOptionsBinding(napi_env env) {
   return out;
 }
 
+static napi_value DispatchResolveBinding(napi_env env, void* raw_state, const char* name) {
+  if (env == nullptr || raw_state == nullptr || name == nullptr) return nullptr;
+  auto* state = static_cast<ModuleLoaderState*>(raw_state);
+
+  if (std::strcmp(name, "buffer") == 0) {
+    return GetOrCreateBinding(state, env, "buffer", UbiInstallBufferBinding);
+  }
+  if (std::strcmp(name, "cares_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "cares_wrap", UbiInstallCaresWrapBinding);
+  }
+  if (std::strcmp(name, "crypto") == 0) {
+    return GetOrCreateBinding(state, env, "crypto", UbiInstallCryptoBinding);
+  }
+  if (std::strcmp(name, "encoding_binding") == 0) {
+    return GetOrCreateBinding(state, env, "encoding_binding", UbiInstallEncodingBinding);
+  }
+  if (std::strcmp(name, "fs") == 0) {
+    return GetOrCreateBinding(state, env, "fs", UbiInstallFsBinding);
+  }
+  if (std::strcmp(name, "http_parser") == 0) {
+    return GetOrCreateBinding(state, env, "http_parser", UbiInstallHttpParserBinding);
+  }
+  if (std::strcmp(name, "os") == 0) {
+    return GetOrCreateBinding(state, env, "os", UbiInstallOsBinding);
+  }
+  if (std::strcmp(name, "os_constants") == 0) {
+    return GetOrCreateBinding(state, env, "os_constants", UbiGetOsConstants);
+  }
+  if (std::strcmp(name, "pipe_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "pipe_wrap", UbiInstallPipeWrapBinding);
+  }
+  if (std::strcmp(name, "process_methods") == 0) {
+    return GetOrCreateBinding(state, env, "process_methods", UbiGetProcessMethodsBinding);
+  }
+  if (std::strcmp(name, "process_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "process_wrap", UbiInstallProcessWrapBinding);
+  }
+  if (std::strcmp(name, "report") == 0) {
+    return GetOrCreateBinding(state, env, "report", UbiGetReportBinding);
+  }
+  if (std::strcmp(name, "signal_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "signal_wrap", UbiInstallSignalWrapBinding);
+  }
+  if (std::strcmp(name, "spawn_sync") == 0) {
+    return GetOrCreateBinding(state, env, "spawn_sync", UbiInstallSpawnSyncBinding);
+  }
+  if (std::strcmp(name, "stream_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "stream_wrap", UbiInstallStreamWrapBinding);
+  }
+  if (std::strcmp(name, "string_decoder") == 0) {
+    return GetOrCreateBinding(state, env, "string_decoder", UbiInstallStringDecoderBinding);
+  }
+  if (std::strcmp(name, "tcp_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "tcp_wrap", UbiInstallTcpWrapBinding);
+  }
+  if (std::strcmp(name, "timers") == 0) {
+    return GetOrCreateBinding(state, env, "timers", UbiInstallTimersHostBinding);
+  }
+  if (std::strcmp(name, "tty_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "tty_wrap", UbiInstallTtyWrapBinding);
+  }
+  if (std::strcmp(name, "udp_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "udp_wrap", UbiInstallUdpWrapBinding);
+  }
+  if (std::strcmp(name, "url") == 0) {
+    return GetOrCreateBinding(state, env, "url", UbiInstallUrlBinding);
+  }
+  if (std::strcmp(name, "util") == 0 || std::strcmp(name, "types") == 0) {
+    napi_value util = GetCachedBinding(state, env, "util");
+    napi_value types = GetCachedBinding(state, env, "types");
+    if (util == nullptr || types == nullptr) {
+      util = UbiInstallUtilBinding(env);
+      if (util != nullptr && !IsUndefinedValue(env, util)) util = CacheBinding(state, env, "util", util);
+      types = UbiGetTypesBinding(env);
+      if (types != nullptr && !IsUndefinedValue(env, types)) types = CacheBinding(state, env, "types", types);
+    }
+    if (std::strcmp(name, "types") == 0) return types;
+    return util;
+  }
+
+  return nullptr;
+}
+
 static napi_value DispatchGetOrCreateBuiltins(napi_env env, void* state) {
   return GetOrCreateNativeBuiltinsBinding(env, static_cast<ModuleLoaderState*>(state));
 }
@@ -2328,6 +2487,7 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
   options.callbacks.get_or_create_task_queue = DispatchGetOrCreateTaskQueue;
   options.callbacks.get_or_create_errors = DispatchGetOrCreateErrors;
   options.callbacks.get_or_create_trace_events = DispatchGetOrCreateTraceEvents;
+  options.callbacks.resolve_binding = DispatchResolveBinding;
   options.callbacks.resolve_uv = ResolveUvBinding;
   options.callbacks.resolve_contextify = ResolveContextifyBinding;
   options.callbacks.resolve_modules = ResolveModulesBinding;
@@ -2556,22 +2716,7 @@ bool EvaluateJsModule(napi_env env,
     napi_get_reference_value(env, state->primordials_ref, &primordials_val);
   }
   if (primordials_val == nullptr) {
-    napi_get_named_property(env, global, "__ubi_primordials", &primordials_val);
-  }
-  if (primordials_val == nullptr) {
     napi_get_named_property(env, global, "primordials", &primordials_val);
-  }
-  // Never pass JS undefined to the wrapper when __ubi_primordials exists (e.g. ref was set to
-  // undefined by mistake). Prefer the container so builtins that destructure primordials don't throw.
-  napi_value undefined_val = nullptr;
-  if (napi_get_undefined(env, &undefined_val) == napi_ok && undefined_val != nullptr &&
-      primordials_val != nullptr) {
-    bool is_undefined = false;
-    if (napi_strict_equals(env, primordials_val, undefined_val, &is_undefined) == napi_ok &&
-        is_undefined) {
-      primordials_val = nullptr;
-      napi_get_named_property(env, global, "__ubi_primordials", &primordials_val);
-    }
   }
   if (primordials_val == nullptr) {
     napi_get_undefined(env, &primordials_val);
@@ -2908,10 +3053,23 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path) 
   }
 
   auto& state = g_loader_states[env];
+  auto ctx_it = g_contextify_binding_refs.find(env);
+  if (ctx_it != g_contextify_binding_refs.end()) {
+    if (ctx_it->second != nullptr) {
+      napi_delete_reference(env, ctx_it->second);
+    }
+    g_contextify_binding_refs.erase(ctx_it);
+  }
   for (auto& kv : state.module_cache) {
     napi_delete_reference(env, kv.second);
   }
   state.module_cache.clear();
+  for (auto& kv : state.binding_cache) {
+    if (kv.second != nullptr) {
+      napi_delete_reference(env, kv.second);
+    }
+  }
+  state.binding_cache.clear();
   if (state.cache_object_ref != nullptr) {
     napi_delete_reference(env, state.cache_object_ref);
     state.cache_object_ref = nullptr;
@@ -2927,6 +3085,14 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path) 
   if (state.native_builtins_binding_ref != nullptr) {
     napi_delete_reference(env, state.native_builtins_binding_ref);
     state.native_builtins_binding_ref = nullptr;
+  }
+  if (state.internal_binding_loader_ref != nullptr) {
+    napi_delete_reference(env, state.internal_binding_loader_ref);
+    state.internal_binding_loader_ref = nullptr;
+  }
+  if (state.require_builtin_loader_ref != nullptr) {
+    napi_delete_reference(env, state.require_builtin_loader_ref);
+    state.require_builtin_loader_ref = nullptr;
   }
   state.entry_dir = entry_path.parent_path().string();
 
@@ -2963,7 +3129,7 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path) 
 
   napi_value native_get_internal_binding_fn = nullptr;
   if (napi_create_function(env,
-                           "__ubi_get_internal_binding",
+                           "internalBinding",
                            NAPI_AUTO_LENGTH,
                            NativeGetInternalBindingCallback,
                            &state,
@@ -2971,20 +3137,8 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path) 
       native_get_internal_binding_fn == nullptr ||
       napi_set_named_property(env,
                               global,
-                              "__ubi_get_internal_binding",
+                              "internalBinding",
                               native_get_internal_binding_fn) != napi_ok) {
-    return napi_generic_failure;
-  }
-
-  // Bootstrap require: resolves from builtins dir so the prelude can load
-  // internal/bootstrap/realm
-  // before the entry script runs, regardless of entry_dir. Declares internalBinding once.
-  const std::string bootstrap_base_dir = GetBuiltinsDirForBootstrap();
-  auto* bootstrap_context = new RequireContext{&state, bootstrap_base_dir};
-  g_require_contexts.push_back(bootstrap_context);
-  napi_value bootstrap_require_fn = CreateRequireFunction(env, bootstrap_context);
-  if (bootstrap_require_fn != nullptr &&
-      napi_set_named_property(env, global, "__ubi_bootstrap_require", bootstrap_require_fn) != napi_ok) {
     return napi_generic_failure;
   }
   return napi_ok;

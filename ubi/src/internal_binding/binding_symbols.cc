@@ -1,22 +1,29 @@
 #include "internal_binding/dispatch.h"
 
+#include <unordered_map>
+
 #include "internal_binding/helpers.h"
 
 namespace internal_binding {
 
+namespace {
+
+std::unordered_map<napi_env, napi_ref> g_symbols_refs;
+
+napi_value GetCachedSymbols(napi_env env) {
+  auto it = g_symbols_refs.find(env);
+  if (it == g_symbols_refs.end() || it->second == nullptr) return nullptr;
+  napi_value out = nullptr;
+  if (napi_get_reference_value(env, it->second, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
+
+}  // namespace
+
 napi_value ResolveSymbols(napi_env env, const ResolveOptions& /*options*/) {
   const napi_value undefined = Undefined(env);
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return undefined;
-
-  bool has_binding = false;
-  if (napi_has_named_property(env, global, "__ubi_symbols_binding", &has_binding) == napi_ok && has_binding) {
-    napi_value existing = nullptr;
-    if (napi_get_named_property(env, global, "__ubi_symbols_binding", &existing) == napi_ok &&
-        existing != nullptr) {
-      return existing;
-    }
-  }
+  napi_value existing = GetCachedSymbols(env);
+  if (existing != nullptr) return existing;
 
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
@@ -54,7 +61,12 @@ napi_value ResolveSymbols(napi_env env, const ResolveOptions& /*options*/) {
   set_symbol("no_message_symbol", "no_message_symbol");
   set_symbol("imported_cjs_symbol", "imported_cjs_symbol");
 
-  napi_set_named_property(env, global, "__ubi_symbols_binding", out);
+  auto& ref = g_symbols_refs[env];
+  if (ref != nullptr) {
+    napi_delete_reference(env, ref);
+    ref = nullptr;
+  }
+  napi_create_reference(env, out, 1, &ref);
   return out;
 }
 

@@ -2135,16 +2135,24 @@ constexpr QueryMethodData kGetHostByAddrMethod{"getHostByAddr", QueryKind::kReve
 
 }  // namespace
 
-void UbiInstallCaresWrapBinding(napi_env env) {
+napi_value UbiInstallCaresWrapBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_value req_ctor = nullptr;
-  if (napi_define_class(env, "QueryReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req_ctor) != napi_ok) return;
+  if (napi_define_class(env, "QueryReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req_ctor) != napi_ok) {
+    return nullptr;
+  }
   napi_value req2_ctor = nullptr;
-  if (napi_define_class(env, "GetAddrInfoReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req2_ctor) != napi_ok) return;
+  if (napi_define_class(env, "GetAddrInfoReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req2_ctor) !=
+      napi_ok) {
+    return nullptr;
+  }
   napi_value req3_ctor = nullptr;
-  if (napi_define_class(env, "GetNameInfoReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req3_ctor) != napi_ok) return;
+  if (napi_define_class(env, "GetNameInfoReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req3_ctor) !=
+      napi_ok) {
+    return nullptr;
+  }
 
   napi_property_descriptor channel_props[] = {
       {"cancel", nullptr, ChannelCancel, nullptr, nullptr, nullptr, static_cast<napi_property_attributes>(napi_writable | napi_configurable), nullptr},
@@ -2176,7 +2184,7 @@ void UbiInstallCaresWrapBinding(napi_env env) {
                         sizeof(channel_props) / sizeof(channel_props[0]),
                         channel_props,
                         &channel_ctor) != napi_ok) {
-    return;
+    return nullptr;
   }
 
   napi_set_named_property(env, binding, "QueryReqWrap", req_ctor);
@@ -2201,7 +2209,5 @@ void UbiInstallCaresWrapBinding(napi_env env) {
   SetNamedU32(env, binding, "DNS_ORDER_IPV4_FIRST", kDnsOrderIpv4First);
   SetNamedU32(env, binding, "DNS_ORDER_IPV6_FIRST", kDnsOrderIpv6First);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_cares_wrap", binding);
+  return binding;
 }

@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallCryptoBinding(napi_env env);
+napi_value UbiInstallCryptoBinding(napi_env env);
 
 #endif  // UBI_CRYPTO_H_

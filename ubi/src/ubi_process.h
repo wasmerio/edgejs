@@ -12,4 +12,7 @@ napi_status UbiInstallProcessObject(napi_env env,
                                       const std::vector<std::string>& script_argv,
                                       const std::string& process_title);
 
+napi_value UbiGetProcessMethodsBinding(napi_env env);
+napi_value UbiGetReportBinding(napi_env env);
+
 #endif  // UBI_PROCESS_H_

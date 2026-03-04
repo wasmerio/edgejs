@@ -5,7 +5,7 @@
 
 namespace ubi::crypto {
 
-void InstallCryptoBinding(napi_env env);
+napi_value InstallCryptoBinding(napi_env env);
 
 }  // namespace ubi::crypto
 

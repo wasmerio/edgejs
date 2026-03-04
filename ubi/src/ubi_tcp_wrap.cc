@@ -57,6 +57,7 @@ struct TcpWrap {
 
 napi_ref g_tcp_ctor_ref = nullptr;
 napi_ref g_connect_wrap_ctor_ref = nullptr;
+napi_ref g_tcp_binding_ref = nullptr;
 int64_t g_next_async_id = 1;
 
 void OnClosed(uv_handle_t* h);
@@ -842,27 +843,6 @@ napi_value TcpFdGetter(napi_env env, napi_callback_info info) {
       fd = static_cast<int32_t>(raw);
     }
   }
-  if (fd >= 0) {
-    napi_value global = nullptr;
-    if (napi_get_global(env, &global) == napi_ok && global != nullptr) {
-      napi_value map = nullptr;
-      bool has = false;
-      if (napi_has_named_property(env, global, "__ubi_fd_types", &has) == napi_ok && has) {
-        napi_get_named_property(env, global, "__ubi_fd_types", &map);
-      } else {
-        napi_create_object(env, &map);
-        if (map != nullptr) napi_set_named_property(env, global, "__ubi_fd_types", map);
-      }
-      if (map != nullptr) {
-        napi_value type_v = nullptr;
-        napi_create_string_utf8(env, "TCP", NAPI_AUTO_LENGTH, &type_v);
-        if (type_v != nullptr) {
-          std::string key = std::to_string(fd);
-          napi_set_named_property(env, map, key.c_str(), type_v);
-        }
-      }
-    }
-  }
   return MakeInt32(env, fd);
 }
 
@@ -890,9 +870,21 @@ uv_stream_t* UbiTcpWrapGetStream(napi_env env, napi_value value) {
   return reinterpret_cast<uv_stream_t*>(&wrap->handle);
 }
 
-void UbiInstallTcpWrapBinding(napi_env env) {
+napi_value UbiGetTcpWrapConstructor(napi_env env) {
+  napi_value ctor = GetRefValue(env, g_tcp_ctor_ref);
+  if (ctor != nullptr) return ctor;
+  napi_value binding = UbiInstallTcpWrapBinding(env);
+  if (binding == nullptr) return nullptr;
+  if (napi_get_named_property(env, binding, "TCP", &ctor) != napi_ok || ctor == nullptr) return nullptr;
+  return ctor;
+}
+
+napi_value UbiInstallTcpWrapBinding(napi_env env) {
+  napi_value cached = GetRefValue(env, g_tcp_binding_ref);
+  if (cached != nullptr) return cached;
+
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_property_descriptor tcp_props[] = {
       {"open", nullptr, TcpOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -943,7 +935,7 @@ void UbiInstallTcpWrapBinding(napi_env env) {
                         tcp_props,
                         &tcp_ctor) != napi_ok ||
       tcp_ctor == nullptr) {
-    return;
+    return nullptr;
   }
   if (g_tcp_ctor_ref != nullptr) {
     napi_delete_reference(env, g_tcp_ctor_ref);
@@ -961,7 +953,7 @@ void UbiInstallTcpWrapBinding(napi_env env) {
                         nullptr,
                         &connect_wrap_ctor) != napi_ok ||
       connect_wrap_ctor == nullptr) {
-    return;
+    return nullptr;
   }
   if (g_connect_wrap_ctor_ref != nullptr) {
     napi_delete_reference(env, g_connect_wrap_ctor_ref);
@@ -980,7 +972,11 @@ void UbiInstallTcpWrapBinding(napi_env env) {
   napi_set_named_property(env, binding, "TCPConnectWrap", connect_wrap_ctor);
   napi_set_named_property(env, binding, "constants", constants);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_tcp_wrap", binding);
+  if (g_tcp_binding_ref != nullptr) {
+    napi_delete_reference(env, g_tcp_binding_ref);
+    g_tcp_binding_ref = nullptr;
+  }
+  napi_create_reference(env, binding, 1, &g_tcp_binding_ref);
+
+  return binding;
 }

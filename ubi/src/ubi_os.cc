@@ -817,10 +817,10 @@ napi_value CreateOsConstants(napi_env env) {
 
 }  // namespace
 
-void UbiInstallOsBinding(napi_env env) {
+napi_value UbiInstallOsBinding(napi_env env) {
   napi_value binding = nullptr;
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) {
-    return;
+    return nullptr;
   }
 
   SetMethod(env, binding, "getAvailableParallelism", BindingGetAvailableParallelism);
@@ -838,18 +838,15 @@ void UbiInstallOsBinding(napi_env env) {
   SetMethod(env, binding, "setPriority", BindingSetPriority);
   SetNamedBool(env, binding, "isBigEndian", IsBigEndian());
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
-    return;
-  }
-  napi_set_named_property(env, global, "__ubi_os", binding);
+  return binding;
+}
 
+napi_value UbiGetOsConstants(napi_env env) {
   napi_value constants = CreateOsConstants(env);
-  if (constants != nullptr) {
-    napi_value signals = nullptr;
-    if (napi_get_named_property(env, constants, "signals", &signals) == napi_ok && signals != nullptr) {
-      napi_object_freeze(env, signals);
-    }
-    napi_set_named_property(env, global, "__ubi_os_constants", constants);
+  if (constants == nullptr) return nullptr;
+  napi_value signals = nullptr;
+  if (napi_get_named_property(env, constants, "signals", &signals) == napi_ok && signals != nullptr) {
+    napi_object_freeze(env, signals);
   }
+  return constants;
 }

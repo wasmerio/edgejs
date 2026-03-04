@@ -165,20 +165,55 @@ bool ExtractArrayBufferParts(napi_env env, napi_value value, uint8_t** data, siz
 
 bool IsValueTrackedDetachedArrayBuffer(napi_env env, napi_value value) {
   if (value == nullptr) return false;
-  bool has_marker = false;
-  if (napi_has_named_property(env, value, "__ubi_detached_arraybuffer_marker", &has_marker) == napi_ok &&
-      has_marker) {
-    return true;
+  auto get_symbol_for = [&](const char* key) -> napi_value {
+    napi_value global = nullptr;
+    if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
+    napi_value symbol_obj = nullptr;
+    if (napi_get_named_property(env, global, "Symbol", &symbol_obj) != napi_ok || symbol_obj == nullptr) {
+      return nullptr;
+    }
+    napi_value for_fn = nullptr;
+    if (napi_get_named_property(env, symbol_obj, "for", &for_fn) != napi_ok || for_fn == nullptr) {
+      return nullptr;
+    }
+    napi_valuetype t = napi_undefined;
+    if (napi_typeof(env, for_fn, &t) != napi_ok || t != napi_function) return nullptr;
+    napi_value key_v = nullptr;
+    if (napi_create_string_utf8(env, key, NAPI_AUTO_LENGTH, &key_v) != napi_ok || key_v == nullptr) {
+      return nullptr;
+    }
+    napi_value symbol_key = nullptr;
+    napi_value argv[1] = {key_v};
+    if (napi_call_function(env, symbol_obj, for_fn, 1, argv, &symbol_key) != napi_ok || symbol_key == nullptr) {
+      return nullptr;
+    }
+    return symbol_key;
+  };
+
+  napi_value marker_symbol = get_symbol_for("node.detachedArrayBufferMarker");
+  if (marker_symbol != nullptr) {
+    bool has_marker_symbol = false;
+    if (napi_has_property(env, value, marker_symbol, &has_marker_symbol) == napi_ok && has_marker_symbol) {
+      return true;
+    }
   }
+
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
-  bool has_set = false;
-  if (napi_has_named_property(env, global, "__ubi_detached_arraybuffers", &has_set) != napi_ok || !has_set) {
-    return false;
-  }
   napi_value detached_set = nullptr;
-  if (napi_get_named_property(env, global, "__ubi_detached_arraybuffers", &detached_set) != napi_ok ||
-      detached_set == nullptr) {
+  napi_value detached_set_symbol = get_symbol_for("node.detachedArrayBuffers");
+  bool found_set = false;
+  if (detached_set_symbol != nullptr) {
+    bool has_symbol_set = false;
+    if (napi_has_property(env, global, detached_set_symbol, &has_symbol_set) == napi_ok && has_symbol_set) {
+      if (napi_get_property(env, global, detached_set_symbol, &detached_set) == napi_ok &&
+          detached_set != nullptr) {
+        found_set = true;
+      }
+    }
+  }
+  if (!found_set) return false;
+  if (detached_set == nullptr) {
     return false;
   }
   napi_value has_fn = nullptr;
@@ -941,9 +976,6 @@ napi_value BindingSetBufferPrototype(napi_env env, napi_callback_info info) {
     napi_throw_type_error(env, "ERR_INVALID_ARG_TYPE", "The \"prototype\" argument must be an object");
     return nullptr;
   }
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
-  napi_set_named_property(env, global, "__ubi_buffer_prototype", argv[0]);
   napi_value undef = nullptr;
   napi_get_undefined(env, &undef);
   return undef;
@@ -1034,9 +1066,9 @@ void SetNumberConst(napi_env env, napi_value obj, const char* name, double value
 
 }  // namespace
 
-void UbiInstallBufferBinding(napi_env env) {
+napi_value UbiInstallBufferBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   SetMethod(env, binding, "byteLengthUtf8", BindingByteLengthUtf8);
   SetMethod(env, binding, "compare", BindingCompare);
@@ -1076,7 +1108,5 @@ void UbiInstallBufferBinding(napi_env env) {
   SetNumberConst(env, binding, "kMaxLength", kUbiBufferMaxLength);
   SetIntConst(env, binding, "kStringMaxLength", 0x1fffffe8);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_buffer", binding);
+  return binding;
 }

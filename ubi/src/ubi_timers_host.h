@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallTimersHostBinding(napi_env env);
+napi_value UbiInstallTimersHostBinding(napi_env env);
 
 #endif  // UBI_TIMERS_HOST_H_

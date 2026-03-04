@@ -384,11 +384,11 @@ bool DispatchUncaughtException(napi_env env, napi_value exception, bool* handled
 
   bool has_capture_getter = false;
   if (!handled &&
-      napi_has_named_property(env, process_obj, "__ubi_get_uncaught_exception_capture_callback",
+      napi_has_named_property(env, process_obj, "getUncaughtExceptionCaptureCallback",
                               &has_capture_getter) == napi_ok &&
       has_capture_getter) {
     napi_value getter = nullptr;
-    if (napi_get_named_property(env, process_obj, "__ubi_get_uncaught_exception_capture_callback",
+    if (napi_get_named_property(env, process_obj, "getUncaughtExceptionCaptureCallback",
                                 &getter) == napi_ok &&
         getter != nullptr) {
       napi_valuetype getter_type = napi_undefined;
@@ -500,117 +500,6 @@ bool DispatchUncaughtException(napi_env env, napi_value exception, bool* handled
   }
   if (handled_out != nullptr) *handled_out = handled;
   return true;
-}
-
-napi_value UbiProcessKillBinding(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_value self = nullptr;
-  napi_get_cb_info(env, info, &argc, argv, &self, nullptr);
-  (void)self;
-  int32_t pid = 0;
-  int32_t sig = SIGTERM;
-  if (argc >= 1 && argv[0] != nullptr) {
-    napi_get_value_int32(env, argv[0], &pid);
-  }
-  if (argc >= 2 && argv[1] != nullptr) {
-    napi_get_value_int32(env, argv[1], &sig);
-  }
-  int rc = 0;
-#if defined(_WIN32)
-  (void)pid;
-  (void)sig;
-  rc = -1;
-  const int err = UV_ENOSYS;
-#else
-  if (::kill(static_cast<pid_t>(pid), sig) != 0) {
-    rc = -1;
-  }
-  const int err = (rc == 0) ? 0 : errno;
-#endif
-  napi_value out = nullptr;
-  if (rc == 0) {
-    napi_create_int32(env, 0, &out);
-  } else {
-    napi_create_int32(env, -err, &out);
-  }
-  return out;
-}
-
-bool NapiValueToUtf8(napi_env env, napi_value value, std::string* out) {
-  if (env == nullptr || value == nullptr || out == nullptr) return false;
-  napi_value string_value = value;
-  napi_valuetype value_type = napi_undefined;
-  if (napi_typeof(env, value, &value_type) != napi_ok) return false;
-  if (value_type != napi_string) {
-    if (napi_coerce_to_string(env, value, &string_value) != napi_ok || string_value == nullptr) {
-      return false;
-    }
-  }
-  size_t length = 0;
-  if (napi_get_value_string_utf8(env, string_value, nullptr, 0, &length) != napi_ok) return false;
-  std::string text(length + 1, '\0');
-  size_t copied = 0;
-  if (napi_get_value_string_utf8(env, string_value, text.data(), text.size(), &copied) != napi_ok) return false;
-  text.resize(copied);
-  *out = std::move(text);
-  return true;
-}
-
-napi_value UbiProcessSetEnvBinding(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  int32_t rc = -1;
-  std::string key;
-  std::string value;
-  if (argc >= 2 &&
-      NapiValueToUtf8(env, argv[0], &key) &&
-      NapiValueToUtf8(env, argv[1], &value) &&
-      !key.empty()) {
-#if defined(_WIN32)
-    rc = (_putenv_s(key.c_str(), value.c_str()) == 0) ? 0 : -1;
-#else
-    rc = (setenv(key.c_str(), value.c_str(), 1) == 0) ? 0 : -1;
-#endif
-    if (rc == 0 && key == "TZ") {
-#if defined(_WIN32)
-      _tzset();
-#else
-      tzset();
-#endif
-      (void)unofficial_napi_notify_datetime_configuration_change(env);
-    }
-  }
-  napi_value out = nullptr;
-  napi_create_int32(env, rc, &out);
-  return out;
-}
-
-napi_value UbiProcessUnsetEnvBinding(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  int32_t rc = -1;
-  std::string key;
-  if (argc >= 1 && NapiValueToUtf8(env, argv[0], &key) && !key.empty()) {
-#if defined(_WIN32)
-    rc = (_putenv_s(key.c_str(), "") == 0) ? 0 : -1;
-#else
-    rc = (unsetenv(key.c_str()) == 0) ? 0 : -1;
-#endif
-    if (rc == 0 && key == "TZ") {
-#if defined(_WIN32)
-      _tzset();
-#else
-      tzset();
-#endif
-      (void)unofficial_napi_notify_datetime_configuration_change(env);
-    }
-  }
-  napi_value out = nullptr;
-  napi_create_int32(env, rc, &out);
-  return out;
 }
 
 int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
@@ -933,13 +822,6 @@ void ParseNodeStyleFlagsFromSource(const char* source_text) {
   }
 }
 
-void ClearPendingExceptionIfAny(napi_env env) {
-  bool pending = false;
-  if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
-  napi_value ignored = nullptr;
-  napi_get_and_clear_last_exception(env, &ignored);
-}
-
 napi_value ConsoleLogCallback(napi_env env, napi_callback_info info) {
   size_t argc = 8;
   napi_value args[8] = {nullptr};
@@ -1002,40 +884,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  UbiInstallFsBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallBufferBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallOsBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallEncodingBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallStringDecoderBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallHttpParserBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallStreamWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallProcessWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallTcpWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallTtyWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallPipeWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallSignalWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallCaresWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallUdpWrapBinding(env);
-  ClearPendingExceptionIfAny(env);
-  UbiInstallUrlBinding(env);
-  UbiInstallUtilBinding(env);
-  UbiInstallSpawnSyncBinding(env);
-  UbiInstallTimersHostBinding(env);
-  UbiInstallCryptoBinding(env);
-  ClearPendingExceptionIfAny(env);
+
   status = UbiInstallModuleLoader(env, entry_script_path);
   if (status != napi_ok) {
     if (error_out != nullptr) {
@@ -1061,8 +910,9 @@ int RunScriptWithGlobals(napi_env env,
       "  }"
       "} catch (_) {}"
       "try {"
-      "  if (globalThis.__ubi_os_constants && globalThis.__ubi_os_constants.signals) {"
-      "    Object.freeze(globalThis.__ubi_os_constants.signals);"
+      "  var __osBootstrap = (typeof globalThis.require === 'function') ? globalThis.require('os') : null;"
+      "  if (__osBootstrap && __osBootstrap.constants && __osBootstrap.constants.signals) {"
+      "    Object.freeze(__osBootstrap.constants.signals);"
       "  }"
       "} catch (_) {}"
       "if (typeof process.platform !== 'string') process.platform = 'darwin';"
@@ -1089,43 +939,6 @@ int RunScriptWithGlobals(napi_env env,
   // Create empty primordials container on the native side first (Node-aligned). The prelude's
   // require('internal/bootstrap/realm') will receive this via the loader wrapper and fill
   // it in place, so one object identity is used for all modules regardless of load order.
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
-    if (error_out != nullptr) {
-      *error_out = "napi_get_global failed";
-    }
-    return 1;
-  }
-  napi_value process_kill_fn = nullptr;
-  if (napi_create_function(env,
-                           "__ubi_process_kill",
-                           NAPI_AUTO_LENGTH,
-                           UbiProcessKillBinding,
-                           nullptr,
-                           &process_kill_fn) == napi_ok &&
-      process_kill_fn != nullptr) {
-    napi_set_named_property(env, global, "__ubi_process_kill", process_kill_fn);
-  }
-  napi_value process_set_env_fn = nullptr;
-  if (napi_create_function(env,
-                           "__ubi_process_set_env",
-                           NAPI_AUTO_LENGTH,
-                           UbiProcessSetEnvBinding,
-                           nullptr,
-                           &process_set_env_fn) == napi_ok &&
-      process_set_env_fn != nullptr) {
-    napi_set_named_property(env, global, "__ubi_process_set_env", process_set_env_fn);
-  }
-  napi_value process_unset_env_fn = nullptr;
-  if (napi_create_function(env,
-                           "__ubi_process_unset_env",
-                           NAPI_AUTO_LENGTH,
-                           UbiProcessUnsetEnvBinding,
-                           nullptr,
-                           &process_unset_env_fn) == napi_ok &&
-      process_unset_env_fn != nullptr) {
-    napi_set_named_property(env, global, "__ubi_process_unset_env", process_unset_env_fn);
-  }
   napi_value primordials_container = nullptr;
   if (napi_create_object(env, &primordials_container) != napi_ok || primordials_container == nullptr) {
     if (error_out != nullptr) {
@@ -1133,26 +946,19 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  if (napi_set_named_property(env, global, "__ubi_primordials", primordials_container) != napi_ok) {
-    if (error_out != nullptr) {
-      *error_out = "napi_set_named_property(__ubi_primordials) failed";
-    }
-    return 1;
-  }
+  UbiSetPrimordials(env, primordials_container);
 
   // Bootstrap: load internal/bootstrap/realm using a require that resolves from builtins
   // dir (so it is found regardless of entry script path). Declare internalBinding and primordials
   // once; do not run entry script until these are set.
   static const char kBootstrapPrelude[] =
       "globalThis.global = globalThis;"
-      "var __ubiBootstrapRequire = globalThis.__ubi_bootstrap_require;"
-      "if (typeof __ubiBootstrapRequire !== 'function') throw new Error('__ubi_bootstrap_require is not a function');"
-      "var __ib = __ubiBootstrapRequire('internal/bootstrap/realm');"
+      "var __bootstrapRequire = globalThis.require;"
+      "if (typeof __bootstrapRequire !== 'function') throw new Error('require is not a function');"
+      "var __ib = __bootstrapRequire('internal/bootstrap/realm');"
       "if (!__ib || typeof __ib.internalBinding !== 'function') throw new Error('internal/bootstrap/realm did not export internalBinding');"
       "globalThis.internalBinding = __ib.internalBinding;"
       "if (__ib && __ib.primordials) globalThis.primordials = __ib.primordials;"
-      "if (globalThis.__ubi_primordials && typeof globalThis.__ubi_primordials.SymbolFor === 'function') globalThis.primordials = globalThis.__ubi_primordials;"
-      "else if (__ib && __ib.primordials) globalThis.primordials = __ib.primordials;"
       "try {"
       "  var __utilBinding = globalThis.internalBinding('util');"
       "  var __utilConstants = (__utilBinding && __utilBinding.constants) || {};"
@@ -1167,7 +973,7 @@ int RunScriptWithGlobals(napi_env env,
       "  }"
       "} catch (_) {}"
       "try {"
-      "  __ubiBootstrapRequire('internal/bootstrap/node');"
+      "  __bootstrapRequire('internal/bootstrap/node');"
       "  if (process && typeof process === 'object') {"
       "    var __procProto = Object.getPrototypeOf(process);"
       "    if (__procProto && !Object.prototype.hasOwnProperty.call(__procProto, 'constructor')) {"
@@ -1184,7 +990,7 @@ int RunScriptWithGlobals(napi_env env,
       "      process.abort = (...args) => Reflect.apply(__abort, process, args);"
       "    }"
       "    try {"
-      "      var __errors = __ubiBootstrapRequire('internal/errors');"
+      "      var __errors = __bootstrapRequire('internal/errors');"
       "      var __codes = (__errors && __errors.codes) || {};"
       "      var ERR_INVALID_ARG_TYPE = __codes.ERR_INVALID_ARG_TYPE;"
       "      var ERR_UNKNOWN_CREDENTIAL = __codes.ERR_UNKNOWN_CREDENTIAL;"
@@ -1443,11 +1249,14 @@ int RunScriptWithGlobals(napi_env env,
       "if (typeof globalThis.clearTimeout === 'undefined') {"
       "  globalThis.clearTimeout = function() {};"
       "}"
-      "(function(){ if (!globalThis.__ubi_resource_tracking_ready) {"
-      "  var __ar = globalThis.__ubi_active_resources;"
+      "(function(){"
+      "  var __kReady = Symbol.for('node.resourceTrackingReady');"
+      "  var __kResources = Symbol.for('node.activeResources');"
+      "  if (!globalThis[__kReady]) {"
+      "  var __ar = globalThis[__kResources];"
       "  if (!(__ar && typeof __ar.set === 'function')) {"
       "    __ar = new Map();"
-      "    globalThis.__ubi_active_resources = __ar;"
+      "    globalThis[__kResources] = __ar;"
       "  }"
       "  var __st = globalThis.setTimeout;"
       "  var __ct = globalThis.clearTimeout;"
@@ -1501,7 +1310,7 @@ int RunScriptWithGlobals(napi_env env,
       "    };"
       "  }"
       "  if (typeof __cim === 'function') globalThis.clearImmediate = function(h){ __ar.delete(h); return __cim(h); };"
-      "  globalThis.__ubi_resource_tracking_ready = true;"
+      "  globalThis[__kReady] = true;"
       "  }})();"
       "if (typeof globalThis.queueMicrotask === 'undefined') {"
       "  try {"
@@ -1597,7 +1406,8 @@ int RunScriptWithGlobals(napi_env env,
       "    }"
       "  } catch (_) {}"
       "  try {"
-      "    if (!globalThis.process.__ubi_signal_listener_hooks_installed) {"
+      "    var __sigHooksInstalled = Symbol.for('node.signalListenerHooksInstalled');"
+      "    if (!globalThis.process[__sigHooksInstalled]) {"
       "      var __uSignalHooks0 = require('internal/process/signal');"
       "      if (__uSignalHooks0 && typeof __uSignalHooks0.startListeningIfSignal === 'function') {"
       "        process.on('newListener', __uSignalHooks0.startListeningIfSignal);"
@@ -1605,7 +1415,7 @@ int RunScriptWithGlobals(napi_env env,
       "      if (__uSignalHooks0 && typeof __uSignalHooks0.stopListeningIfSignal === 'function') {"
       "        process.on('removeListener', __uSignalHooks0.stopListeningIfSignal);"
       "      }"
-      "      globalThis.process.__ubi_signal_listener_hooks_installed = true;"
+      "      globalThis.process[__sigHooksInstalled] = true;"
       "    }"
       "  } catch (_) {}"
       "  try {"
@@ -1653,6 +1463,8 @@ int RunScriptWithGlobals(napi_env env,
       "      if (typeof obj.unref === 'function') return obj.unref();"
       "    };"
       "  }"
+      "  var __processMethodsBinding = null;"
+      "  try { __processMethodsBinding = globalThis.internalBinding('process_methods'); } catch (_) {}"
       "  globalThis.process.loadEnvFile = function() {"
       "    var path = (arguments.length > 0) ? arguments[0] : undefined;"
       "    var resolved = '.env';"
@@ -1677,8 +1489,9 @@ int RunScriptWithGlobals(napi_env env,
       "      }"
       "    }"
       "  };"
-      "  if (globalThis.process.env && !globalThis.process.__ubi_env_proxy_installed) {"
-      "    globalThis.process.__ubi_env_proxy_installed = true;"
+      "  var __envProxyInstalled = Symbol.for('node.envProxyInstalled');"
+      "  if (globalThis.process.env && !globalThis.process[__envProxyInstalled]) {"
+      "    globalThis.process[__envProxyInstalled] = true;"
       "    var __rawEnv = globalThis.process.env;"
       "    var __env = Object.create(Object.prototype);"
       "    var __envKeys = Object.keys(__rawEnv);"
@@ -1698,8 +1511,8 @@ int RunScriptWithGlobals(napi_env env,
       "        var name = String(key);"
       "        if (name.length === 0) return true;"
       "        target[name] = String(value);"
-      "        if (typeof globalThis.__ubi_process_set_env === 'function') {"
-      "          try { globalThis.__ubi_process_set_env(name, target[name]); } catch (_) {}"
+      "        if (__processMethodsBinding && typeof __processMethodsBinding._setEnv === 'function') {"
+      "          try { __processMethodsBinding._setEnv(name, target[name]); } catch (_) {}"
       "        }"
       "        return true;"
       "      },"
@@ -1711,8 +1524,8 @@ int RunScriptWithGlobals(napi_env env,
       "        if (typeof key === 'symbol') return true;"
       "        var name = String(key);"
       "        delete target[name];"
-      "        if (typeof globalThis.__ubi_process_unset_env === 'function') {"
-      "          try { globalThis.__ubi_process_unset_env(name); } catch (_) {}"
+      "        if (__processMethodsBinding && typeof __processMethodsBinding._unsetEnv === 'function') {"
+      "          try { __processMethodsBinding._unsetEnv(name); } catch (_) {}"
       "        }"
       "        return true;"
       "      },"
@@ -1732,8 +1545,8 @@ int RunScriptWithGlobals(napi_env env,
       "          throw makeTypeErr(\"'process.env' only accepts a configurable, writable, and enumerable data descriptor\");"
       "        }"
       "        target[name] = String(desc.value);"
-      "        if (typeof globalThis.__ubi_process_set_env === 'function') {"
-      "          try { globalThis.__ubi_process_set_env(name, target[name]); } catch (_) {}"
+      "        if (__processMethodsBinding && typeof __processMethodsBinding._setEnv === 'function') {"
+      "          try { __processMethodsBinding._setEnv(name, target[name]); } catch (_) {}"
       "        }"
       "        return true;"
       "      },"
@@ -1779,8 +1592,8 @@ int RunScriptWithGlobals(napi_env env,
         "        return 0;"
       "      }"
       "    }"
-      "    if (typeof globalThis.__ubi_process_kill === 'function') {"
-      "      return globalThis.__ubi_process_kill(__pidNum, __sigNum);"
+      "    if (__processMethodsBinding && typeof __processMethodsBinding._kill === 'function') {"
+      "      return __processMethodsBinding._kill(__pidNum, __sigNum);"
       "    }"
       "    return 0;"
       "  };"
@@ -2060,20 +1873,22 @@ int RunScriptWithGlobals(napi_env env,
       "if (typeof globalThis.gc !== 'function') {"
       "  globalThis.gc = function() {};"
       "}"
-      "globalThis.__ubi_detached_arraybuffers = globalThis.__ubi_detached_arraybuffers || new WeakSet();"
-      "var __ubi_original_structuredClone = globalThis.structuredClone;"
+      "var __detachedKey = Symbol.for('node.detachedArrayBuffers');"
+      "var __detachedMarker = Symbol.for('node.detachedArrayBufferMarker');"
+      "globalThis[__detachedKey] = globalThis[__detachedKey] || new WeakSet();"
+      "var __originalStructuredClone = globalThis.structuredClone;"
       "globalThis.structuredClone = function(v, options) {"
       "  if (options && options.transfer && typeof options.transfer.length === 'number') {"
       "    for (var i = 0; i < options.transfer.length; i++) {"
       "      var t = options.transfer[i];"
       "      if (t && Object.prototype.toString.call(t) === '[object ArrayBuffer]') {"
-      "        try { t.__ubi_detached_arraybuffer_marker = 1; } catch (_) {}"
-      "        globalThis.__ubi_detached_arraybuffers.add(t);"
+      "        try { t[__detachedMarker] = 1; } catch (_) {}"
+      "        globalThis[__detachedKey].add(t);"
       "      }"
       "    }"
       "  }"
-      "  if (typeof __ubi_original_structuredClone === 'function') {"
-      "    return __ubi_original_structuredClone(v, options);"
+      "  if (typeof __originalStructuredClone === 'function') {"
+      "    return __originalStructuredClone(v, options);"
       "  }"
       "  return JSON.parse(JSON.stringify(v));"
       "};"
@@ -2115,8 +1930,9 @@ int RunScriptWithGlobals(napi_env env,
       "    if (__buf && __buf.Buffer) globalThis.Buffer = __buf.Buffer;"
       "  } catch (_) {}"
       "}"
-      "if (!globalThis.__ubi_date_tz_patch && typeof Date === 'function') {"
-      "  globalThis.__ubi_date_tz_patch = true;"
+      "var __dateTzPatch = Symbol.for('node.dateTzPatch');"
+      "if (!globalThis[__dateTzPatch] && typeof Date === 'function') {"
+      "  globalThis[__dateTzPatch] = true;"
       "  var __origDateToString = Date.prototype.toString;"
       "  Date.prototype.toString = function() {"
       "    try {"
@@ -2178,7 +1994,8 @@ int RunScriptWithGlobals(napi_env env,
         "(function(){ try { var __entry = require('path').resolve('" +
         EscapeForSingleQuotedJs(entry_script_path) +
         "');"
-        "if (process && typeof process.on === 'function' && !process.__ubi_signal_listener_hooks_installed) {"
+        "var __sigHooksInstalled2 = Symbol.for('node.signalListenerHooksInstalled');"
+        "if (process && typeof process.on === 'function' && !process[__sigHooksInstalled2]) {"
         "  try {"
         "    try { require('events'); } catch (_) {}"
         "    var __uSignalHooks = require('internal/process/signal');"
@@ -2196,7 +2013,7 @@ int RunScriptWithGlobals(napi_env env,
         "      }"
         "    }"
         "    var __afterSigNl = (typeof process.listenerCount === 'function') ? process.listenerCount('newListener') : 0;"
-        "    process.__ubi_signal_listener_hooks_installed = __afterSigNl > __beforeSigNl;"
+        "    process[__sigHooksInstalled2] = __afterSigNl > __beforeSigNl;"
       "  } catch (_) {}"
         "}"
         "return require(__entry); } catch (err) {"
@@ -2321,7 +2138,7 @@ napi_status UbiInstallConsole(napi_env env) {
   // we always load the JS console builtin when it exists, regardless of entry script path.
   napi_value script = nullptr;
   static const char kInstallConsole[] =
-      "(function(){ globalThis.console = globalThis.__ubi_bootstrap_require('console'); })();";
+      "(function(){ if (typeof globalThis.require === 'function') globalThis.console = globalThis.require('console'); })();";
   napi_status status = napi_create_string_utf8(env, kInstallConsole, NAPI_AUTO_LENGTH, &script);
   if (status != napi_ok || script == nullptr) {
     return (status == napi_ok) ? napi_generic_failure : status;

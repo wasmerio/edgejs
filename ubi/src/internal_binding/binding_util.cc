@@ -1,12 +1,27 @@
 #include "internal_binding/dispatch.h"
 
 #include <cstdint>
+#include <unordered_map>
 
 #include "internal_binding/helpers.h"
 
 namespace internal_binding {
 
 namespace {
+
+struct UtilBindingState {
+  napi_ref types_ref = nullptr;
+};
+
+std::unordered_map<napi_env, UtilBindingState> g_util_states;
+
+napi_value GetTypesBinding(napi_env env) {
+  auto it = g_util_states.find(env);
+  if (it == g_util_states.end() || it->second.types_ref == nullptr) return nullptr;
+  napi_value out = nullptr;
+  if (napi_get_reference_value(env, it->second.types_ref, &out) != napi_ok || out == nullptr) return nullptr;
+  return out;
+}
 
 enum class TypesAlias : uint8_t {
   kIsAnyArrayBuffer,
@@ -57,7 +72,7 @@ const char* TypesMethodName(TypesAlias alias) {
 }
 
 napi_value CallTypesPredicate(napi_env env, TypesAlias alias, napi_value value) {
-  napi_value types = GetGlobalNamed(env, "__ubi_types");
+  napi_value types = GetTypesBinding(env);
   if (types == nullptr || IsUndefined(env, types)) return Undefined(env);
   const char* name = TypesMethodName(alias);
   napi_value fn = nullptr;
@@ -159,9 +174,20 @@ void EnsureMethod(napi_env env, napi_value binding, const char* name, napi_callb
 
 }  // namespace
 
-napi_value ResolveUtil(napi_env env, const ResolveOptions& /*options*/) {
-  napi_value binding = GetGlobalNamed(env, "__ubi_util");
+napi_value ResolveUtil(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value binding = options.callbacks.resolve_binding(env, options.state, "util");
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
+
+  napi_value types = options.callbacks.resolve_binding(env, options.state, "types");
+  if (types != nullptr && !IsUndefined(env, types)) {
+    auto& st = g_util_states[env];
+    if (st.types_ref != nullptr) {
+      napi_delete_reference(env, st.types_ref);
+      st.types_ref = nullptr;
+    }
+    napi_create_reference(env, types, 1, &st.types_ref);
+  }
 
   EnsureMethodFromTypes(env, binding, "isAnyArrayBuffer", TypesAlias::kIsAnyArrayBuffer);
   EnsureMethodFromTypes(env, binding, "isArrayBuffer", TypesAlias::kIsArrayBuffer);

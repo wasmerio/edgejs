@@ -614,9 +614,9 @@ napi_value FlushBinding(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-void UbiInstallStringDecoderBinding(napi_env env) {
+napi_value UbiInstallStringDecoderBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   auto set_i32 = [&](const char* name, int32_t v) {
     napi_value n = nullptr;
@@ -652,7 +652,5 @@ void UbiInstallStringDecoderBinding(napi_env env) {
   SetMethod(env, binding, "decode", DecodeBinding);
   SetMethod(env, binding, "flush", FlushBinding);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_string_decoder", binding);
+  return binding;
 }

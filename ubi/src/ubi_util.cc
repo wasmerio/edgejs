@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,14 @@ struct LazyPropertyData {
 };
 
 std::vector<std::unique_ptr<LazyPropertyData>> g_lazy_property_data;
+std::unordered_map<napi_env, napi_ref> g_types_binding_refs;
+
+napi_value GetRefValue(napi_env env, napi_ref ref) {
+  if (ref == nullptr) return nullptr;
+  napi_value value = nullptr;
+  if (napi_get_reference_value(env, ref, &value) != napi_ok || value == nullptr) return nullptr;
+  return value;
+}
 
 napi_value Undefined(napi_env env) {
   napi_value out = nullptr;
@@ -1070,19 +1079,26 @@ bool InstallTypesBinding(napi_env env) {
     return false;
   }
 
-  napi_value global = GetGlobal(env);
-  return global != nullptr && SetNamedProperty(env, global, "__ubi_types", types);
+  auto it = g_types_binding_refs.find(env);
+  if (it != g_types_binding_refs.end() && it->second != nullptr) {
+    napi_delete_reference(env, it->second);
+    it->second = nullptr;
+  }
+  napi_ref ref = nullptr;
+  if (napi_create_reference(env, types, 1, &ref) != napi_ok || ref == nullptr) return false;
+  g_types_binding_refs[env] = ref;
+  return true;
 }
 
 }  // namespace
 
-void UbiInstallUtilBinding(napi_env env) {
+napi_value UbiInstallUtilBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   if (!InstallPrivateSymbols(env, binding) || !InstallConstants(env, binding) ||
       !InstallShouldAbortToggle(env, binding)) {
-    return;
+    return nullptr;
   }
 
   if (!DefineMethod(env, binding, "isInsideNodeModules", IsInsideNodeModulesCallback) ||
@@ -1100,12 +1116,15 @@ void UbiInstallUtilBinding(napi_env env) {
       !DefineMethod(env, binding, "arrayBufferViewHasBuffer", ArrayBufferViewHasBufferCallback) ||
       !DefineMethod(env, binding, "constructSharedArrayBuffer", ConstructSharedArrayBufferCallback) ||
       !DefineMethod(env, binding, "guessHandleType", GuessHandleType)) {
-    return;
+    return nullptr;
   }
 
-  if (!InstallTypesBinding(env)) return;
+  if (!InstallTypesBinding(env)) return nullptr;
+  return binding;
+}
 
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_util", binding);
+napi_value UbiGetTypesBinding(napi_env env) {
+  auto it = g_types_binding_refs.find(env);
+  if (it == g_types_binding_refs.end()) return nullptr;
+  return GetRefValue(env, it->second);
 }

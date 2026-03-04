@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallFsBinding(napi_env env);
+napi_value UbiInstallFsBinding(napi_env env);
 
 #endif  // UBI_FS_H_

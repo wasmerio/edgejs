@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallUdpWrapBinding(napi_env env);
+napi_value UbiInstallUdpWrapBinding(napi_env env);
 
 #endif  // UBI_UDP_WRAP_H_

@@ -4,8 +4,10 @@
 
 namespace internal_binding {
 
-napi_value ResolveSpawnSync(napi_env env, const ResolveOptions& /*options*/) {
-  return GetGlobalNamed(env, "__ubi_spawn_sync");
+napi_value ResolveSpawnSync(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value out = options.callbacks.resolve_binding(env, options.state, "spawn_sync");
+  return out != nullptr ? out : Undefined(env);
 }
 
 }  // namespace internal_binding

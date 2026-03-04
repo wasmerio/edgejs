@@ -563,8 +563,8 @@ napi_value ProcessUnref(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-void UbiInstallProcessWrapBinding(napi_env env) {
-  if (env == nullptr) return;
+napi_value UbiInstallProcessWrapBinding(napi_env env) {
+  if (env == nullptr) return nullptr;
   napi_property_descriptor methods[] = {
       {"spawn", nullptr, ProcessSpawn, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"kill", nullptr, ProcessKill, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -583,14 +583,12 @@ void UbiInstallProcessWrapBinding(napi_env env) {
                         methods,
                         &process_ctor) != napi_ok ||
       process_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
   napi_set_named_property(env, binding, "Process", process_ctor);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_process_wrap", binding);
+  return binding;
 }

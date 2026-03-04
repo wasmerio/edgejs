@@ -38,9 +38,9 @@ int32_t* UbiGetStreamBaseState() {
   return g_stream_state;
 }
 
-void UbiInstallStreamWrapBinding(napi_env env) {
+napi_value UbiInstallStreamWrapBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_value write_wrap_ctor = nullptr;
   if (napi_define_class(env,
@@ -52,7 +52,7 @@ void UbiInstallStreamWrapBinding(napi_env env) {
                         nullptr,
                         &write_wrap_ctor) != napi_ok ||
       write_wrap_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   napi_value shutdown_wrap_ctor = nullptr;
@@ -65,14 +65,14 @@ void UbiInstallStreamWrapBinding(napi_env env) {
                         nullptr,
                         &shutdown_wrap_ctor) != napi_ok ||
       shutdown_wrap_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   void* state_data = nullptr;
   napi_value state_ab = nullptr;
   if (napi_create_arraybuffer(env, sizeof(int32_t) * kUbiStreamStateLength, &state_data, &state_ab) != napi_ok ||
       state_ab == nullptr || state_data == nullptr) {
-    return;
+    return nullptr;
   }
   g_stream_state = static_cast<int32_t*>(state_data);
   for (int i = 0; i < kUbiStreamStateLength; i++) g_stream_state[i] = 0;
@@ -85,7 +85,7 @@ void UbiInstallStreamWrapBinding(napi_env env) {
                              0,
                              &stream_state) != napi_ok ||
       stream_state == nullptr) {
-    return;
+    return nullptr;
   }
 
   napi_set_named_property(env, binding, "WriteWrap", write_wrap_ctor);
@@ -97,7 +97,5 @@ void UbiInstallStreamWrapBinding(napi_env env) {
   SetNamedU32(env, binding, "kBytesWritten", kUbiBytesWritten);
   SetNamedU32(env, binding, "kLastWriteWasAsync", kUbiLastWriteWasAsync);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_stream_wrap", binding);
+  return binding;
 }

@@ -1597,11 +1597,9 @@ void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback fn)
 
 }  // namespace
 
-void InstallCryptoBinding(napi_env env) {
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
+napi_value InstallCryptoBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   SetMethod(env, binding, "hashOneShot", CryptoHashOneShot);
   SetMethod(env, binding, "hashOneShotXof", CryptoHashOneShotXof);
@@ -1635,7 +1633,7 @@ void InstallCryptoBinding(napi_env env) {
   SetMethod(env, binding, "privateDecrypt", CryptoPrivateDecrypt);
   SetMethod(env, binding, "cipherTransformAead", CryptoCipherTransformAead);
 
-  napi_set_named_property(env, global, "__ubi_crypto_binding", binding);
+  return binding;
 }
 
 }  // namespace ubi::crypto

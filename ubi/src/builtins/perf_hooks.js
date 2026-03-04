@@ -1,5 +1,7 @@
 'use strict';
 
+const kPerfObservers = Symbol.for('node.perfObservers');
+
 class PerformanceObserverEntryList {
   constructor(entries) {
     this._entries = entries || [];
@@ -19,16 +21,16 @@ class PerformanceObserver {
   observe(options) {
     const type = options && options.type;
     if (!type) return;
-    if (!globalThis.__ubi_perf_observers) globalThis.__ubi_perf_observers = new Map();
-    if (!globalThis.__ubi_perf_observers.has(type)) globalThis.__ubi_perf_observers.set(type, new Set());
-    globalThis.__ubi_perf_observers.get(type).add(this);
+    if (!globalThis[kPerfObservers]) globalThis[kPerfObservers] = new Map();
+    if (!globalThis[kPerfObservers].has(type)) globalThis[kPerfObservers].set(type, new Set());
+    globalThis[kPerfObservers].get(type).add(this);
     this._types.add(type);
   }
 
   disconnect() {
-    if (!globalThis.__ubi_perf_observers) return;
+    if (!globalThis[kPerfObservers]) return;
     for (const type of this._types) {
-      const set = globalThis.__ubi_perf_observers.get(type);
+      const set = globalThis[kPerfObservers].get(type);
       if (set) set.delete(this);
     }
     this._types.clear();

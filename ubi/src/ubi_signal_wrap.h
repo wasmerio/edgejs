@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallSignalWrapBinding(napi_env env);
+napi_value UbiInstallSignalWrapBinding(napi_env env);
 
 #endif  // UBI_SIGNAL_WRAP_H_

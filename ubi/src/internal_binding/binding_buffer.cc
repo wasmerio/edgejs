@@ -81,8 +81,9 @@ void EnsureGetZeroFillToggle(napi_env env, napi_value binding) {
 
 }  // namespace
 
-napi_value ResolveBuffer(napi_env env, const ResolveOptions& /*options*/) {
-  napi_value binding = GetGlobalNamed(env, "__ubi_buffer");
+napi_value ResolveBuffer(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value binding = options.callbacks.resolve_binding(env, options.state, "buffer");
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
   EnsureGetZeroFillToggle(env, binding);
   return binding;

@@ -569,27 +569,6 @@ napi_value UdpFdGetter(napi_env env, napi_callback_info info) {
       fd = static_cast<int32_t>(raw);
     }
   }
-  if (fd >= 0) {
-    napi_value global = nullptr;
-    if (napi_get_global(env, &global) == napi_ok && global != nullptr) {
-      napi_value map = nullptr;
-      bool has = false;
-      if (napi_has_named_property(env, global, "__ubi_fd_types", &has) == napi_ok && has) {
-        napi_get_named_property(env, global, "__ubi_fd_types", &map);
-      } else {
-        napi_create_object(env, &map);
-        if (map != nullptr) napi_set_named_property(env, global, "__ubi_fd_types", map);
-      }
-      if (map != nullptr) {
-        napi_value type_v = nullptr;
-        napi_create_string_utf8(env, "UDP", NAPI_AUTO_LENGTH, &type_v);
-        if (type_v != nullptr) {
-          std::string key = std::to_string(fd);
-          napi_set_named_property(env, map, key.c_str(), type_v);
-        }
-      }
-    }
-  }
   return MakeInt32(env, fd);
 }
 
@@ -957,9 +936,9 @@ void SetNamedU32(napi_env env, napi_value obj, const char* key, uint32_t value) 
 
 }  // namespace
 
-void UbiInstallUdpWrapBinding(napi_env env) {
+napi_value UbiInstallUdpWrapBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_property_descriptor udp_props[] = {
       {"open", nullptr, UdpOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1008,7 +987,7 @@ void UbiInstallUdpWrapBinding(napi_env env) {
                         udp_props,
                         &udp_ctor) != napi_ok ||
       udp_ctor == nullptr) {
-    return;
+    return nullptr;
   }
   if (g_udp_ctor_ref != nullptr) napi_delete_reference(env, g_udp_ctor_ref);
   napi_create_reference(env, udp_ctor, 1, &g_udp_ctor_ref);
@@ -1016,7 +995,7 @@ void UbiInstallUdpWrapBinding(napi_env env) {
   napi_value send_wrap_ctor = nullptr;
   if (napi_define_class(env, "SendWrap", NAPI_AUTO_LENGTH, SendWrapCtor, nullptr, 0, nullptr, &send_wrap_ctor) != napi_ok ||
       send_wrap_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   napi_value constants = nullptr;
@@ -1028,7 +1007,5 @@ void UbiInstallUdpWrapBinding(napi_env env) {
   napi_set_named_property(env, binding, "SendWrap", send_wrap_ctor);
   napi_set_named_property(env, binding, "constants", constants);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_udp_wrap", binding);
+  return binding;
 }

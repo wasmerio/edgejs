@@ -302,9 +302,9 @@ napi_value SignalHasRef(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-void UbiInstallSignalWrapBinding(napi_env env) {
+napi_value UbiInstallSignalWrapBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   constexpr napi_property_attributes kMethodAttrs =
       static_cast<napi_property_attributes>(napi_writable | napi_configurable);
@@ -328,12 +328,9 @@ void UbiInstallSignalWrapBinding(napi_env env) {
                         signal_props,
                         &signal_ctor) != napi_ok ||
       signal_ctor == nullptr) {
-    return;
+    return nullptr;
   }
 
   napi_set_named_property(env, binding, "Signal", signal_ctor);
-
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_signal_wrap", binding);
+  return binding;
 }

@@ -4,8 +4,8 @@ const { Buffer } = require('buffer');
 const net = require('net');
 const { inspect } = require('util');
 
-const binding = globalThis.__ubi_crypto;
-if (!binding) throw new Error('tls builtin requires __ubi_crypto binding');
+const binding = internalBinding('crypto');
+if (!binding) throw new Error('tls builtin requires crypto binding');
 
 function toBuffer(value) {
   if (Buffer.isBuffer(value)) return value;

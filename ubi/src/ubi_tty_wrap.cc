@@ -781,9 +781,9 @@ napi_value TtyFdGetter(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-void UbiInstallTtyWrapBinding(napi_env env) {
+napi_value UbiInstallTtyWrapBinding(napi_env env) {
   napi_value binding = nullptr;
-  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   constexpr napi_property_attributes kMethodAttrs =
       static_cast<napi_property_attributes>(napi_writable | napi_configurable);
@@ -822,7 +822,7 @@ void UbiInstallTtyWrapBinding(napi_env env) {
                         tty_props,
                         &tty_ctor) != napi_ok ||
       tty_ctor == nullptr) {
-    return;
+    return nullptr;
   }
   if (g_tty_ctor_ref != nullptr) napi_delete_reference(env, g_tty_ctor_ref);
   napi_create_reference(env, tty_ctor, 1, &g_tty_ctor_ref);
@@ -833,7 +833,5 @@ void UbiInstallTtyWrapBinding(napi_env env) {
   };
   napi_define_properties(env, binding, 1, &is_tty_desc);
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_set_named_property(env, global, "__ubi_tty_wrap", binding);
+  return binding;
 }

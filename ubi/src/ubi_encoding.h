@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallEncodingBinding(napi_env env);
+napi_value UbiInstallEncodingBinding(napi_env env);
 
 #endif  // UBI_ENCODING_H_

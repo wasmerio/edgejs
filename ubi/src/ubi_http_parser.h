@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallHttpParserBinding(napi_env env);
+napi_value UbiInstallHttpParserBinding(napi_env env);
 
 #endif  // UBI_HTTP_PARSER_H_

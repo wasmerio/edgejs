@@ -3,6 +3,6 @@
 
 #include "node_api.h"
 
-void UbiInstallCaresWrapBinding(napi_env env);
+napi_value UbiInstallCaresWrapBinding(napi_env env);
 
 #endif  // UBI_CARES_WRAP_H_

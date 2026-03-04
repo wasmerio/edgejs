@@ -4,8 +4,10 @@
 
 namespace internal_binding {
 
-napi_value ResolveTtyWrap(napi_env env, const ResolveOptions& /*options*/) {
-  return GetGlobalNamed(env, "__ubi_tty_wrap");
+napi_value ResolveTtyWrap(napi_env env, const ResolveOptions& options) {
+  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
+  napi_value out = options.callbacks.resolve_binding(env, options.state, "tty_wrap");
+  return out != nullptr ? out : Undefined(env);
 }
 
 }  // namespace internal_binding

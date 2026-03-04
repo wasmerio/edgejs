@@ -5,8 +5,8 @@ const { Buffer } = require('buffer');
 const { inspect } = require('util');
 const EventEmitter = require('events');
 
-const binding = globalThis.__ubi_crypto;
-if (!binding) throw new Error('crypto builtin requires __ubi_crypto binding');
+const binding = internalBinding('crypto');
+if (!binding) throw new Error('crypto builtin requires crypto binding');
 
 if (!globalThis.crypto) globalThis.crypto = {};
 if (typeof globalThis.crypto.getRandomValues !== 'function') {

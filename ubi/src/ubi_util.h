@@ -3,6 +3,7 @@
 
 #include "node_api.h"
 
-void UbiInstallUtilBinding(napi_env env);
+napi_value UbiInstallUtilBinding(napi_env env);
+napi_value UbiGetTypesBinding(napi_env env);
 
 #endif  // UBI_UTIL_H_
