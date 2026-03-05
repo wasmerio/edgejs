@@ -147,10 +147,8 @@ void SignalFinalize(napi_env env, void* data, void* /*hint*/) {
   uv_handle_t* handle = reinterpret_cast<uv_handle_t*>(&wrap->handle);
   if (!uv_is_closing(handle)) {
     uv_close(handle, OnClosed);
-    return;
   }
-  QueueDestroy(wrap);
-  delete wrap;
+  return;
 }
 
 napi_value SignalCtor(napi_env env, napi_callback_info info) {

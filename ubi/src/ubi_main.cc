@@ -14,6 +14,7 @@
 #include "unofficial_napi.h"
 
 int main(int argc, char** argv) {
+  UbiInitializeCliProcess();
   if (argc < 2) {
 #if defined(_WIN32)
     const bool stdin_is_tty = _isatty(_fileno(stdin)) != 0;

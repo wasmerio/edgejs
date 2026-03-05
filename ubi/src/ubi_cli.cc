@@ -1,8 +1,11 @@
 #include "ubi_cli.h"
 
+#include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -14,6 +17,40 @@
 namespace {
 
 constexpr const char kUsage[] = "Usage: ubi <script.js>";
+constexpr unsigned kMaxSignal = 32;
+std::once_flag g_cli_init_once;
+
+void ResetSignalHandlersLikeNode() {
+#if defined(__POSIX__)
+  struct sigaction act;
+  std::memset(&act, 0, sizeof(act));
+
+  for (unsigned nr = 1; nr < kMaxSignal; nr += 1) {
+    if (nr == SIGKILL || nr == SIGSTOP) continue;
+
+    bool ignore_signal = false;
+#if defined(SIGPIPE)
+    ignore_signal = ignore_signal || nr == SIGPIPE;
+#endif
+#if defined(SIGXFSZ)
+    ignore_signal = ignore_signal || nr == SIGXFSZ;
+#endif
+    act.sa_handler = ignore_signal ? SIG_IGN : SIG_DFL;
+
+    if (act.sa_handler == SIG_DFL) {
+      struct sigaction old;
+      if (sigaction(static_cast<int>(nr), nullptr, &old) != 0) continue;
+#if defined(SA_SIGINFO)
+      if ((old.sa_flags & SA_SIGINFO) || old.sa_handler != SIG_IGN) continue;
+#else
+      if (old.sa_handler != SIG_IGN) continue;
+#endif
+    }
+
+    (void)sigaction(static_cast<int>(nr), &act, nullptr);
+  }
+#endif
+}
 
 int RunWithFreshEnv(const std::function<int(napi_env)>& runner, std::string* error_out) {
   napi_env env = nullptr;
@@ -88,7 +125,14 @@ std::vector<std::string> NormalizeCliOptionVector(const std::vector<std::string>
 
 }  // namespace
 
+void UbiInitializeCliProcess() {
+  std::call_once(g_cli_init_once, []() {
+    ResetSignalHandlersLikeNode();
+  });
+}
+
 int UbiRunCliScript(const char* script_path, std::string* error_out) {
+  UbiInitializeCliProcess();
   if (error_out != nullptr) {
     error_out->clear();
   }
@@ -108,6 +152,7 @@ int UbiRunCliScript(const char* script_path, std::string* error_out) {
 }
 
 int UbiRunCli(int argc, const char* const* argv, std::string* error_out) {
+  UbiInitializeCliProcess();
   if (error_out != nullptr) {
     error_out->clear();
   }

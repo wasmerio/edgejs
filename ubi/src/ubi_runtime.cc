@@ -61,6 +61,13 @@ std::vector<std::string> g_ubi_cli_exec_argv;
 std::string g_ubi_process_title;
 std::vector<std::string> g_ubi_script_argv;
 const auto g_process_start_time = std::chrono::steady_clock::now();
+std::once_flag g_process_stdio_init_once;
+
+void InitializeProcessStdioInheritanceOnce() {
+  std::call_once(g_process_stdio_init_once, []() {
+    uv_disable_stdio_inheritance();
+  });
+}
 
 #if !defined(_WIN32)
 void InstallDefaultSignalBehavior() {
@@ -1471,6 +1478,7 @@ int RunScriptWithGlobals(napi_env env,
                          const char* entry_script_path,
                          std::string* error_out,
                          bool keep_event_loop_alive) {
+  InitializeProcessStdioInheritanceOnce();
 #if !defined(_WIN32)
   InstallDefaultSignalBehavior();
 #endif
