@@ -9,6 +9,7 @@
 #include "ubi_js_udp_wrap.h"
 #include "ubi_js_stream.h"
 #include "ubi_os.h"
+#include "ubi_path.h"
 #include "ubi_pipe_wrap.h"
 #include "ubi_process.h"
 #include "ubi_process_wrap.h"
@@ -648,8 +649,8 @@ std::string CanonicalPathKey(const fs::path& path) {
     }
   }
   const fs::path canonical = fs::weakly_canonical(absolute, ec);
-  if (!ec) return canonical.lexically_normal().string();
-  return absolute.lexically_normal().string();
+  if (!ec) return ubi_path::FromNamespacedPath(canonical.lexically_normal().string());
+  return ubi_path::FromNamespacedPath(absolute.lexically_normal().string());
 }
 
 // True if request is relative (./, ../, ., ..) or absolute (starts with /).
@@ -667,7 +668,7 @@ static bool IsRelativeOrAbsoluteRequest(const std::string& specifier) {
 // from_dir must be absolute. Returns e.g. [from_dir/node_modules, parent/node_modules, ..., /node_modules].
 static std::vector<fs::path> NodeModulePaths(const fs::path& from_dir) {
   std::vector<fs::path> out;
-  fs::path from = fs::absolute(from_dir).lexically_normal();
+  fs::path from = fs::path(ubi_path::PathResolve({from_dir.string()}));
   std::string from_str = from.string();
   if (from_str.empty() || (from_str.size() == 1 && from_str[0] == '/')) {
     out.push_back(fs::path("/node_modules"));
@@ -701,7 +702,8 @@ static bool FindPathInNodeModules(const std::string& request,
     fs::path candidate = nm_dir / request;
     fs::path resolved;
     if (ResolveAsFile(candidate, &resolved) || ResolveAsDirectory(candidate, &resolved)) {
-      *out = fs::absolute(resolved).lexically_normal();
+      *out = fs::path(
+          ubi_path::FromNamespacedPath(ubi_path::PathResolve({resolved.string()})));
       return true;
     }
   }
@@ -3454,20 +3456,23 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
 }
 
 bool ResolveModulePath(const std::string& specifier, const std::string& base_dir, fs::path* out) {
-  fs::path raw_path;
+  std::string resolved_specifier;
+  if (specifier.empty()) {
+    return false;
+  }
   if (!specifier.empty() && specifier[0] == '/') {
-    raw_path = fs::path(specifier);
+    resolved_specifier = ubi_path::PathResolve({specifier});
   } else if (specifier.rfind("./", 0) == 0 || specifier.rfind("../", 0) == 0 || specifier == "." ||
              specifier == "..") {
-    raw_path = fs::path(base_dir) / specifier;
+    resolved_specifier = ubi_path::PathResolve({base_dir, specifier});
   } else {
     return false;
   }
 
-  const fs::path normalized = fs::absolute(raw_path).lexically_normal();
+  const fs::path normalized = fs::path(ubi_path::FromNamespacedPath(resolved_specifier));
   fs::path resolved;
   if (ResolveAsFile(normalized, &resolved) || ResolveAsDirectory(normalized, &resolved)) {
-    *out = resolved.lexically_normal();
+    *out = fs::path(ubi_path::FromNamespacedPath(resolved.lexically_normal().string()));
     return true;
   }
   return false;
@@ -4088,9 +4093,9 @@ napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path) 
   const bool is_eval_entry = entry_script_path == nullptr || entry_script_path[0] == '\0';
   fs::path entry_path;
   if (!is_eval_entry) {
-    entry_path = fs::absolute(fs::path(entry_script_path)).lexically_normal();
+    entry_path = fs::path(ubi_path::FromNamespacedPath(ubi_path::PathResolve({entry_script_path})));
   } else {
-    entry_path = fs::current_path() / "<eval>";
+    entry_path = fs::path(ubi_path::PathResolve({})) / "<eval>";
   }
 
   auto& state = g_loader_states[env];

@@ -1,4 +1,5 @@
 #include "ubi_fs.h"
+#include "ubi_path.h"
 
 #include <cerrno>
 #include <cstring>
@@ -749,7 +750,7 @@ napi_value BindingRealpath(napi_env env, napi_callback_info info) {
       argc < 1) {
     return nullptr;
   }
-  std::string path = PathFromValue(env, argv[0]);
+  std::string path = ubi_path::ToNamespacedPath(PathFromValue(env, argv[0]));
   if (path.empty()) {
     return nullptr;
   }
@@ -761,9 +762,10 @@ napi_value BindingRealpath(napi_env env, napi_callback_info info) {
     ThrowUVException(env, err, "realpath", path.c_str());
     return nullptr;
   }
-  const char* resolved = static_cast<const char*>(req.ptr);
+  const std::string resolved =
+      ubi_path::FromNamespacedPath(static_cast<const char*>(req.ptr));
   napi_value out = nullptr;
-  if (napi_create_string_utf8(env, resolved, NAPI_AUTO_LENGTH, &out) !=
+  if (napi_create_string_utf8(env, resolved.c_str(), NAPI_AUTO_LENGTH, &out) !=
       napi_ok) {
     uv_fs_req_cleanup(&req);
     return nullptr;

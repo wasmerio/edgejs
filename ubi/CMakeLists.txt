@@ -316,6 +316,7 @@ add_library(ubi_runtime STATIC
   src/ubi_fs.cc
   src/ubi_buffer.cc
   src/ubi_os.cc
+  src/ubi_path.cc
   src/ubi_encoding.cc
   src/ubi_string_decoder.cc
   src/ubi_async_wrap.cc

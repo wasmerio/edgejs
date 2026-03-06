@@ -11,6 +11,7 @@
 
 #include "internal_binding/helpers.h"
 #include "../ubi_module_loader.h"
+#include "../ubi_path.h"
 #include "ubi_active_resource.h"
 #include "ubi_runtime.h"
 
@@ -2417,9 +2418,6 @@ napi_value FsLegacyMainResolve(napi_env env, napi_callback_info info) {
 
   static const char* ext[] = {"", ".js", ".json", ".node", "/index.js", "/index.json", "/index.node",
                               ".js", ".json", ".node"};
-  auto resolve = [](const std::string& left, const std::string& right) {
-    return (std::filesystem::path(left) / right).lexically_normal().string();
-  };
 
   auto internal_module_stat = [&](const std::string& candidate) -> int32_t {
     std::error_code ec;
@@ -2432,7 +2430,8 @@ napi_value FsLegacyMainResolve(napi_env env, napi_callback_info info) {
   if (argc >= 2 && argv[1] != nullptr) ValueToUtf8(env, argv[1], &package_main);
 
   if (!package_main.empty()) {
-    const std::string initial = resolve(package_path, package_main);
+    const std::string initial =
+        ubi_path::FromNamespacedPath(ubi_path::PathResolve({package_path, package_main}));
     for (int i = 0; i < 7; ++i) {
       if (internal_module_stat(initial + ext[i]) == 0) {
         napi_value out = nullptr;
@@ -2442,7 +2441,8 @@ napi_value FsLegacyMainResolve(napi_env env, napi_callback_info info) {
     }
   }
 
-  const std::string fallback = resolve(package_path, "index");
+  const std::string fallback =
+      ubi_path::FromNamespacedPath(ubi_path::PathResolve({package_path, "./index"}));
   for (int i = 7; i < 10; ++i) {
     if (internal_module_stat(fallback + ext[i]) == 0) {
       napi_value out = nullptr;

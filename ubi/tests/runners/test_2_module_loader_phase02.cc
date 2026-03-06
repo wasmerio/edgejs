@@ -141,3 +141,43 @@ TEST_F(Test2ModuleLoaderPhase02, MissingModuleReturnsModuleNotFound) {
   EXPECT_NE(error.find("Cannot find module"), std::string::npos);
   RemoveDir(root);
 }
+
+TEST_F(Test2ModuleLoaderPhase02, EntryScriptPathWithDotSegmentsUsesNormalizedModuleBase) {
+  EnvScope s(runtime_.get());
+  const fs::path root = CreateTempProjectRoot("entry_dot_segments");
+  fs::create_directories(root / "invoke");
+  WriteFile(root / "lib.js", "module.exports = { value: 'normalized-base' };");
+  WriteFile(root / "main.js",
+            "const path = require('path');"
+            "const lib = require('./lib');"
+            "console.log(lib.value, path.normalize(__filename) === __filename ? 'normalized' : 'bad');");
+
+  testing::internal::CaptureStdout();
+  std::string error;
+  const fs::path invoked_path = root / "invoke" / ".." / "main.js";
+  const int exit_code = UbiRunScriptFile(s.env, invoked_path.c_str(), &error);
+  const std::string stdout_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty());
+  EXPECT_NE(stdout_output.find("normalized-base normalized"), std::string::npos);
+  RemoveDir(root);
+}
+
+TEST_F(Test2ModuleLoaderPhase02, PackageMainDotSegmentsResolveLikeNode) {
+  EnvScope s(runtime_.get());
+  const fs::path root = CreateTempProjectRoot("package_main_dot_segments");
+  WriteFile(root / "pkg" / "package.json", "{ \"main\": \"./sub/../entry\" }");
+  WriteFile(root / "pkg" / "entry.js", "module.exports = { value: 'package-main-dot-segments' };");
+  WriteFile(root / "main.js", "const pkg = require('./pkg'); console.log(pkg.value);");
+
+  testing::internal::CaptureStdout();
+  std::string error;
+  const int exit_code = UbiRunScriptFile(s.env, (root / "main.js").c_str(), &error);
+  const std::string stdout_output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty());
+  EXPECT_NE(stdout_output.find("package-main-dot-segments"), std::string::npos);
+  RemoveDir(root);
+}

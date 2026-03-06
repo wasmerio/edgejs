@@ -4,6 +4,7 @@
 #include <string>
 
 #include "test_env.h"
+#include "ubi_path.h"
 #include "ubi_runtime.h"
 
 class Test0RuntimePhase01 : public FixtureTestBase {};
@@ -106,4 +107,14 @@ TEST_F(Test0RuntimePhase01, EmptySourceReturnsNonZero) {
   const int exit_code = UbiRunScriptSource(s.env, "", &error);
   EXPECT_EQ(exit_code, 1);
   EXPECT_EQ(error, "Empty script source");
+}
+
+TEST_F(Test0RuntimePhase01, NativePathResolveNormalizesDotSegments) {
+#ifdef _WIN32
+  EXPECT_EQ(ubi_path::PathResolve("C:\\base\\dir", {"..\\pkg", ".\\entry.js"}),
+            "C:\\base\\pkg\\entry.js");
+#else
+  EXPECT_EQ(ubi_path::PathResolve("/tmp/base/dir", {"../pkg", "./entry.js"}),
+            "/tmp/base/pkg/entry.js");
+#endif
 }

@@ -38,6 +38,7 @@
 #include "ubi_http_parser.h"
 #include "ubi_module_loader.h"
 #include "ubi_os.h"
+#include "ubi_path.h"
 #include "ubi_pipe_wrap.h"
 #include "ubi_signal_wrap.h"
 #include "ubi_runtime_platform.h"
@@ -1937,7 +1938,8 @@ int RunScriptWithGlobals(napi_env env,
   const char* source_to_run = source_text;
   bool source_is_wrapper_factory = false;
   if (entry_script_path != nullptr && entry_script_path[0] != '\0') {
-    const std::string entry_path = std::filesystem::path(entry_script_path).lexically_normal().string();
+    const std::string entry_path =
+        ubi_path::FromNamespacedPath(ubi_path::PathResolve({entry_script_path}));
     const std::string escaped_entry = EscapeForSingleQuotedJs(entry_path);
     entry_source =
         "(function(require, getInternalBinding, internalBinding){ try {"
