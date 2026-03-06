@@ -25,9 +25,11 @@ size_t UbiRuntimePlatformDrainImmediateTasks(napi_env env, bool only_refed = fal
 bool UbiRuntimePlatformHasImmediateTasks(napi_env env);
 bool UbiRuntimePlatformHasRefedImmediateTasks(napi_env env);
 
-// Engine-adapter boundary for runtime task draining.
-// The current build provides a V8-backed implementation; future engines can
-// replace it without changing ubi runtime loop logic.
+// Attach the current env to the embedder-owned foreground task queue hook.
+// Ubi owns queueing and drain policy; engine backends only post work into it.
+napi_status UbiRuntimePlatformInstallHooks(napi_env env);
+
+// Drain Ubi-owned foreground tasks that were posted by the engine adapter.
 napi_status UbiRuntimePlatformDrainTasks(napi_env env);
 
 #endif  // UBI_RUNTIME_PLATFORM_H_

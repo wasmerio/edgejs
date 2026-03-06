@@ -27,6 +27,7 @@ add_library(napi_v8 STATIC
   src/js_native_api_v8.cc
   src/unofficial_napi.cc
   src/unofficial_napi_contextify.cc
+  src/ubi_v8_platform.cc
 )
 
 target_include_directories(napi_v8
@@ -35,6 +36,7 @@ target_include_directories(napi_v8
   PRIVATE
     "${NAPI_V8_ROOT}/src"
     "${NAPI_V8_INCLUDE_DIR}"
+    "${PROJECT_ROOT}/deps/uv/include"
 )
 
 target_compile_definitions(napi_v8

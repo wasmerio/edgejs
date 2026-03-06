@@ -15,11 +15,13 @@
 #include <libplatform/libplatform.h>
 
 #include "internal/napi_v8_env.h"
+#include "internal/unofficial_napi_bridge.h"
+#include "ubi_v8_platform.h"
 
 namespace {
 
 struct SharedRuntime {
-  std::unique_ptr<v8::Platform> platform;
+  std::unique_ptr<UbiV8Platform> platform;
   v8::Isolate::CreateParams params{};
   v8::Isolate* isolate = nullptr;
   uint32_t refcount = 0;
@@ -115,7 +117,7 @@ napi_status AcquireRuntime(v8::Isolate** isolate_out) {
     ApplyDefaultV8Flags();
     v8::V8::InitializeICUDefaultLocation("");
     v8::V8::InitializeExternalStartupData("");
-    g_runtime.platform = v8::platform::NewDefaultPlatform();
+    g_runtime.platform = UbiV8Platform::Create();
     v8::V8::InitializePlatform(g_runtime.platform.get());
     v8::V8::Initialize();
 
@@ -124,6 +126,17 @@ napi_status AcquireRuntime(v8::Isolate** isolate_out) {
     g_tracking_allocators[g_runtime.params.array_buffer_allocator] = allocator;
     g_runtime.isolate = v8::Isolate::New(g_runtime.params);
     if (g_runtime.isolate == nullptr) {
+      delete g_runtime.params.array_buffer_allocator;
+      g_runtime.params.array_buffer_allocator = nullptr;
+      g_tracking_allocators.erase(allocator);
+      g_runtime.platform.reset();
+      v8::V8::Dispose();
+      v8::V8::DisposePlatform();
+      return napi_generic_failure;
+    }
+    if (!g_runtime.platform->RegisterIsolate(g_runtime.isolate)) {
+      g_runtime.isolate->Dispose();
+      g_runtime.isolate = nullptr;
       delete g_runtime.params.array_buffer_allocator;
       g_runtime.params.array_buffer_allocator = nullptr;
       g_tracking_allocators.erase(allocator);
@@ -605,6 +618,14 @@ bool SetConstructorFunction(v8::Local<v8::Context> context,
 
 extern "C" {
 
+napi_status NAPI_CDECL unofficial_napi_set_enqueue_foreground_task_callback(
+    napi_env env,
+    unofficial_napi_enqueue_foreground_task_callback callback) {
+  if (env == nullptr) return napi_invalid_arg;
+  env->enqueue_foreground_task_callback = callback;
+  return napi_ok;
+}
+
 napi_status NAPI_CDECL unofficial_napi_create_env_from_context(
     v8::Local<v8::Context> context, int32_t module_api_version, napi_env* result) {
   if (result == nullptr || context.IsEmpty()) return napi_invalid_arg;
@@ -694,14 +715,15 @@ napi_status NAPI_CDECL unofficial_napi_release_env(void* scope_ptr) {
 
 void DrainMicrotasksForEnv(napi_env env) {
   if (env == nullptr || env->isolate == nullptr) return;
-  env->isolate->PerformMicrotaskCheckpoint();
   v8::Local<v8::Context> context = env->context();
   if (!context.IsEmpty()) {
     v8::MicrotaskQueue* queue = context->GetMicrotaskQueue();
     if (queue != nullptr) {
       queue->PerformCheckpoint(env->isolate);
+      return;
     }
   }
+  env->isolate->PerformMicrotaskCheckpoint();
 }
 
 napi_status NAPI_CDECL unofficial_napi_request_gc_for_testing(napi_env env) {
@@ -715,7 +737,7 @@ napi_status NAPI_CDECL unofficial_napi_request_gc_for_testing(napi_env env) {
 
 napi_status NAPI_CDECL unofficial_napi_process_microtasks(napi_env env) {
   if (env == nullptr || env->isolate == nullptr) return napi_invalid_arg;
-  // Keep this helper engine-agnostic in behavior: flush microtasks only.
+  // Keep this helper scoped to the current context's microtask queue.
   // Foreground task pumping is owned by higher-level runtime loop policy.
   DrainMicrotasksForEnv(env);
   return napi_ok;
@@ -1078,3 +1100,18 @@ napi_status NAPI_CDECL unofficial_napi_create_serdes_binding(napi_env env,
 }
 
 }  // extern "C"
+
+bool NapiV8LookupForegroundTaskTarget(
+    v8::Isolate* isolate,
+    napi_env* env_out,
+    unofficial_napi_enqueue_foreground_task_callback* callback_out) {
+  if (env_out != nullptr) *env_out = nullptr;
+  if (callback_out != nullptr) *callback_out = nullptr;
+  if (isolate == nullptr) return false;
+  std::lock_guard<std::mutex> lock(g_runtime_mu);
+  const auto it = g_env_by_isolate.find(isolate);
+  if (it == g_env_by_isolate.end() || it->second == nullptr) return false;
+  if (env_out != nullptr) *env_out = it->second;
+  if (callback_out != nullptr) *callback_out = it->second->enqueue_foreground_task_callback;
+  return true;
+}

@@ -8,6 +8,7 @@
 #include <v8.h>
 
 #include "js_native_api.h"
+#include "unofficial_napi.h"
 
 typedef void(NAPI_CDECL* napi_cleanup_hook)(void* arg);
 
@@ -73,6 +74,7 @@ struct napi_env__ {
   std::vector<TypeTagEntry> type_tag_entries;
   bool async_cleanup_hook_registered = false;
   void (*node_api_cleanup_runner)(napi_env) = nullptr;
+  unofficial_napi_enqueue_foreground_task_callback enqueue_foreground_task_callback = nullptr;
 };
 
 napi_status napi_v8_set_last_error(napi_env env,

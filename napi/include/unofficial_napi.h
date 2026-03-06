@@ -16,8 +16,26 @@ NAPI_EXTERN napi_status unofficial_napi_release_env(void* scope);
 // Unofficial/test-only helper. Requests a full GC cycle for testing.
 NAPI_EXTERN napi_status unofficial_napi_request_gc_for_testing(napi_env env);
 
-// Unofficial/test-only helper. Processes pending microtasks.
+// Unofficial/test-only helper. Runs a checkpoint on the current context's
+// microtask queue.
 NAPI_EXTERN napi_status unofficial_napi_process_microtasks(napi_env env);
+
+using unofficial_napi_foreground_task_callback = void (*)(napi_env env, void* data);
+using unofficial_napi_foreground_task_cleanup = void (*)(napi_env env, void* data);
+using unofficial_napi_enqueue_foreground_task_callback =
+    napi_status (*)(napi_env env,
+                    unofficial_napi_foreground_task_callback callback,
+                    void* data,
+                    unofficial_napi_foreground_task_cleanup cleanup,
+                    uint64_t delay_millis);
+
+// Installs the embedder-owned foreground task queue hook for a single env.
+// Engine backends use this to forward engine-originated foreground work into
+// the embedder-owned main-thread queue. Queue ownership and drain policy stay
+// outside the backend.
+NAPI_EXTERN napi_status unofficial_napi_set_enqueue_foreground_task_callback(
+    napi_env env,
+    unofficial_napi_enqueue_foreground_task_callback callback);
 
 // Unofficial helper. Enqueues a JS function into V8 microtask queue.
 NAPI_EXTERN napi_status unofficial_napi_enqueue_microtask(napi_env env, napi_value callback);

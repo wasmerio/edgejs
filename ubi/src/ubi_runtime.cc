@@ -382,7 +382,7 @@ int GetProcessExitCodeOrZero(napi_env env) {
   return has_exit_code ? exit_code : 0;
 }
 
-bool EmitProcessLifecycleEvent(napi_env env, const char* event_name, int exit_code) {
+bool EmitProcessLifecycleEvent(napi_env env, const char* event_name, int exit_code, bool skip_task_queues = false) {
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
     return false;
@@ -417,7 +417,8 @@ bool EmitProcessLifecycleEvent(napi_env env, const char* event_name, int exit_co
   }
   napi_value args[2] = {event_name_value, exit_code_value};
   napi_value ignored = nullptr;
-  return UbiMakeCallback(env, process_obj, emit_fn, 2, args, &ignored) == napi_ok;
+  const int callback_flags = skip_task_queues ? kUbiMakeCallbackSkipTaskQueues : kUbiMakeCallbackNone;
+  return UbiMakeCallbackWithFlags(env, process_obj, emit_fn, 2, args, &ignored, callback_flags) == napi_ok;
 }
 
 bool DispatchUncaughtException(napi_env env, napi_value exception, bool* handled_out) {
@@ -983,7 +984,7 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
     }
   }
 
-  EmitProcessLifecycleEvent(env, "exit", GetProcessExitCodeOrZero(env));
+  EmitProcessLifecycleEvent(env, "exit", GetProcessExitCodeOrZero(env), true);
   const int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
   if (async_status >= 0) {
     return async_status;
@@ -1399,6 +1400,12 @@ int RunScriptWithGlobals(napi_env env,
   if (env == nullptr) {
     if (error_out != nullptr) {
       *error_out = "Invalid environment";
+    }
+    return 1;
+  }
+  if (UbiRuntimePlatformInstallHooks(env) != napi_ok) {
+    if (error_out != nullptr) {
+      *error_out = "Failed to attach runtime platform hooks";
     }
     return 1;
   }
@@ -2135,8 +2142,9 @@ napi_status UbiRunCallbackScopeCheckpoint(napi_env env) {
 
   // Match Node's InternalCallbackScope: when no nextTick or promise-rejection
   // work is pending, run a microtask checkpoint first and return early if no
-  // task-queue work appeared as a result.
-  if (have_task_queue_flags && !has_tick_scheduled && !has_rejection_to_warn) {
+  // task-queue work appeared as a result. Before task_queue is initialized,
+  // fall back to running the microtask checkpoint only.
+  if (!have_task_queue_flags || (!has_tick_scheduled && !has_rejection_to_warn)) {
     napi_status status = unofficial_napi_process_microtasks(env);
     if (status != napi_ok) {
       return status;
@@ -2147,9 +2155,10 @@ napi_status UbiRunCallbackScopeCheckpoint(napi_env env) {
     if (has_pending) {
       return napi_pending_exception;
     }
-    if (UbiGetTaskQueueFlags(env, &has_tick_scheduled, &has_rejection_to_warn) &&
-        !has_tick_scheduled &&
-        !has_rejection_to_warn) {
+    if (!UbiGetTaskQueueFlags(env, &has_tick_scheduled, &has_rejection_to_warn)) {
+      return napi_ok;
+    }
+    if (!has_tick_scheduled && !has_rejection_to_warn) {
       return napi_ok;
     }
   }

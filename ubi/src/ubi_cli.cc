@@ -21,6 +21,7 @@
 #include "unofficial_napi.h"
 #include "ubi_compat_exec.h"
 #include "ubi_process.h"
+#include "ubi_runtime_platform.h"
 #include "ubi_runtime.h"
 
 namespace {
@@ -68,6 +69,14 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner, std::string* err
   if (create_status != napi_ok || env == nullptr || env_scope == nullptr) {
     if (error_out != nullptr) {
       *error_out = "Failed to initialize runtime environment";
+    }
+    return 1;
+  }
+
+  if (UbiRuntimePlatformInstallHooks(env) != napi_ok) {
+    (void)unofficial_napi_release_env(env_scope);
+    if (error_out != nullptr) {
+      *error_out = "Failed to attach runtime platform hooks";
     }
     return 1;
   }
