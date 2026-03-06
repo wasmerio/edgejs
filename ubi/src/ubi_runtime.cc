@@ -709,7 +709,6 @@ int WaitForTopLevelPromiseToSettle(napi_env env, napi_value value, std::string* 
     if (loop != nullptr) {
       (void)uv_run(loop, UV_RUN_NOWAIT);
     }
-    (void)unofficial_napi_process_microtasks(env);
     (void)UbiRuntimePlatformDrainTasks(env);
 
     const int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
@@ -939,7 +938,6 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
     const bool pending_entry_point_promise = HasPendingEntryPointPromise(env);
     bool more = (uv_loop_alive(loop) != 0) || pending_entry_point_promise;
     if (more && uv_loop_alive(loop) == 0 && pending_entry_point_promise) {
-      (void)unofficial_napi_process_microtasks(env);
       (void)UbiRuntimePlatformDrainTasks(env);
       async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
       if (async_status >= 0) {
@@ -957,7 +955,6 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
     // a short grace window before declaring the loop quiescent.
     if (idle_drain_turns < 8) {
       idle_drain_turns++;
-      (void)unofficial_napi_process_microtasks(env);
       (void)UbiRuntimePlatformDrainTasks(env);
       async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
       if (async_status >= 0) {

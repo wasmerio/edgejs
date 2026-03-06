@@ -11,6 +11,7 @@
 #include <uv.h>
 
 #include "ubi_runtime.h"
+#include "ubi_runtime_platform.h"
 
 namespace {
 
@@ -204,6 +205,14 @@ bool ImmediateHasOutstanding(const TimersHostState* st) {
   return st->immediate_info_ptr[kImmediateHasOutstanding] != 0;
 }
 
+bool HasNativeImmediateTasks(const TimersHostState* st) {
+  return st != nullptr && st->env != nullptr && UbiRuntimePlatformHasImmediateTasks(st->env);
+}
+
+bool HasRefedNativeImmediateTasks(const TimersHostState* st) {
+  return st != nullptr && st->env != nullptr && UbiRuntimePlatformHasRefedImmediateTasks(st->env);
+}
+
 void EnsureTimerHandle(TimersHostState* st) {
   if (st == nullptr || st->timer_initialized) return;
   uv_loop_t* loop = uv_default_loop();
@@ -225,16 +234,35 @@ void EnsureCheckHandle(TimersHostState* st) {
   if (uv_check_start(&st->check_handle,
                      [](uv_check_t* handle) {
                        auto* state = static_cast<TimersHostState*>(handle->data);
-                       if (state == nullptr || state->env == nullptr || ImmediateCount(state) == 0) {
+                       if (state == nullptr || state->env == nullptr) {
+                         return;
+                       }
+                       if (ImmediateCount(state) == 0 && !HasNativeImmediateTasks(state)) {
+                         if (ImmediateRefCount(state) == 0 && !HasRefedNativeImmediateTasks(state)) {
+                           ApplyImmediateRefState(state, false);
+                         }
                          return;
                        }
                        do {
+                         (void)UbiRuntimePlatformDrainImmediateTasks(state->env);
+                         if (state->env == nullptr) {
+                           return;
+                         }
+                         bool pending = false;
+                         if (napi_is_exception_pending(state->env, &pending) == napi_ok && pending) {
+                           StopLoopOnJsError();
+                           return;
+                         }
+                         if (ImmediateCount(state) == 0) {
+                           continue;
+                         }
                          if (!CallImmediateCallback(state)) {
                            return;
                          }
-                       } while (ImmediateHasOutstanding(state) && state->env != nullptr);
+                       } while (state->env != nullptr &&
+                                (ImmediateHasOutstanding(state) || HasNativeImmediateTasks(state)));
 
-                       if (ImmediateRefCount(state) == 0) {
+                       if (ImmediateRefCount(state) == 0 && !HasRefedNativeImmediateTasks(state)) {
                          ApplyImmediateRefState(state, false);
                        }
                      }) != 0) {
@@ -319,7 +347,8 @@ void ApplyImmediateRefState(TimersHostState* st, bool ref) {
   EnsureCheckHandle(st);
   EnsureIdleHandle(st);
   if (!st->idle_initialized) return;
-  if (ref) {
+  const bool should_ref = ref || ImmediateRefCount(st) != 0 || HasRefedNativeImmediateTasks(st);
+  if (should_ref) {
     if (!st->idle_running && uv_idle_start(&st->idle_handle, [](uv_idle_t* /*handle*/) {}) == 0) {
       st->idle_running = true;
     }
@@ -526,4 +555,19 @@ uint32_t UbiGetActiveImmediateRefCount(napi_env env) {
   if (st == nullptr || st->immediate_info_ptr == nullptr) return 0;
   const int32_t count = st->immediate_info_ptr[kImmediateRefCount];
   return count > 0 ? static_cast<uint32_t>(count) : 0;
+}
+
+void UbiEnsureTimersImmediatePump(napi_env env) {
+  TimersHostState* st = GetOrCreateState(env);
+  if (st == nullptr) return;
+  EnsureCheckHandle(st);
+}
+
+void UbiToggleImmediateRefFromNative(napi_env env, bool ref) {
+  TimersHostState* st = GetState(env);
+  if (st == nullptr) {
+    st = GetOrCreateState(env);
+  }
+  if (st == nullptr) return;
+  ApplyImmediateRefState(st, ref);
 }

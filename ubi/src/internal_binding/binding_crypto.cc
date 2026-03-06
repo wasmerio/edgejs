@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -27,6 +28,9 @@
 
 #include "ncrypto.h"
 #include "internal_binding/helpers.h"
+#include "ubi_async_wrap.h"
+#include "ubi_runtime.h"
+#include "ubi_runtime_platform.h"
 
 namespace internal_binding {
 
@@ -55,6 +59,27 @@ struct CryptoBindingState {
 };
 
 std::unordered_map<napi_env, CryptoBindingState> g_crypto_states;
+std::unordered_set<napi_env> g_crypto_cleanup_hooks;
+
+void ResetRef(napi_env env, napi_ref* ref_ptr);
+
+void OnCryptoEnvCleanup(void* data) {
+  napi_env env = static_cast<napi_env>(data);
+  g_crypto_cleanup_hooks.erase(env);
+  auto it = g_crypto_states.find(env);
+  if (it == g_crypto_states.end()) return;
+  ResetRef(env, &it->second.binding_ref);
+  g_crypto_states.erase(it);
+}
+
+void EnsureCryptoCleanupHook(napi_env env) {
+  if (env == nullptr) return;
+  auto [it, inserted] = g_crypto_cleanup_hooks.emplace(env);
+  if (!inserted) return;
+  if (napi_add_env_cleanup_hook(env, OnCryptoEnvCleanup, env) != napi_ok) {
+    g_crypto_cleanup_hooks.erase(it);
+  }
+}
 
 CryptoBindingState* GetState(napi_env env) {
   auto it = g_crypto_states.find(env);
@@ -2332,6 +2357,8 @@ JobWrap* UnwrapJob(napi_env env, napi_value this_arg) {
   return static_cast<JobWrap*>(data);
 }
 
+void MaybeAttachCurrentDomain(napi_env env, napi_value target);
+
 bool FinalizeJobCtor(napi_env env, napi_value this_arg, size_t argc, napi_value* argv) {
   if (this_arg == nullptr) return false;
   auto* wrap = new JobWrap();
@@ -2344,6 +2371,9 @@ bool FinalizeJobCtor(napi_env env, napi_value this_arg, size_t argc, napi_value*
   if (napi_wrap(env, this_arg, wrap, JobFinalize, nullptr, &wrap->wrapper_ref) != napi_ok) {
     JobFinalize(env, wrap, nullptr);
     return false;
+  }
+  if (wrap->mode == kCryptoJobAsync) {
+    MaybeAttachCurrentDomain(env, this_arg);
   }
   return true;
 }
@@ -2487,6 +2517,9 @@ napi_value RsaKeyPairGenJobCtor(napi_env env, napi_callback_info info) {
     wrap->args.push_back(ref);
   }
   napi_wrap(env, this_arg, wrap, JobFinalize, nullptr, &wrap->wrapper_ref);
+  if (wrap->mode == kCryptoJobAsync) {
+    MaybeAttachCurrentDomain(env, this_arg);
+  }
   return this_arg;
 }
 
@@ -2518,6 +2551,9 @@ napi_value DhKeyPairGenJobCtor(napi_env env, napi_callback_info info) {
     wrap->args.push_back(ref);
   }
   napi_wrap(env, this_arg, wrap, JobFinalize, nullptr, &wrap->wrapper_ref);
+  if (wrap->mode == kCryptoJobAsync) {
+    MaybeAttachCurrentDomain(env, this_arg);
+  }
   return this_arg;
 }
 
@@ -2558,6 +2594,71 @@ bool ThrowSyncJobErrorIfPresent(napi_env env, napi_value result) {
   return true;
 }
 
+void MaybeAttachCurrentDomain(napi_env env, napi_value target) {
+  if (env == nullptr || target == nullptr) return;
+
+  napi_value global = GetGlobal(env);
+  if (global == nullptr) return;
+
+  napi_value process = nullptr;
+  if (napi_get_named_property(env, global, "process", &process) != napi_ok || process == nullptr) return;
+
+  napi_value domain = nullptr;
+  if (napi_get_named_property(env, process, "domain", &domain) != napi_ok ||
+      domain == nullptr ||
+      IsNullOrUndefinedValue(env, domain)) {
+    return;
+  }
+
+  napi_property_descriptor desc{
+      "domain",
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      domain,
+      static_cast<napi_property_attributes>(napi_writable | napi_configurable),
+      nullptr};
+  (void)napi_define_properties(env, target, 1, &desc);
+}
+
+struct CryptoOnDoneTask {
+  napi_env env = nullptr;
+  napi_ref this_arg_ref = nullptr;
+  napi_ref ondone_ref = nullptr;
+  napi_ref err_ref = nullptr;
+  napi_ref value_ref = nullptr;
+};
+
+void CleanupCryptoOnDoneTask(napi_env env, void* data) {
+  auto* task = static_cast<CryptoOnDoneTask*>(data);
+  if (task == nullptr) return;
+  napi_env cleanup_env = env != nullptr ? env : task->env;
+  if (cleanup_env != nullptr) {
+    ResetRef(cleanup_env, &task->this_arg_ref);
+    ResetRef(cleanup_env, &task->ondone_ref);
+    ResetRef(cleanup_env, &task->err_ref);
+    ResetRef(cleanup_env, &task->value_ref);
+  }
+  delete task;
+}
+
+void RunCryptoOnDoneTask(napi_env env, void* data) {
+  auto* task = static_cast<CryptoOnDoneTask*>(data);
+  if (task == nullptr) return;
+
+  napi_value this_arg = GetRefValue(env, task->this_arg_ref);
+  napi_value ondone = GetRefValue(env, task->ondone_ref);
+  napi_value err = GetRefValue(env, task->err_ref);
+  napi_value value = GetRefValue(env, task->value_ref);
+  if (this_arg == nullptr || ondone == nullptr) return;
+
+  napi_value argv[2] = {err != nullptr ? err : Undefined(env), value != nullptr ? value : Undefined(env)};
+  napi_value ignored = nullptr;
+  (void)UbiAsyncWrapMakeCallback(
+      env, 0, this_arg, this_arg, ondone, 2, argv, &ignored, kUbiMakeCallbackNone);
+}
+
 void InvokeJobOnDone(napi_env env, napi_value this_arg, napi_value result) {
   if (this_arg == nullptr || result == nullptr) return;
 
@@ -2575,22 +2676,20 @@ void InvokeJobOnDone(napi_env env, napi_value this_arg, napi_value result) {
   if (napi_get_element(env, result, 0, &err) != napi_ok || err == nullptr) err = Undefined(env);
   if (napi_get_element(env, result, 1, &value) != napi_ok || value == nullptr) value = Undefined(env);
 
-  napi_value global = GetGlobal(env);
-  napi_value set_immediate = nullptr;
-  type = napi_undefined;
-  if (global != nullptr &&
-      napi_get_named_property(env, global, "setImmediate", &set_immediate) == napi_ok &&
-      set_immediate != nullptr &&
-      napi_typeof(env, set_immediate, &type) == napi_ok &&
-      type == napi_function) {
-    napi_value argv[3] = {ondone, err, value};
+  auto* task = new CryptoOnDoneTask();
+  task->env = env;
+  if (napi_create_reference(env, this_arg, 1, &task->this_arg_ref) != napi_ok ||
+      napi_create_reference(env, ondone, 1, &task->ondone_ref) != napi_ok ||
+      napi_create_reference(env, err, 1, &task->err_ref) != napi_ok ||
+      napi_create_reference(env, value, 1, &task->value_ref) != napi_ok ||
+      UbiRuntimePlatformEnqueueTask(
+          env, RunCryptoOnDoneTask, task, CleanupCryptoOnDoneTask, kUbiRuntimePlatformTaskRefed) != napi_ok) {
+    CleanupCryptoOnDoneTask(env, task);
+    napi_value argv[2] = {err, value};
     napi_value ignored = nullptr;
-    if (napi_call_function(env, global, set_immediate, 3, argv, &ignored) == napi_ok) return;
+    (void)UbiAsyncWrapMakeCallback(
+        env, 0, this_arg, this_arg, ondone, 2, argv, &ignored, kUbiMakeCallbackNone);
   }
-
-  napi_value argv[2] = {err, value};
-  napi_value ignored = nullptr;
-  napi_call_function(env, this_arg, ondone, 2, argv, &ignored);
 }
 
 bool ReadKeyEncodingSelection(napi_env env,
@@ -4127,6 +4226,7 @@ napi_value ResolveCrypto(napi_env env, const ResolveOptions& options) {
   napi_value out = options.callbacks.resolve_binding(env, options.state, "crypto");
   if (out == nullptr || IsUndefined(env, out)) return Undefined(env);
 
+  EnsureCryptoCleanupHook(env);
   auto& st = g_crypto_states[env];
   if (st.binding_ref == nullptr) napi_create_reference(env, out, 1, &st.binding_ref);
 

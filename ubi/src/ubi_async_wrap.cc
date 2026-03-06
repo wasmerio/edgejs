@@ -4,10 +4,12 @@
 
 #include "internal_binding/binding_async_wrap.h"
 #include <unordered_map>
+#include <unordered_set>
 
 #include "internal_binding/helpers.h"
 #include "ubi_module_loader.h"
 #include "ubi_runtime.h"
+#include "ubi_runtime_platform.h"
 
 namespace {
 
@@ -18,6 +20,33 @@ struct AsyncWrapCache {
 };
 
 std::unordered_map<napi_env, AsyncWrapCache> g_async_wrap_cache;
+std::unordered_set<napi_env> g_async_wrap_cleanup_hooks;
+
+void ResetRef(napi_env env, napi_ref* ref) {
+  if (env == nullptr || ref == nullptr || *ref == nullptr) return;
+  napi_delete_reference(env, *ref);
+  *ref = nullptr;
+}
+
+void OnAsyncWrapEnvCleanup(void* data) {
+  napi_env env = static_cast<napi_env>(data);
+  g_async_wrap_cleanup_hooks.erase(env);
+  auto it = g_async_wrap_cache.find(env);
+  if (it == g_async_wrap_cache.end()) return;
+  ResetRef(env, &it->second.binding_ref);
+  ResetRef(env, &it->second.async_id_fields_ref);
+  ResetRef(env, &it->second.queue_destroy_ref);
+  g_async_wrap_cache.erase(it);
+}
+
+void EnsureAsyncWrapCleanupHook(napi_env env) {
+  if (env == nullptr) return;
+  auto [it, inserted] = g_async_wrap_cleanup_hooks.emplace(env);
+  if (!inserted) return;
+  if (napi_add_env_cleanup_hook(env, OnAsyncWrapEnvCleanup, env) != napi_ok) {
+    g_async_wrap_cleanup_hooks.erase(it);
+  }
+}
 
 napi_value GetRefValue(napi_env env, napi_ref ref) {
   if (env == nullptr || ref == nullptr) return nullptr;
@@ -68,6 +97,7 @@ napi_value ResolveInternalBinding(napi_env env, const char* name) {
 }
 
 AsyncWrapCache& GetCache(napi_env env) {
+  EnsureAsyncWrapCleanupHook(env);
   return g_async_wrap_cache[env];
 }
 
@@ -153,6 +183,43 @@ napi_value GetQueueDestroyFunction(napi_env env) {
   }
   napi_create_reference(env, fn, 1, &cache.queue_destroy_ref);
   return fn;
+}
+
+void CallQueueDestroyFunction(napi_env env, int64_t async_id) {
+  if (env == nullptr || async_id <= 0) return;
+
+  napi_value binding = GetAsyncWrapBinding(env);
+  napi_value queue_destroy = GetQueueDestroyFunction(env);
+  if (binding == nullptr || queue_destroy == nullptr) return;
+
+  napi_value async_id_value = nullptr;
+  if (napi_create_int64(env, async_id, &async_id_value) != napi_ok || async_id_value == nullptr) {
+    return;
+  }
+
+  napi_value ignored = nullptr;
+  napi_value argv[1] = {async_id_value};
+  if (napi_call_function(env, binding, queue_destroy, 1, argv, &ignored) != napi_ok) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+      napi_value ignored_error = nullptr;
+      napi_get_and_clear_last_exception(env, &ignored_error);
+    }
+  }
+}
+
+struct DestroyAsyncTask {
+  int64_t async_id = -1;
+};
+
+void RunDestroyAsyncTask(napi_env env, void* data) {
+  auto* task = static_cast<DestroyAsyncTask*>(data);
+  if (task == nullptr) return;
+  CallQueueDestroyFunction(env, task->async_id);
+}
+
+void CleanupDestroyAsyncTask(napi_env /*env*/, void* data) {
+  delete static_cast<DestroyAsyncTask*>(data);
 }
 
 }  // namespace
@@ -264,7 +331,7 @@ napi_status UbiAsyncWrapMakeCallback(napi_env env,
                                      napi_value* result,
                                      int flags) {
   if (env == nullptr || recv == nullptr || callback == nullptr) return napi_invalid_arg;
-  if (async_id <= 0) {
+  if (async_id < 0) {
     return UbiMakeCallbackWithFlags(env, recv, callback, argc, argv, result, flags);
   }
 
@@ -294,24 +361,11 @@ napi_status UbiAsyncWrapMakeCallback(napi_env env,
 
 void UbiAsyncWrapQueueDestroyId(napi_env env, int64_t async_id) {
   if (env == nullptr || async_id <= 0) return;
-
-  napi_value binding = GetAsyncWrapBinding(env);
-  napi_value queue_destroy = GetQueueDestroyFunction(env);
-  if (binding == nullptr || queue_destroy == nullptr) return;
-
-  napi_value async_id_value = nullptr;
-  if (napi_create_int64(env, async_id, &async_id_value) != napi_ok || async_id_value == nullptr) {
-    return;
-  }
-
-  napi_value ignored = nullptr;
-  napi_value argv[1] = {async_id_value};
-  if (napi_call_function(env, binding, queue_destroy, 1, argv, &ignored) != napi_ok) {
-    bool pending = false;
-    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-      napi_value ignored_error = nullptr;
-      napi_get_and_clear_last_exception(env, &ignored_error);
-    }
+  auto* task = new DestroyAsyncTask();
+  task->async_id = async_id;
+  if (UbiRuntimePlatformEnqueueTask(
+          env, RunDestroyAsyncTask, task, CleanupDestroyAsyncTask, kUbiRuntimePlatformTaskNone) != napi_ok) {
+    CleanupDestroyAsyncTask(env, task);
   }
 }
 

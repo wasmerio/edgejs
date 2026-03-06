@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "internal_binding/helpers.h"
@@ -47,6 +48,41 @@ struct DestroyHookData {
 };
 
 std::unordered_map<napi_env, AsyncWrapState> g_async_wrap_states;
+std::unordered_set<napi_env> g_async_wrap_cleanup_hooks;
+
+void ResetRef(napi_env env, napi_ref* ref) {
+  if (env == nullptr || ref == nullptr || *ref == nullptr) return;
+  napi_delete_reference(env, *ref);
+  *ref = nullptr;
+}
+
+void OnAsyncWrapEnvCleanup(void* data) {
+  napi_env env = static_cast<napi_env>(data);
+  g_async_wrap_cleanup_hooks.erase(env);
+  auto it = g_async_wrap_states.find(env);
+  if (it == g_async_wrap_states.end()) return;
+  AsyncWrapState& state = it->second;
+  ResetRef(env, &state.binding_ref);
+  ResetRef(env, &state.async_hook_fields_ref);
+  ResetRef(env, &state.async_id_fields_ref);
+  ResetRef(env, &state.async_ids_stack_ref);
+  ResetRef(env, &state.execution_async_resources_ref);
+  ResetRef(env, &state.hooks_ref);
+  ResetRef(env, &state.callback_trampoline_ref);
+  for (napi_ref& hook_ref : state.promise_hooks) {
+    ResetRef(env, &hook_ref);
+  }
+  g_async_wrap_states.erase(it);
+}
+
+void EnsureAsyncWrapCleanupHook(napi_env env) {
+  if (env == nullptr) return;
+  auto [it, inserted] = g_async_wrap_cleanup_hooks.emplace(env);
+  if (!inserted) return;
+  if (napi_add_env_cleanup_hook(env, OnAsyncWrapEnvCleanup, env) != napi_ok) {
+    g_async_wrap_cleanup_hooks.erase(it);
+  }
+}
 
 AsyncWrapState* GetState(napi_env env) {
   auto it = g_async_wrap_states.find(env);
@@ -507,6 +543,7 @@ napi_value AsyncWrapGetCallbackTrampoline(napi_env env) {
 }
 
 napi_value ResolveAsyncWrap(napi_env env, const ResolveOptions& /*options*/) {
+  EnsureAsyncWrapCleanupHook(env);
   auto& state = g_async_wrap_states[env];
   if (state.binding_ref != nullptr) {
     napi_value existing = GetRefValue(env, state.binding_ref);

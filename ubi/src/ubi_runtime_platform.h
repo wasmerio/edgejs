@@ -3,6 +3,28 @@
 
 #include "node_api.h"
 
+using UbiRuntimePlatformTaskCallback = void (*)(napi_env env, void* data);
+using UbiRuntimePlatformTaskCleanup = void (*)(napi_env env, void* data);
+
+enum UbiRuntimePlatformTaskFlags : int {
+  kUbiRuntimePlatformTaskNone = 0,
+  kUbiRuntimePlatformTaskRefed = 1 << 0,
+};
+
+// Queue a native immediate/platform task for the current env. Tasks run on the
+// owning thread before JS immediates, mirroring Node's native immediate queue.
+napi_status UbiRuntimePlatformEnqueueTask(napi_env env,
+                                         UbiRuntimePlatformTaskCallback callback,
+                                         void* data,
+                                         UbiRuntimePlatformTaskCleanup cleanup,
+                                         int flags);
+
+// Drain queued native immediate tasks. Returns the number of tasks run.
+size_t UbiRuntimePlatformDrainImmediateTasks(napi_env env, bool only_refed = false);
+
+bool UbiRuntimePlatformHasImmediateTasks(napi_env env);
+bool UbiRuntimePlatformHasRefedImmediateTasks(napi_env env);
+
 // Engine-adapter boundary for runtime task draining.
 // The current build provides a V8-backed implementation; future engines can
 // replace it without changing ubi runtime loop logic.

@@ -2,10 +2,12 @@
 #include <fstream>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "test_env.h"
 #include "ubi_path.h"
 #include "ubi_runtime.h"
+#include "ubi_runtime_platform.h"
 #include "ubi_task_queue.h"
 #include "ubi_timers_host.h"
 
@@ -60,6 +62,31 @@ int32_t* GetInt32TypedArrayData(napi_env env, napi_value value, size_t expected_
     return nullptr;
   }
   return static_cast<int32_t*>(data);
+}
+
+struct PlatformImmediateTask {
+  std::vector<int>* order = nullptr;
+  int value = 0;
+  int nested_value = 0;
+  int nested_flags = kUbiRuntimePlatformTaskNone;
+};
+
+void RunPlatformImmediateTask(napi_env env, void* data) {
+  auto* task = static_cast<PlatformImmediateTask*>(data);
+  if (task == nullptr || task->order == nullptr) return;
+  task->order->push_back(task->value);
+  if (task->nested_value != 0) {
+    auto* nested = new PlatformImmediateTask();
+    nested->order = task->order;
+    nested->value = task->nested_value;
+    if (UbiRuntimePlatformEnqueueTask(env,
+                                      RunPlatformImmediateTask,
+                                      nested,
+                                      [](napi_env, void* p) { delete static_cast<PlatformImmediateTask*>(p); },
+                                      task->nested_flags) != napi_ok) {
+      delete nested;
+    }
+  }
 }
 
 }  // namespace
@@ -208,4 +235,29 @@ TEST_F(Test0RuntimePhase01, TaskQueueStateIsIsolatedPerEnv) {
   EXPECT_FALSE(first_has_rejection_to_warn);
   EXPECT_FALSE(second_has_tick_scheduled);
   EXPECT_TRUE(second_has_rejection_to_warn);
+}
+
+TEST_F(Test0RuntimePhase01, NativeImmediateQueueRunsBeforeJsImmediatesAndDrainsNestedTasks) {
+  EnvScope s(runtime_.get());
+
+  auto* first = new PlatformImmediateTask();
+  std::vector<int> order;
+  first->order = &order;
+  first->value = 1;
+  first->nested_value = 2;
+  ASSERT_EQ(UbiRuntimePlatformEnqueueTask(s.env,
+                                          RunPlatformImmediateTask,
+                                          first,
+                                          [](napi_env, void* p) { delete static_cast<PlatformImmediateTask*>(p); },
+                                          kUbiRuntimePlatformTaskRefed),
+            napi_ok);
+  EXPECT_TRUE(UbiRuntimePlatformHasImmediateTasks(s.env));
+  EXPECT_TRUE(UbiRuntimePlatformHasRefedImmediateTasks(s.env));
+  EXPECT_EQ(UbiRuntimePlatformDrainImmediateTasks(s.env), 2u);
+
+  ASSERT_EQ(order.size(), 2u);
+  EXPECT_EQ(order[0], 1);
+  EXPECT_EQ(order[1], 2);
+  EXPECT_FALSE(UbiRuntimePlatformHasImmediateTasks(s.env));
+  EXPECT_FALSE(UbiRuntimePlatformHasRefedImmediateTasks(s.env));
 }
