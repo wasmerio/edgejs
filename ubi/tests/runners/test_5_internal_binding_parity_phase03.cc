@@ -659,6 +659,13 @@ assert.strictEqual(stringDecoderBinding.kNumFields, stringDecoderBinding.kSize);
 
 const udpWrap = internalBinding('udp_wrap');
 const udpHandle = new udpWrap.UDP();
+const udpSendWrap = new udpWrap.SendWrap();
+assert.strictEqual(typeof udpHandle.asyncReset, 'function');
+assert.strictEqual(typeof udpHandle.getProviderType, 'function');
+assert.strictEqual(typeof udpSendWrap.getAsyncId, 'function');
+assert.strictEqual(typeof udpSendWrap.asyncReset, 'function');
+assert.strictEqual(typeof udpSendWrap.getProviderType, 'function');
+assert.strictEqual(udpSendWrap.getAsyncId(), -1);
 const recvBufferContext = {};
 const sendBufferContext = {};
 const recvBufferSize = udpHandle.bufferSize(0, true, recvBufferContext);
@@ -681,6 +688,18 @@ assert.ok(recvSetResult === undefined || typeof recvSetResult === 'number');
 assert.ok(sendSetResult === undefined || typeof sendSetResult === 'number');
 assert.strictEqual(typeof udpHandle.setMulticastLoopback(true), 'number');
 udpHandle.close(() => {});
+
+const jsUdpWrap = internalBinding('js_udp_wrap');
+assert.strictEqual(typeof jsUdpWrap.JSUDPWrap, 'function');
+const jsUdpHandle = new jsUdpWrap.JSUDPWrap();
+assert.strictEqual(typeof jsUdpHandle.recvStart, 'function');
+assert.strictEqual(typeof jsUdpHandle.recvStop, 'function');
+assert.strictEqual(typeof jsUdpHandle.emitReceived, 'function');
+assert.strictEqual(typeof jsUdpHandle.onSendDone, 'function');
+assert.strictEqual(typeof jsUdpHandle.onAfterBind, 'function');
+assert.strictEqual(typeof jsUdpHandle.getAsyncId, 'function');
+assert.strictEqual(typeof jsUdpHandle.asyncReset, 'function');
+assert.strictEqual(typeof jsUdpHandle.getProviderType, 'function');
 
 globalThis.__ubi_internal_binding_parity_ok = 1;
 )JS";

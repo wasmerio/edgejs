@@ -22,6 +22,7 @@ const bindingNames = [
   'errors',
   'fs',
   'http_parser',
+  'js_udp_wrap',
   'module_wrap',
   'modules',
   'options',
@@ -109,5 +110,5 @@ TEST_F(Test4InternalBindingDispatchPhase02, AllResolversAreReachableAndCached) {
 
   uint32_t count = 0;
   ASSERT_EQ(napi_get_value_uint32(s.env, count_value, &count), napi_ok);
-  EXPECT_EQ(count, 37u);
+  EXPECT_EQ(count, 38u);
 }

@@ -474,9 +474,20 @@ napi_value CreateProviders(napi_env env) {
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return nullptr;
   SetNamedUint32(env, out, "NONE", 0);
+  SetNamedUint32(env, out, "JSSTREAM", 20);
+  SetNamedUint32(env, out, "JSUDPWRAP", 21);
+  SetNamedUint32(env, out, "PIPECONNECTWRAP", 23);
+  SetNamedUint32(env, out, "PIPESERVERWRAP", 24);
+  SetNamedUint32(env, out, "PIPEWRAP", 25);
+  SetNamedUint32(env, out, "SHUTDOWNWRAP", 35);
+  SetNamedUint32(env, out, "TCPCONNECTWRAP", 39);
+  SetNamedUint32(env, out, "TCPSERVERWRAP", 40);
   SetNamedUint32(env, out, "PROMISE", 27);
-  SetNamedUint32(env, out, "TCPWRAP", 42);
-  SetNamedUint32(env, out, "WRITEWRAP", 53);
+  SetNamedUint32(env, out, "TCPWRAP", 41);
+  SetNamedUint32(env, out, "TTYWRAP", 42);
+  SetNamedUint32(env, out, "UDPSENDWRAP", 43);
+  SetNamedUint32(env, out, "UDPWRAP", 44);
+  SetNamedUint32(env, out, "WRITEWRAP", 52);
   return out;
 }
 

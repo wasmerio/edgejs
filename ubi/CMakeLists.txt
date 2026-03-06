@@ -271,6 +271,7 @@ add_library(ubi_runtime STATIC
   src/internal_binding/binding_heap_utils.cc
   src/internal_binding/binding_http_parser.cc
   src/internal_binding/binding_icu.cc
+  src/internal_binding/binding_js_udp_wrap.cc
   src/internal_binding/binding_js_stream.cc
   src/internal_binding/binding_internal_only_v8.cc
   src/internal_binding/binding_module_wrap.cc
@@ -318,6 +319,7 @@ add_library(ubi_runtime STATIC
   src/ubi_string_decoder.cc
   src/ubi_async_wrap.cc
   src/ubi_http_parser.cc
+  src/ubi_js_udp_wrap.cc
   src/ubi_js_stream.cc
   src/ubi_stream_base.cc
   src/ubi_stream_listener.cc

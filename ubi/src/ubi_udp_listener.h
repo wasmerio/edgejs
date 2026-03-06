@@ -5,11 +5,14 @@
 
 #include <uv.h>
 
+#include "node_api.h"
+
 class UbiUdpWrapBase;
 
 class UbiUdpSendWrap {
  public:
   virtual ~UbiUdpSendWrap() = default;
+  virtual napi_value object(napi_env env) const = 0;
 
   uv_udp_send_t req{};
   uv_buf_t* bufs = nullptr;

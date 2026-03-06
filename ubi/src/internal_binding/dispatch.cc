@@ -27,6 +27,7 @@ napi_value ResolveFsDir(napi_env env, const ResolveOptions& options);
 napi_value ResolveHeapUtils(napi_env env, const ResolveOptions& options);
 napi_value ResolveHttpParser(napi_env env, const ResolveOptions& options);
 napi_value ResolveIcu(napi_env env, const ResolveOptions& options);
+napi_value ResolveJsUdpWrap(napi_env env, const ResolveOptions& options);
 napi_value ResolveJsStream(napi_env env, const ResolveOptions& options);
 napi_value ResolveInternalOnlyV8(napi_env env, const ResolveOptions& options);
 napi_value ResolveModuleWrap(napi_env env, const ResolveOptions& options);
@@ -73,7 +74,7 @@ struct BindingResolverEntry {
   ResolverFn resolver;
 };
 
-constexpr std::array<BindingResolverEntry, 56> kResolvers = {{
+constexpr std::array<BindingResolverEntry, 57> kResolvers = {{
     {"async_wrap", ResolveAsyncWrap},
     {"async_context_frame", ResolveAsyncContextFrame},
     {"block_list", ResolveBlockList},
@@ -94,6 +95,7 @@ constexpr std::array<BindingResolverEntry, 56> kResolvers = {{
     {"heap_utils", ResolveHeapUtils},
     {"http_parser", ResolveHttpParser},
     {"icu", ResolveIcu},
+    {"js_udp_wrap", ResolveJsUdpWrap},
     {"js_stream", ResolveJsStream},
     {"internal_only_v8", ResolveInternalOnlyV8},
     {"module_wrap", ResolveModuleWrap},

@@ -6,6 +6,7 @@
 #include "ubi_encoding.h"
 #include "ubi_fs.h"
 #include "ubi_http_parser.h"
+#include "ubi_js_udp_wrap.h"
 #include "ubi_js_stream.h"
 #include "ubi_os.h"
 #include "ubi_pipe_wrap.h"
@@ -3241,6 +3242,9 @@ static napi_value DispatchResolveBinding(napi_env env, void* raw_state, const ch
   }
   if (std::strcmp(name, "js_stream") == 0) {
     return GetOrCreateBinding(state, env, "js_stream", UbiInstallJsStreamBinding);
+  }
+  if (std::strcmp(name, "js_udp_wrap") == 0) {
+    return GetOrCreateBinding(state, env, "js_udp_wrap", UbiInstallJsUdpWrapBinding);
   }
   if (std::strcmp(name, "os") == 0) {
     return GetOrCreateBinding(state, env, "os", UbiInstallOsBinding);
