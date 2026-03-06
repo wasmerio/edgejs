@@ -2,6 +2,7 @@
 #define UBI_MODULE_LOADER_H_
 
 #include "node_api.h"
+#include "ubi_task_queue.h"
 
 napi_status UbiInstallModuleLoader(napi_env env, const char* entry_script_path);
 
@@ -15,13 +16,5 @@ void UbiSetPerIsolateSymbols(napi_env env, napi_value per_isolate_symbols);
 napi_value UbiGetRequireFunction(napi_env env);
 napi_value UbiGetInternalBinding(napi_env env);
 bool UbiRequireBuiltin(napi_env env, const char* id, napi_value* out);
-
-// Run the internal task_queue tick callback registered via setTickCallback().
-// When no callback is registered, `called` is set to false and napi_ok is returned.
-napi_status UbiRunTaskQueueTickCallback(napi_env env, bool* called);
-
-// Read the task_queue tickInfo flags populated by internal/process/task_queues.
-// Returns false when the binding has not been initialized yet.
-bool UbiGetTaskQueueFlags(napi_env env, bool* has_tick_scheduled, bool* has_rejection_to_warn);
 
 #endif  // UBI_MODULE_LOADER_H_

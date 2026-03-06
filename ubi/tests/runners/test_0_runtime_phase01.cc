@@ -6,6 +6,8 @@
 #include "test_env.h"
 #include "ubi_path.h"
 #include "ubi_runtime.h"
+#include "ubi_task_queue.h"
+#include "ubi_timers_host.h"
 
 class Test0RuntimePhase01 : public FixtureTestBase {};
 
@@ -43,6 +45,21 @@ std::string WriteTempScript(const std::string& stem, const std::string& contents
 void RemoveTempScript(const std::string& path) {
   std::error_code ec;
   std::filesystem::remove(path, ec);
+}
+
+int32_t* GetInt32TypedArrayData(napi_env env, napi_value value, size_t expected_length) {
+  napi_typedarray_type type = napi_int8_array;
+  size_t length = 0;
+  void* data = nullptr;
+  napi_value arraybuffer = nullptr;
+  size_t byte_offset = 0;
+  if (napi_get_typedarray_info(env, value, &type, &length, &data, &arraybuffer, &byte_offset) != napi_ok) {
+    return nullptr;
+  }
+  if (type != napi_int32_array || length < expected_length || data == nullptr) {
+    return nullptr;
+  }
+  return static_cast<int32_t*>(data);
 }
 
 }  // namespace
@@ -117,4 +134,78 @@ TEST_F(Test0RuntimePhase01, NativePathResolveNormalizesDotSegments) {
   EXPECT_EQ(ubi_path::PathResolve("/tmp/base/dir", {"../pkg", "./entry.js"}),
             "/tmp/base/pkg/entry.js");
 #endif
+}
+
+TEST_F(Test0RuntimePhase01, TimersHostStateIsIsolatedPerEnv) {
+  EnvScope first(runtime_.get());
+  EnvScope second(runtime_.get());
+
+  napi_value first_binding = UbiInstallTimersHostBinding(first.env);
+  napi_value second_binding = UbiInstallTimersHostBinding(second.env);
+  ASSERT_NE(first_binding, nullptr);
+  ASSERT_NE(second_binding, nullptr);
+
+  napi_value first_timeout_info = nullptr;
+  napi_value second_timeout_info = nullptr;
+  napi_value first_immediate_info = nullptr;
+  napi_value second_immediate_info = nullptr;
+  ASSERT_EQ(napi_get_named_property(first.env, first_binding, "timeoutInfo", &first_timeout_info), napi_ok);
+  ASSERT_EQ(napi_get_named_property(second.env, second_binding, "timeoutInfo", &second_timeout_info), napi_ok);
+  ASSERT_EQ(napi_get_named_property(first.env, first_binding, "immediateInfo", &first_immediate_info), napi_ok);
+  ASSERT_EQ(napi_get_named_property(second.env, second_binding, "immediateInfo", &second_immediate_info), napi_ok);
+
+  int32_t* first_timeout_data = GetInt32TypedArrayData(first.env, first_timeout_info, 1);
+  int32_t* second_timeout_data = GetInt32TypedArrayData(second.env, second_timeout_info, 1);
+  int32_t* first_immediate_data = GetInt32TypedArrayData(first.env, first_immediate_info, 3);
+  int32_t* second_immediate_data = GetInt32TypedArrayData(second.env, second_immediate_info, 3);
+  ASSERT_NE(first_timeout_data, nullptr);
+  ASSERT_NE(second_timeout_data, nullptr);
+  ASSERT_NE(first_immediate_data, nullptr);
+  ASSERT_NE(second_immediate_data, nullptr);
+
+  first_timeout_data[0] = 2;
+  second_timeout_data[0] = 5;
+  first_immediate_data[1] = 1;
+  second_immediate_data[1] = 3;
+
+  EXPECT_EQ(UbiGetActiveTimeoutCount(first.env), 2);
+  EXPECT_EQ(UbiGetActiveTimeoutCount(second.env), 5);
+  EXPECT_EQ(UbiGetActiveImmediateRefCount(first.env), 1u);
+  EXPECT_EQ(UbiGetActiveImmediateRefCount(second.env), 3u);
+}
+
+TEST_F(Test0RuntimePhase01, TaskQueueStateIsIsolatedPerEnv) {
+  EnvScope first(runtime_.get());
+  EnvScope second(runtime_.get());
+
+  napi_value first_binding = UbiGetOrCreateTaskQueueBinding(first.env);
+  napi_value second_binding = UbiGetOrCreateTaskQueueBinding(second.env);
+  ASSERT_NE(first_binding, nullptr);
+  ASSERT_NE(second_binding, nullptr);
+
+  napi_value first_tick_info = nullptr;
+  napi_value second_tick_info = nullptr;
+  ASSERT_EQ(napi_get_named_property(first.env, first_binding, "tickInfo", &first_tick_info), napi_ok);
+  ASSERT_EQ(napi_get_named_property(second.env, second_binding, "tickInfo", &second_tick_info), napi_ok);
+
+  int32_t* first_tick_fields = GetInt32TypedArrayData(first.env, first_tick_info, 2);
+  int32_t* second_tick_fields = GetInt32TypedArrayData(second.env, second_tick_info, 2);
+  ASSERT_NE(first_tick_fields, nullptr);
+  ASSERT_NE(second_tick_fields, nullptr);
+
+  first_tick_fields[0] = 1;
+  first_tick_fields[1] = 0;
+  second_tick_fields[0] = 0;
+  second_tick_fields[1] = 1;
+
+  bool first_has_tick_scheduled = false;
+  bool first_has_rejection_to_warn = false;
+  bool second_has_tick_scheduled = false;
+  bool second_has_rejection_to_warn = false;
+  EXPECT_TRUE(UbiGetTaskQueueFlags(first.env, &first_has_tick_scheduled, &first_has_rejection_to_warn));
+  EXPECT_TRUE(UbiGetTaskQueueFlags(second.env, &second_has_tick_scheduled, &second_has_rejection_to_warn));
+  EXPECT_TRUE(first_has_tick_scheduled);
+  EXPECT_FALSE(first_has_rejection_to_warn);
+  EXPECT_FALSE(second_has_tick_scheduled);
+  EXPECT_TRUE(second_has_rejection_to_warn);
 }

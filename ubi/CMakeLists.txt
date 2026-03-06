@@ -328,6 +328,7 @@ add_library(ubi_runtime STATIC
   src/ubi_udp_listener.cc
   src/ubi_stream_wrap.cc
   src/ubi_process_wrap.cc
+  src/ubi_task_queue.cc
   src/ubi_tcp_wrap.cc
   src/ubi_tls_wrap.cc
   src/ubi_tty_wrap.cc

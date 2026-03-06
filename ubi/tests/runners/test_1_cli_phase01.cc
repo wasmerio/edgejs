@@ -585,6 +585,50 @@ TEST_F(Test1CliPhase01, EvalModeExposesNodeStyleEvalGlobals) {
 #endif
 }
 
+TEST_F(Test1CliPhase01, ConsoleUsesNodeBootstrappedLazyStdioStreams) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "stdio bootstrap shape check is POSIX-only";
+#else
+  const auto ubi_path = ResolveBuiltUbiBinary();
+  ASSERT_FALSE(ubi_path.empty()) << "Failed to resolve built ubi binary";
+
+  const CommandResult result = RunBuiltBinaryAndCapture(
+      ubi_path,
+      {"-e",
+       "const assert = require('assert');"
+       "const { Console } = require('console');"
+       "const stdoutDesc = Object.getOwnPropertyDescriptor(process, 'stdout');"
+       "const stderrDesc = Object.getOwnPropertyDescriptor(process, 'stderr');"
+       "assert.strictEqual(typeof stdoutDesc.get, 'function');"
+       "assert.strictEqual(stdoutDesc.set, undefined);"
+       "assert.strictEqual(Object.prototype.hasOwnProperty.call(stdoutDesc, 'value'), false);"
+       "assert.strictEqual(stdoutDesc.enumerable, true);"
+       "assert.strictEqual(stdoutDesc.configurable, true);"
+       "assert.strictEqual(typeof stderrDesc.get, 'function');"
+       "assert.strictEqual(stderrDesc.set, undefined);"
+       "assert.strictEqual(Object.prototype.hasOwnProperty.call(stderrDesc, 'value'), false);"
+       "assert.strictEqual(stderrDesc.enumerable, true);"
+       "assert.strictEqual(stderrDesc.configurable, true);"
+       "assert.strictEqual(console instanceof Console, true);"
+       "assert.strictEqual(process.stdout._isStdio, true);"
+       "assert.strictEqual(process.stderr._isStdio, true);"
+       "assert.strictEqual(process.stdout.constructor && process.stdout.constructor.name, 'SyncWriteStream');"
+       "assert.strictEqual(process.stderr.constructor && process.stderr.constructor.name, 'SyncWriteStream');"
+       "assert.strictEqual(process.stdout._type, 'fs');"
+       "assert.strictEqual(process.stderr._type, 'fs');"
+       "assert.strictEqual(typeof process.stdout.write, 'function');"
+       "assert.strictEqual(typeof process.stderr.write, 'function');"
+       "console.log('console-stdio-bootstrap:ok');"},
+      "ubi_phase01_cli_console_stdio_bootstrap");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(result.stderr_output.empty()) << "stderr=" << result.stderr_output;
+  EXPECT_NE(result.stdout_output.find("console-stdio-bootstrap:ok"), std::string::npos) << result.stdout_output;
+#endif
+}
+
 TEST_F(Test1CliPhase01, FsPromisesReadFileInsideListenCallbackDoesNotHang) {
 #if defined(_WIN32)
   GTEST_SKIP() << "listen/readFile subprocess parity check is POSIX-only";

@@ -130,28 +130,6 @@ std::string GetLlhttpVersion() {
          UBI_STRINGIFY(LLHTTP_VERSION_PATCH);
 }
 
-void WriteTextToFd(int fd, const std::string& text) {
-  if (text.empty()) return;
-  size_t offset = 0;
-  while (offset < text.size()) {
-#if defined(_WIN32)
-    const unsigned int remaining = static_cast<unsigned int>(text.size() - offset);
-    const int written = _write(fd, text.data() + offset, remaining);
-    if (written <= 0) break;
-    offset += static_cast<size_t>(written);
-#else
-    const size_t remaining = text.size() - offset;
-    const ssize_t written = ::write(fd, text.data() + offset, remaining);
-    if (written > 0) {
-      offset += static_cast<size_t>(written);
-      continue;
-    }
-    if (written < 0 && errno == EINTR) continue;
-    break;
-#endif
-  }
-}
-
 std::string ExtractPackageVersionFromJson(const std::string& json_text) {
   const std::string key = "\"version\"";
   const size_t key_pos = json_text.find(key);
@@ -1451,135 +1429,6 @@ napi_value CreateProcessEnvObject(napi_env env) {
   return proxy;
 }
 
-void MaybeInvokeWriteCallback(napi_env env, napi_value maybe_fn) {
-  if (maybe_fn == nullptr) return;
-  napi_valuetype type = napi_undefined;
-  if (napi_typeof(env, maybe_fn, &type) != napi_ok || type != napi_function) return;
-  napi_value global = nullptr;
-  napi_value null_value = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
-      napi_get_null(env, &null_value) != napi_ok || null_value == nullptr) {
-    return;
-  }
-  napi_value argv[1] = {null_value};
-  napi_value ignored = nullptr;
-  napi_call_function(env, global, maybe_fn, 1, argv, &ignored);
-}
-
-napi_value ProcessStdoutWriteCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc >= 1 && argv[0] != nullptr) {
-    const std::string out = NapiValueToUtf8(env, argv[0]);
-    WriteTextToFd(1, out);
-  }
-  if (argc >= 2) MaybeInvokeWriteCallback(env, argv[1]);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-}
-
-napi_value ProcessStderrWriteCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok && argc >= 1 && argv[0] != nullptr) {
-    const std::string out = NapiValueToUtf8(env, argv[0]);
-    WriteTextToFd(2, out);
-  }
-  if (argc >= 2) MaybeInvokeWriteCallback(env, argv[1]);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-}
-
-napi_status InstallProcessStream(napi_env env,
-                                 napi_value process_obj,
-                                 const char* name,
-                                 int fd,
-                                 napi_callback write_cb) {
-  napi_value stream_obj = nullptr;
-  napi_status status = napi_create_object(env, &stream_obj);
-  if (status != napi_ok || stream_obj == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  napi_value fd_value = nullptr;
-  status = napi_create_int32(env, fd, &fd_value);
-  if (status != napi_ok || fd_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  status = napi_set_named_property(env, stream_obj, "fd", fd_value);
-  if (status != napi_ok) return status;
-  napi_value true_value = nullptr;
-  status = napi_get_boolean(env, true, &true_value);
-  if (status != napi_ok || true_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  status = napi_set_named_property(env, stream_obj, "writable", true_value);
-  if (status != napi_ok) return status;
-  status = napi_set_named_property(env, stream_obj, "_isStdio", true_value);
-  if (status != napi_ok) return status;
-  napi_value false_value = nullptr;
-  status = napi_get_boolean(env, false, &false_value);
-  if (status != napi_ok || false_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  status = napi_set_named_property(env, stream_obj, "isTTY", false_value);
-  if (status != napi_ok) return status;
-  napi_value write_fn = nullptr;
-  status = napi_create_function(env, "write", NAPI_AUTO_LENGTH, write_cb, nullptr, &write_fn);
-  if (status != napi_ok || write_fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  status = napi_set_named_property(env, stream_obj, "write", write_fn);
-  if (status != napi_ok) return status;
-  napi_value end_fn = nullptr;
-  status = napi_create_function(
-      env,
-      "end",
-      NAPI_AUTO_LENGTH,
-      [](napi_env env, napi_callback_info info) -> napi_value {
-        size_t argc = 1;
-        napi_value argv[1] = {nullptr};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-        if (argc >= 1 && argv[0] != nullptr) {
-          napi_valuetype t = napi_undefined;
-          if (napi_typeof(env, argv[0], &t) == napi_ok && t == napi_function) {
-            napi_value global = nullptr;
-            napi_value ignored = nullptr;
-            if (napi_get_global(env, &global) == napi_ok && global != nullptr) {
-              napi_call_function(env, global, argv[0], 0, nullptr, &ignored);
-            }
-          }
-        }
-        napi_value undefined = nullptr;
-        napi_get_undefined(env, &undefined);
-        return undefined;
-      },
-      nullptr,
-      &end_fn);
-  if (status != napi_ok || end_fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  status = napi_set_named_property(env, stream_obj, "end", end_fn);
-  if (status != napi_ok) return status;
-  auto return_undefined = [](napi_env env, napi_callback_info info) -> napi_value {
-    napi_value undefined = nullptr;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-  };
-  auto return_this = [](napi_env env, napi_callback_info info) -> napi_value {
-    napi_value this_arg = nullptr;
-    if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
-      napi_value undefined = nullptr;
-      napi_get_undefined(env, &undefined);
-      return undefined;
-    }
-    return this_arg;
-  };
-  const char* event_methods_this[] = {"on", "addListener", "once", "prependListener", "removeListener"};
-  for (const char* method : event_methods_this) {
-    napi_value fn = nullptr;
-    status = napi_create_function(env, method, NAPI_AUTO_LENGTH, return_this, nullptr, &fn);
-    if (status != napi_ok || fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-    status = napi_set_named_property(env, stream_obj, method, fn);
-    if (status != napi_ok) return status;
-  }
-  napi_value emit_fn = nullptr;
-  status = napi_create_function(env, "emit", NAPI_AUTO_LENGTH, return_undefined, nullptr, &emit_fn);
-  if (status != napi_ok || emit_fn == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
-  status = napi_set_named_property(env, stream_obj, "emit", emit_fn);
-  if (status != napi_ok) return status;
-  return napi_set_named_property(env, process_obj, name, stream_obj);
-}
-
 napi_value ProcessCwdCallback(napi_env env, napi_callback_info info) {
   size_t cwd_len = 256;
   std::string cwd;
@@ -2403,7 +2252,7 @@ napi_value ProcessMethodsGetActiveResourcesInfoCallback(napi_env env, napi_callb
   uint32_t length = 0;
   napi_get_array_length(env, out, &length);
 
-  const int32_t timeout_count = UbiGetActiveTimeoutCount();
+  const int32_t timeout_count = UbiGetActiveTimeoutCount(env);
   if (timeout_count > 0) {
     napi_value timeout_name = nullptr;
     if (napi_create_string_utf8(env, "Timeout", NAPI_AUTO_LENGTH, &timeout_name) == napi_ok &&
@@ -2414,7 +2263,7 @@ napi_value ProcessMethodsGetActiveResourcesInfoCallback(napi_env env, napi_callb
     }
   }
 
-  const uint32_t immediate_count = UbiGetActiveImmediateRefCount();
+  const uint32_t immediate_count = UbiGetActiveImmediateRefCount(env);
   if (immediate_count > 0) {
     napi_value immediate_name = nullptr;
     if (napi_create_string_utf8(env, "Immediate", NAPI_AUTO_LENGTH, &immediate_name) == napi_ok &&
@@ -3111,11 +2960,6 @@ napi_status UbiInstallProcessObject(napi_env env,
   status = napi_set_named_property(env, hrtime_fn, "bigint", hrtime_bigint_fn);
   if (status != napi_ok) return status;
   status = napi_set_named_property(env, process_obj, "hrtime", hrtime_fn);
-  if (status != napi_ok) return status;
-
-  status = InstallProcessStream(env, process_obj, "stdout", 1, ProcessStdoutWriteCallback);
-  if (status != napi_ok) return status;
-  status = InstallProcessStream(env, process_obj, "stderr", 2, ProcessStderrWriteCallback);
   if (status != napi_ok) return status;
 
   napi_value raw_debug_fn = nullptr;
