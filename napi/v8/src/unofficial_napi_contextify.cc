@@ -117,6 +117,18 @@ bool SetSymbol(v8::Local<v8::Context> context,
   return target->Set(context, key, value).FromMaybe(false);
 }
 
+v8::Local<v8::Private> ApiPrivate(v8::Isolate* isolate, const char* description) {
+  return v8::Private::ForApi(isolate, OneByteString(isolate, description));
+}
+
+bool SetApiPrivate(v8::Local<v8::Context> context,
+                   v8::Local<v8::Object> target,
+                   const char* description,
+                   v8::Local<v8::Value> value) {
+  if (target.IsEmpty() || description == nullptr) return false;
+  return target->SetPrivate(context, ApiPrivate(context->GetIsolate(), description), value).FromMaybe(false);
+}
+
 void ResetRef(napi_env env, napi_ref* ref_ptr) {
   if (env == nullptr || ref_ptr == nullptr || *ref_ptr == nullptr) return;
   napi_delete_reference(env, *ref_ptr);
@@ -128,6 +140,86 @@ std::string V8ValueToUtf8(v8::Isolate* isolate, v8::Local<v8::Value> value) {
   v8::String::Utf8Value utf8(isolate, value);
   if (*utf8 == nullptr) return {};
   return std::string(*utf8, utf8.length());
+}
+
+std::string BuildSyntaxArrowMessage(v8::Isolate* isolate,
+                                    v8::Local<v8::Context> context,
+                                    v8::Local<v8::Message> message) {
+  if (message.IsEmpty()) return {};
+
+  std::string filename = "<anonymous_script>";
+  v8::Local<v8::Value> script_resource_name = message->GetScriptResourceName();
+  if (!script_resource_name.IsEmpty() && !script_resource_name->IsUndefined()) {
+    const std::string utf8_name = V8ValueToUtf8(isolate, script_resource_name);
+    if (!utf8_name.empty()) filename = utf8_name;
+  }
+
+  const int line_number = message->GetLineNumber(context).FromMaybe(0);
+  v8::MaybeLocal<v8::String> source_line_maybe = message->GetSourceLine(context);
+  v8::Local<v8::String> source_line_v8;
+  if (!source_line_maybe.ToLocal(&source_line_v8)) return {};
+
+  const std::string source_line = V8ValueToUtf8(isolate, source_line_v8);
+  if (source_line.empty()) return {};
+
+  int start = message->GetStartColumn(context).FromMaybe(0);
+  int end = message->GetEndColumn(context).FromMaybe(start + 1);
+  if (end <= start) end = start + 1;
+  if (start < 0) start = 0;
+  if (end < 0) end = 0;
+
+  std::string underline(static_cast<size_t>(start), ' ');
+  underline.append(static_cast<size_t>(std::max(1, end - start)), '^');
+
+  return filename + ":" + std::to_string(line_number) + "\n" +
+         source_line + "\n" +
+         underline + "\n";
+}
+
+void AttachSyntaxArrowMessage(v8::Isolate* isolate,
+                              v8::Local<v8::Context> context,
+                              v8::Local<v8::Value> exception,
+                              v8::Local<v8::Message> message) {
+  if (exception.IsEmpty() || !exception->IsObject() || message.IsEmpty()) return;
+
+  v8::Local<v8::Object> err_obj = exception.As<v8::Object>();
+  v8::Local<v8::Private> arrow_key =
+      v8::Private::ForApi(isolate, OneByteString(isolate, "node:arrowMessage"));
+  v8::Local<v8::Private> decorated_key =
+      v8::Private::ForApi(isolate, OneByteString(isolate, "node:decorated"));
+
+  v8::Local<v8::Value> existing_arrow;
+  if (err_obj->GetPrivate(context, arrow_key).ToLocal(&existing_arrow) && existing_arrow->IsString()) {
+    return;
+  }
+
+  const std::string arrow = BuildSyntaxArrowMessage(isolate, context, message);
+  if (arrow.empty()) return;
+
+  v8::Local<v8::String> arrow_v8;
+  if (!v8::String::NewFromUtf8(isolate, arrow.c_str(), v8::NewStringType::kNormal).ToLocal(&arrow_v8)) {
+    return;
+  }
+  (void)err_obj->SetPrivate(context, arrow_key, arrow_v8);
+
+  v8::Local<v8::Value> decorated;
+  const bool already_decorated =
+      err_obj->GetPrivate(context, decorated_key).ToLocal(&decorated) && decorated->IsTrue();
+  if (already_decorated) return;
+
+  v8::Local<v8::Value> stack_value;
+  if (!err_obj->Get(context, OneByteString(isolate, "stack")).ToLocal(&stack_value) || !stack_value->IsString()) {
+    return;
+  }
+
+  v8::Local<v8::String> decorated_stack = v8::String::Concat(
+      isolate,
+      arrow_v8,
+      stack_value.As<v8::String>());
+  if (!err_obj->Set(context, OneByteString(isolate, "stack"), decorated_stack).FromMaybe(false)) {
+    return;
+  }
+  (void)err_obj->SetPrivate(context, decorated_key, v8::True(isolate));
 }
 
 std::string SerializeModuleRequestKey(const std::string& specifier,
@@ -461,14 +553,11 @@ ModuleWrapRecord* FindModuleRecordForModule(napi_env env, v8::Local<v8::Module> 
 
 bool SetHostDefinedOptionSymbolOnWrapper(napi_env env, napi_value wrapper, napi_value id_value) {
   if (env == nullptr || wrapper == nullptr) return false;
-  v8::Local<v8::Symbol> host_symbol;
-  if (!TryGetInternalBindingSymbol(env, "util", "host_defined_option_symbol", &host_symbol)) return false;
-
   v8::Local<v8::Context> context = env->context();
   v8::Local<v8::Object> wrapper_obj = napi_v8_unwrap_value(wrapper).As<v8::Object>();
   v8::Local<v8::Value> id_raw =
       id_value != nullptr ? napi_v8_unwrap_value(id_value) : v8::Undefined(env->isolate).As<v8::Value>();
-  return SetSymbol(context, wrapper_obj, host_symbol, id_raw);
+  return SetApiPrivate(context, wrapper_obj, "node:host_defined_option_symbol", id_raw);
 }
 
 napi_value GetVmDynamicImportDefaultInternalSymbol(napi_env env) {
@@ -876,18 +965,11 @@ napi_status NAPI_CDECL unofficial_napi_contextify_make_context(
 
   // Align with node-lib internal/vm.js isContext() checks in Ubi.
   v8::Local<v8::Context> property_context = vanilla ? context : current;
-  v8::Local<v8::Symbol> context_symbol;
-  if (TryGetInternalBindingSymbol(env, "util", "contextify_context_private_symbol", &context_symbol)) {
-    SetSymbol(property_context, key_object, context_symbol, key_object);
-  }
-
-  v8::Local<v8::Symbol> host_symbol;
-  if (TryGetInternalBindingSymbol(env, "util", "host_defined_option_symbol", &host_symbol)) {
-    SetSymbol(property_context,
-              key_object,
-              host_symbol,
-              host_id_symbol.IsEmpty() ? v8::Undefined(isolate) : host_id_symbol.As<v8::Value>());
-  }
+  SetApiPrivate(property_context, key_object, "node:contextify:context", key_object);
+  SetApiPrivate(property_context,
+                key_object,
+                "node:host_defined_option_symbol",
+                host_id_symbol.IsEmpty() ? v8::Undefined(isolate) : host_id_symbol.As<v8::Value>());
 
   *result_out = key_napi;
   return napi_ok;
@@ -1126,13 +1208,10 @@ napi_status NAPI_CDECL unofficial_napi_contextify_compile_function(
     return napi_generic_failure;
   }
 
-  v8::Local<v8::Symbol> host_symbol;
-  if (TryGetInternalBindingSymbol(env, "util", "host_defined_option_symbol", &host_symbol)) {
-    SetSymbol(current,
-              fn.As<v8::Object>(),
-              host_symbol,
-              host_id_symbol.IsEmpty() ? v8::Undefined(isolate) : host_id_symbol.As<v8::Value>());
-  }
+  SetApiPrivate(current,
+                fn.As<v8::Object>(),
+                "node:host_defined_option_symbol",
+                host_id_symbol.IsEmpty() ? v8::Undefined(isolate) : host_id_symbol.As<v8::Value>());
 
   v8::Local<v8::Object> out = v8::Object::New(isolate);
   if (!SetNamed(current, out, "function", fn)) return napi_generic_failure;
@@ -1194,12 +1273,14 @@ napi_status NAPI_CDECL unofficial_napi_contextify_compile_function_for_cjs_loade
 
   v8::Local<v8::Function> fn;
   v8::Local<v8::Value> cjs_exception;
+  v8::Local<v8::Message> cjs_message;
   bool cjs_ok = false;
   {
     v8::TryCatch tc(isolate);
     cjs_ok = CompileCjsFunction(context, code_str, filename_str, true).ToLocal(&fn);
     if (!cjs_ok && tc.HasCaught()) {
       cjs_exception = tc.Exception();
+      cjs_message = tc.Message();
     }
   }
 
@@ -1207,7 +1288,10 @@ napi_status NAPI_CDECL unofficial_napi_contextify_compile_function_for_cjs_loade
   if (!cjs_ok) {
     can_parse_as_esm = CompileAsModule(isolate, context, code_str, filename_str);
     if (!can_parse_as_esm || !should_detect_module) {
-      if (!cjs_exception.IsEmpty()) isolate->ThrowException(cjs_exception);
+      if (!cjs_exception.IsEmpty()) {
+        AttachSyntaxArrowMessage(isolate, context, cjs_exception, cjs_message);
+        isolate->ThrowException(cjs_exception);
+      }
       return cjs_exception.IsEmpty() ? napi_generic_failure : napi_pending_exception;
     }
   }

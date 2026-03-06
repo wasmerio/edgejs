@@ -49,6 +49,9 @@ NAPI_EXTERN napi_status unofficial_napi_get_call_sites(napi_env env,
                                                        uint32_t frames,
                                                        napi_value* callsites_out);
 
+NAPI_EXTERN napi_status unofficial_napi_get_caller_location(napi_env env,
+                                                            napi_value* location_out);
+
 NAPI_EXTERN napi_status unofficial_napi_arraybuffer_view_has_buffer(napi_env env,
                                                                     napi_value value,
                                                                     bool* result_out);
@@ -56,6 +59,14 @@ NAPI_EXTERN napi_status unofficial_napi_arraybuffer_view_has_buffer(napi_env env
 NAPI_EXTERN napi_status unofficial_napi_get_constructor_name(napi_env env,
                                                              napi_value value,
                                                              napi_value* name_out);
+
+// Unofficial helper for Node's internalBinding('util').privateSymbols.
+// Returns a JS-visible private symbol value backed by the engine's hidden
+// private property machinery.
+NAPI_EXTERN napi_status unofficial_napi_create_private_symbol(napi_env env,
+                                                              const char* utf8description,
+                                                              size_t length,
+                                                              napi_value* result_out);
 
 // Unofficial helper for Node-style process.memoryUsage() parity.
 // Returns V8 heap statistics plus allocator-tracked ArrayBuffer memory.

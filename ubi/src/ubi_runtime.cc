@@ -1136,6 +1136,10 @@ bool ShouldExposeGc() {
   return ExecArgvHasFlag("--expose-gc") || ExecArgvHasFlag("--expose_gc");
 }
 
+bool ShouldEnableSharedArrayBufferPerContext() {
+  return ExecArgvHasFlag("--enable-sharedarraybuffer-per-context");
+}
+
 napi_value GlobalGcCallback(napi_env env, napi_callback_info /*info*/) {
   if (unofficial_napi_request_gc_for_testing(env) != napi_ok) {
     napi_throw_error(env, nullptr, "Failed to run gc()");
@@ -1447,6 +1451,14 @@ int RunScriptWithGlobals(napi_env env,
       *error_out = "Failed to fetch global object";
     }
     return 1;
+  }
+  if (ShouldEnableSharedArrayBufferPerContext()) {
+    napi_value sab_key = nullptr;
+    if (napi_create_string_utf8(env, "SharedArrayBuffer", NAPI_AUTO_LENGTH, &sab_key) == napi_ok &&
+        sab_key != nullptr) {
+      bool deleted = false;
+      (void)napi_delete_property(env, global, sab_key, &deleted);
+    }
   }
   if (!EnsureGlobalGcIfRequested(env, global, error_out)) {
     if (error_out != nullptr && error_out->empty()) {

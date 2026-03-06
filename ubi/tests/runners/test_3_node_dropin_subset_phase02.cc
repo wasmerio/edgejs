@@ -1327,16 +1327,13 @@ DEFINE_RAW_NODE_TEST(RawUtilSleepFromNodeTest, "test-util-sleep.js")
 DEFINE_RAW_NODE_TEST(RawUtilPromisifyFromNodeTest, "test-util-promisify.js")
 DEFINE_RAW_NODE_TEST(RawUtilParseEnvFromNodeTest, "test-util-parse-env.js")
 DEFINE_RAW_NODE_TEST(RawUtilInheritsFromNodeTest, "test-util-inherits.js")
-TEST_F(Test3NodeDropinSubsetPhase02, RawUtilGetcallsitesFromNodeTest) {
-  EnvScope s(runtime_.get());
-  std::string error;
-  const int exit_code = RunRawNodeTestScript(s.env, "test-util-getcallsites.js", &error);
-  if (exit_code != 0 && error.find("node:util should be ignored") != std::string::npos) {
-    GTEST_SKIP() << "Skipping util.getCallSites test: callsite frame filtering is not yet fully aligned.";
-  }
-  EXPECT_EQ(exit_code, 0) << "error=" << error;
-  EXPECT_TRUE(error.empty()) << "error=" << error;
-}
+DEFINE_RAW_NODE_TEST(RawUtilGetcallsitesFromNodeTest, "test-util-getcallsites.js")
+DEFINE_RAW_NODE_TEST(RawUtilGetcallsitesPreparestacktraceFromNodeTest,
+                     "test-util-getcallsites-preparestacktrace.js")
+DEFINE_RAW_NODE_TEST(RawUtilInternalFromNodeTest, "test-util-internal.js")
+DEFINE_RAW_NODE_TEST(RawInternalUtilConstructSabFromNodeTest, "test-internal-util-construct-sab.js")
+DEFINE_RAW_NODE_TEST(RawInternalUtilDecorateErrorStackFromNodeTest,
+                     "test-internal-util-decorate-error-stack.js")
 DEFINE_RAW_NODE_TEST(RawUtilFormatFromNodeTest, "test-util-format.js")
 DEFINE_RAW_NODE_TEST(RawUtilDeprecateFromNodeTest, "test-util-deprecate.js")
 DEFINE_RAW_NODE_TEST(RawUtilCallbackifyFromNodeTest, "test-util-callbackify.js")

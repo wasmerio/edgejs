@@ -1366,8 +1366,10 @@ napi_status NAPI_CDECL node_api_create_sharedarraybuffer(napi_env env,
   if (!CheckEnv(env) || result == nullptr) {
     return napi_v8_set_last_error(env, napi_invalid_arg, "Invalid argument");
   }
-  v8::Local<v8::SharedArrayBuffer> sab =
-      v8::SharedArrayBuffer::New(env->isolate, byte_length);
+  v8::Local<v8::SharedArrayBuffer> sab;
+  if (!v8::SharedArrayBuffer::MaybeNew(env->isolate, byte_length).ToLocal(&sab)) {
+    return napi_v8_set_last_error(env, napi_generic_failure, "Failed to create SharedArrayBuffer");
+  }
   if (data != nullptr) *data = sab->Data();
   *result = napi_v8_wrap_value(env, sab);
   if (*result == nullptr) {

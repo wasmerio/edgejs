@@ -224,6 +224,9 @@ std::string LoadBuiltinsConfigJson() {
     std::string body = (newline == std::string::npos) ? raw : raw.substr(newline + 1);
     ReplaceAll(&body, "\"true\"", "true");
     ReplaceAll(&body, "\"false\"", "false");
+    // Ubi does not yet implement Amaro/type-stripping, so process.config
+    // must not advertise it or Node's own tests will take unsupported paths.
+    ReplaceJsonBooleanOrNumber(&body, "node_use_amaro", false);
     cached = body;
     if (!cached.empty()) return cached;
   }
@@ -233,7 +236,7 @@ std::string LoadBuiltinsConfigJson() {
   cached =
       "{"
       "\"variables\":{"
-      "\"node_use_amaro\":true,"
+      "\"node_use_amaro\":false,"
       "\"node_builtin_shareable_builtins\":["
       "\"deps/cjs-module-lexer/lexer.js\","
       "\"deps/cjs-module-lexer/dist/lexer.js\","

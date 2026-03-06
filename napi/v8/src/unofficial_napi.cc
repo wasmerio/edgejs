@@ -824,21 +824,7 @@ napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
 
   v8::Local<v8::StackTrace> stack = v8::StackTrace::CurrentStackTrace(isolate, frames + 1);
   const int frame_count = stack->GetFrameCount();
-  int start_index = 0;
-  if (frame_count > 0) {
-    v8::Local<v8::StackFrame> first_frame = stack->GetFrame(isolate, 0);
-    v8::Local<v8::Value> first_script_name = first_frame->GetScriptName();
-    if (!first_script_name.IsEmpty() && first_script_name->IsString()) {
-      v8::String::Utf8Value first_script_name_utf8(isolate, first_script_name);
-      if (*first_script_name_utf8 != nullptr) {
-        std::string script_name(*first_script_name_utf8,
-                                static_cast<size_t>(first_script_name_utf8.length()));
-        if (script_name.rfind("node:util", 0) == 0) {
-          start_index = 1;
-        }
-      }
-    }
-  }
+  const int start_index = frame_count > 0 ? 1 : 0;
   const int available = frame_count - start_index;
   uint32_t count = available > 0 ? static_cast<uint32_t>(available) : 0;
   if (count > frames) count = frames;
@@ -861,9 +847,6 @@ napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
 
     v8::Local<v8::Value> script_name = frame->GetScriptName();
     if (script_name.IsEmpty()) script_name = v8::String::Empty(isolate);
-    v8::Local<v8::Value> script_name_or_source_url = frame->GetScriptNameOrSourceURL();
-    if (script_name_or_source_url.IsEmpty()) script_name_or_source_url = v8::String::Empty(isolate);
-
     const std::string script_id = std::to_string(frame->GetScriptId());
     v8::Local<v8::String> script_id_v8;
     if (!v8::String::NewFromUtf8(isolate,
@@ -879,7 +862,6 @@ napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
     if (!set_named(callsite, "functionName", function_name) ||
         !set_named(callsite, "scriptId", script_id_v8) ||
         !set_named(callsite, "scriptName", script_name) ||
-        !set_named(callsite, "scriptNameOrSourceURL", script_name_or_source_url) ||
         !set_named(callsite, "lineNumber", v8::Integer::NewFromUnsigned(isolate, line)) ||
         !set_named(callsite, "columnNumber", v8::Integer::NewFromUnsigned(isolate, col)) ||
         !set_named(callsite, "column", v8::Integer::NewFromUnsigned(isolate, col)) ||
@@ -891,6 +873,34 @@ napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
   *callsites_out = napi_v8_wrap_value(env, out);
   if (*callsites_out == nullptr) return napi_generic_failure;
   return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_get_caller_location(napi_env env, napi_value* location_out) {
+  if (env == nullptr || env->isolate == nullptr || location_out == nullptr) return napi_invalid_arg;
+  *location_out = nullptr;
+
+  v8::Isolate* isolate = env->isolate;
+  v8::HandleScope scope(isolate);
+
+  v8::Local<v8::StackTrace> trace = v8::StackTrace::CurrentStackTrace(isolate, 2);
+  if (trace->GetFrameCount() != 2) {
+    return napi_ok;
+  }
+
+  v8::Local<v8::StackFrame> frame = trace->GetFrame(isolate, 1);
+  v8::Local<v8::Value> file = frame->GetScriptNameOrSourceURL();
+  if (file.IsEmpty()) {
+    return napi_ok;
+  }
+
+  v8::Local<v8::Value> values[] = {
+      v8::Integer::New(isolate, frame->GetLineNumber()),
+      v8::Integer::New(isolate, frame->GetColumn()),
+      file,
+  };
+  v8::Local<v8::Array> location = v8::Array::New(isolate, values, 3);
+  *location_out = napi_v8_wrap_value(env, location);
+  return *location_out == nullptr ? napi_generic_failure : napi_ok;
 }
 
 napi_status NAPI_CDECL unofficial_napi_arraybuffer_view_has_buffer(napi_env env,
@@ -912,6 +922,43 @@ napi_status NAPI_CDECL unofficial_napi_get_constructor_name(napi_env env,
   v8::Local<v8::String> name = raw.As<v8::Object>()->GetConstructorName();
   *name_out = napi_v8_wrap_value(env, name);
   return *name_out == nullptr ? napi_generic_failure : napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_create_private_symbol(napi_env env,
+                                                             const char* utf8description,
+                                                             size_t length,
+                                                             napi_value* result_out) {
+  if (env == nullptr || env->isolate == nullptr || result_out == nullptr) return napi_invalid_arg;
+  if (utf8description == nullptr && length > 0) return napi_invalid_arg;
+
+  v8::Isolate* isolate = env->isolate;
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = env->context();
+
+  const char* description = utf8description != nullptr ? utf8description : "";
+  const int v8_length = (length == NAPI_AUTO_LENGTH) ? -1 : static_cast<int>(length);
+  v8::Local<v8::String> desc;
+  if (!v8::String::NewFromUtf8(isolate, description, v8::NewStringType::kInternalized, v8_length)
+           .ToLocal(&desc)) {
+    return napi_generic_failure;
+  }
+
+  v8::Local<v8::Private> priv = v8::Private::ForApi(isolate, desc);
+  v8::Local<v8::ObjectTemplate> tmpl = v8::ObjectTemplate::New(isolate);
+  tmpl->Set(v8::String::NewFromUtf8Literal(isolate, "value"), priv);
+
+  v8::Local<v8::Object> holder;
+  if (!tmpl->NewInstance(context).ToLocal(&holder)) {
+    return napi_generic_failure;
+  }
+
+  v8::Local<v8::Value> symbol_value;
+  if (!holder->Get(context, v8::String::NewFromUtf8Literal(isolate, "value")).ToLocal(&symbol_value)) {
+    return napi_generic_failure;
+  }
+
+  *result_out = napi_v8_wrap_value(env, symbol_value);
+  return *result_out == nullptr ? napi_generic_failure : napi_ok;
 }
 
 napi_status NAPI_CDECL unofficial_napi_get_process_memory_info(

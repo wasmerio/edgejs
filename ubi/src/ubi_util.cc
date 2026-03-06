@@ -1,3 +1,7 @@
+#ifndef NAPI_EXPERIMENTAL
+#define NAPI_EXPERIMENTAL
+#endif
+
 #include "ubi_util.h"
 
 #include "unofficial_napi.h"
@@ -469,21 +473,10 @@ napi_value ConstructSharedArrayBufferCallback(napi_env env, napi_callback_info i
     napi_throw_range_error(env, nullptr, "Invalid array buffer length");
     return nullptr;
   }
-
-  napi_value ctor = GetGlobalNamed(env, "SharedArrayBuffer");
-  if (!IsFunction(env, ctor)) {
-    napi_throw_error(env, nullptr, "SharedArrayBuffer is not available");
-    return nullptr;
-  }
-
-  napi_value len_arg = nullptr;
-  if (napi_create_int64(env, length, &len_arg) != napi_ok || len_arg == nullptr) {
-    return Undefined(env);
-  }
-
-  napi_value argv_ctor[1] = {len_arg};
-  napi_value out = NewInstance(env, ctor, 1, argv_ctor);
-  if (out == nullptr) {
+  void* data = nullptr;
+  napi_value out = nullptr;
+  if (node_api_create_sharedarraybuffer(env, static_cast<size_t>(length), &data, &out) != napi_ok ||
+      out == nullptr) {
     napi_throw_range_error(env, nullptr, "Array buffer allocation failed");
     return nullptr;
   }
@@ -647,6 +640,11 @@ napi_value GetProxyDetailsCallback(napi_env env, napi_callback_info info) {
 }
 
 napi_value GetCallerLocationCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value out = nullptr;
+  if (unofficial_napi_get_caller_location(env, &out) == napi_ok && out != nullptr) {
+    return out;
+  }
+
   napi_value callsites = nullptr;
   if (unofficial_napi_get_call_sites(env, 64, &callsites) != napi_ok || callsites == nullptr) {
     return Undefined(env);
@@ -658,71 +656,38 @@ napi_value GetCallerLocationCallback(napi_env env, napi_callback_info /*info*/) 
   uint32_t length = 0;
   if (napi_get_array_length(env, callsites, &length) != napi_ok || length == 0) return Undefined(env);
 
-  auto location_from_frame = [&](uint32_t index, napi_value* out) -> bool {
-    if (index >= length || out == nullptr) return false;
-    *out = nullptr;
-
+  for (uint32_t i = 0; i < length; ++i) {
     napi_value callsite = nullptr;
-    if (napi_get_element(env, callsites, index, &callsite) != napi_ok || callsite == nullptr) return false;
+    if (napi_get_element(env, callsites, i, &callsite) != napi_ok || callsite == nullptr) continue;
 
-    napi_value file = GetNamedProperty(env, callsite, "scriptNameOrSourceURL");
-    std::string file_str;
-    ValueToUtf8IfString(env, file, &file_str);
-    if (file_str.empty()) {
-      file = GetNamedProperty(env, callsite, "scriptName");
-      file_str.clear();
-      ValueToUtf8IfString(env, file, &file_str);
-    }
-    if (file_str.empty()) {
-      if (napi_create_string_utf8(env, "", 0, &file) != napi_ok || file == nullptr) {
-        return false;
-      }
-    }
-
+    napi_value file = GetNamedProperty(env, callsite, "scriptName");
     napi_value line_v = GetNamedProperty(env, callsite, "lineNumber");
     napi_value column_v = GetNamedProperty(env, callsite, "columnNumber");
-    if (line_v == nullptr || column_v == nullptr) return false;
+    if (file == nullptr || line_v == nullptr || column_v == nullptr) continue;
 
     uint32_t line = 0;
     uint32_t column = 0;
     if (napi_get_value_uint32(env, line_v, &line) != napi_ok ||
         napi_get_value_uint32(env, column_v, &column) != napi_ok) {
-      return false;
+      continue;
     }
 
     napi_value location = nullptr;
-    if (napi_create_array_with_length(env, 3, &location) != napi_ok || location == nullptr) return false;
-
     napi_value line_out = nullptr;
     napi_value column_out = nullptr;
-    if (napi_create_uint32(env, line, &line_out) != napi_ok || line_out == nullptr) return false;
-    if (napi_create_uint32(env, column, &column_out) != napi_ok || column_out == nullptr) return false;
-
+    if (napi_create_array_with_length(env, 3, &location) != napi_ok || location == nullptr ||
+        napi_create_uint32(env, line, &line_out) != napi_ok || line_out == nullptr ||
+        napi_create_uint32(env, column, &column_out) != napi_ok || column_out == nullptr) {
+      continue;
+    }
     if (napi_set_element(env, location, 0, line_out) != napi_ok ||
         napi_set_element(env, location, 1, column_out) != napi_ok ||
         napi_set_element(env, location, 2, file) != napi_ok) {
-      return false;
+      continue;
     }
+    return location;
+  }
 
-    *out = location;
-    return true;
-  };
-
-  // Node uses frame 1 because frame 0 is native util internals. When call-site
-  // metadata includes wrapper frames without script names, fall back to frame 0.
-  napi_value out = nullptr;
-  if (length > 1 && location_from_frame(1, &out)) {
-    return out;
-  }
-  if (location_from_frame(0, &out)) {
-    return out;
-  }
-  for (uint32_t i = 0; i < length; ++i) {
-    if (i == 0 || i == 1) continue;
-    if (location_from_frame(i, &out)) {
-      return out;
-    }
-  }
   return Undefined(env);
 }
 
@@ -943,42 +908,39 @@ bool DefineMethod(napi_env env, napi_value target, const char* name, napi_callba
   return SetNamedProperty(env, target, name, fn);
 }
 
-napi_value CreateSymbol(napi_env env, const char* description) {
-  napi_value desc = nullptr;
-  if (napi_create_string_utf8(env, description, NAPI_AUTO_LENGTH, &desc) != napi_ok || desc == nullptr) {
-    return nullptr;
-  }
-  napi_value sym = nullptr;
-  if (napi_create_symbol(env, desc, &sym) != napi_ok || sym == nullptr) return nullptr;
-  return sym;
-}
-
 bool InstallPrivateSymbols(napi_env env, napi_value binding) {
   napi_value private_symbols = nullptr;
   if (napi_create_object(env, &private_symbols) != napi_ok || private_symbols == nullptr) return false;
 
-  const std::array<const char*, 16> symbol_names = {
-      "untransferable_object_private_symbol",
-      "arrow_message_private_symbol",
-      "decorated_private_symbol",
-      "exit_info_private_symbol",
-      "contextify_context_private_symbol",
-      "host_defined_option_symbol",
-      "entry_point_promise_private_symbol",
-      "entry_point_module_private_symbol",
-      "module_source_private_symbol",
-      "module_export_names_private_symbol",
-      "module_circular_visited_private_symbol",
-      "module_export_private_symbol",
-      "module_first_parent_private_symbol",
-      "module_last_parent_private_symbol",
-      "transfer_mode_private_symbol",
-      "source_map_data_private_symbol",
-  };
+  const std::array<std::pair<const char*, const char*>, 20> symbol_names = {{
+      {"arrow_message_private_symbol", "node:arrowMessage"},
+      {"contextify_context_private_symbol", "node:contextify:context"},
+      {"decorated_private_symbol", "node:decorated"},
+      {"transfer_mode_private_symbol", "node:transfer_mode"},
+      {"host_defined_option_symbol", "node:host_defined_option_symbol"},
+      {"js_transferable_wrapper_private_symbol", "node:js_transferable_wrapper"},
+      {"entry_point_module_private_symbol", "node:entry_point_module"},
+      {"entry_point_promise_private_symbol", "node:entry_point_promise"},
+      {"module_source_private_symbol", "node:module_source"},
+      {"module_export_names_private_symbol", "node:module_export_names"},
+      {"module_circular_visited_private_symbol", "node:module_circular_visited"},
+      {"module_export_private_symbol", "node:module_export"},
+      {"module_first_parent_private_symbol", "node:module_first_parent"},
+      {"module_last_parent_private_symbol", "node:module_last_parent"},
+      {"napi_type_tag", "node:napi:type_tag"},
+      {"napi_wrapper", "node:napi:wrapper"},
+      {"untransferable_object_private_symbol", "node:untransferableObject"},
+      {"exit_info_private_symbol", "node:exit_info_private_symbol"},
+      {"promise_trace_id", "node:promise_trace_id"},
+      {"source_map_data_private_symbol", "node:source_map_data_private_symbol"},
+  }};
 
-  for (const char* key : symbol_names) {
-    napi_value sym = CreateSymbol(env, key);
-    if (sym == nullptr) return false;
+  for (const auto& [key, description] : symbol_names) {
+    napi_value sym = nullptr;
+    if (unofficial_napi_create_private_symbol(env, description, NAPI_AUTO_LENGTH, &sym) != napi_ok ||
+        sym == nullptr) {
+      return false;
+    }
     if (!SetNamedProperty(env, private_symbols, key, sym)) return false;
   }
 
@@ -1013,11 +975,13 @@ bool InstallConstants(napi_env env, napi_value binding) {
 bool InstallShouldAbortToggle(napi_env env, napi_value binding) {
   napi_value ab = nullptr;
   void* data = nullptr;
-  if (napi_create_arraybuffer(env, 1, &data, &ab) != napi_ok || ab == nullptr || data == nullptr) return false;
-  static_cast<uint8_t*>(data)[0] = 1;
+  if (napi_create_arraybuffer(env, sizeof(uint32_t), &data, &ab) != napi_ok || ab == nullptr || data == nullptr) {
+    return false;
+  }
+  static_cast<uint32_t*>(data)[0] = 1;
 
   napi_value out = nullptr;
-  if (napi_create_typedarray(env, napi_uint8_array, 1, ab, 0, &out) != napi_ok || out == nullptr) return false;
+  if (napi_create_typedarray(env, napi_uint32_array, 1, ab, 0, &out) != napi_ok || out == nullptr) return false;
   return SetNamedProperty(env, binding, "shouldAbortOnUncaughtToggle", out);
 }
 
