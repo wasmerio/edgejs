@@ -81,6 +81,240 @@ unsafe extern "C" {
     ) -> i32;
     fn snapi_bridge_unofficial_release_env(scope_handle: u32) -> i32;
     fn snapi_bridge_unofficial_process_microtasks(env_handle: u32) -> i32;
+    fn snapi_bridge_unofficial_request_gc_for_testing(env_handle: u32) -> i32;
+    fn snapi_bridge_unofficial_get_promise_details(
+        env_handle: u32,
+        promise_id: u32,
+        state_out: *mut i32,
+        result_out: *mut u32,
+        has_result_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_get_proxy_details(
+        env_handle: u32,
+        proxy_id: u32,
+        target_out: *mut u32,
+        handler_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_preview_entries(
+        env_handle: u32,
+        value_id: u32,
+        entries_out: *mut u32,
+        is_key_value_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_get_call_sites(
+        env_handle: u32,
+        frames: u32,
+        callsites_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_get_caller_location(env_handle: u32, location_out: *mut u32)
+        -> i32;
+    fn snapi_bridge_unofficial_arraybuffer_view_has_buffer(
+        env_handle: u32,
+        value_id: u32,
+        result_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_get_constructor_name(
+        env_handle: u32,
+        value_id: u32,
+        name_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_create_private_symbol(
+        env_handle: u32,
+        str_ptr: *const i8,
+        wasm_length: u32,
+        out_id: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_get_continuation_preserved_embedder_data(
+        env_handle: u32,
+        out_id: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_set_continuation_preserved_embedder_data(
+        env_handle: u32,
+        value_id: u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_notify_datetime_configuration_change(env_handle: u32) -> i32;
+    fn snapi_bridge_unofficial_create_serdes_binding(
+        env_handle: u32,
+        out_id: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_contains_module_syntax(
+        env_handle: u32,
+        code_id: u32,
+        filename_id: u32,
+        resource_name_id: u32,
+        cjs_var_in_scope: i32,
+        result_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_make_context(
+        env_handle: u32,
+        sandbox_or_symbol_id: u32,
+        name_id: u32,
+        origin_id: u32,
+        allow_code_gen_strings: i32,
+        allow_code_gen_wasm: i32,
+        own_microtask_queue: i32,
+        host_defined_option_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_run_script(
+        env_handle: u32,
+        sandbox_or_null_id: u32,
+        source_id: u32,
+        filename_id: u32,
+        line_offset: i32,
+        column_offset: i32,
+        timeout: i64,
+        display_errors: i32,
+        break_on_sigint: i32,
+        break_on_first_line: i32,
+        host_defined_option_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_dispose_context(
+        env_handle: u32,
+        sandbox_or_context_global_id: u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_compile_function(
+        env_handle: u32,
+        code_id: u32,
+        filename_id: u32,
+        line_offset: i32,
+        column_offset: i32,
+        cached_data_id: u32,
+        produce_cached_data: i32,
+        parsing_context_id: u32,
+        context_extensions_id: u32,
+        params_id: u32,
+        host_defined_option_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_compile_function_for_cjs_loader(
+        env_handle: u32,
+        code_id: u32,
+        filename_id: u32,
+        is_sea_main: i32,
+        should_detect_module: i32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_contextify_create_cached_data(
+        env_handle: u32,
+        code_id: u32,
+        filename_id: u32,
+        line_offset: i32,
+        column_offset: i32,
+        host_defined_option_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_create_source_text(
+        env_handle: u32,
+        wrapper_id: u32,
+        url_id: u32,
+        context_id: u32,
+        source_id: u32,
+        line_offset: i32,
+        column_offset: i32,
+        cached_data_or_id: u32,
+        handle_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_create_synthetic(
+        env_handle: u32,
+        wrapper_id: u32,
+        url_id: u32,
+        context_id: u32,
+        export_names_id: u32,
+        synthetic_eval_steps_id: u32,
+        handle_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_destroy(env_handle: u32, handle_id: u32) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_get_module_requests(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_link(
+        env_handle: u32,
+        handle_id: u32,
+        count: u32,
+        linked_handle_ids: *const u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_instantiate(env_handle: u32, handle_id: u32) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_evaluate(
+        env_handle: u32,
+        handle_id: u32,
+        timeout: i64,
+        break_on_sigint: i32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_evaluate_sync(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_get_namespace(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_get_status(
+        env_handle: u32,
+        handle_id: u32,
+        status_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_get_error(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_has_top_level_await(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_has_async_graph(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut i32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_set_export(
+        env_handle: u32,
+        handle_id: u32,
+        export_name_id: u32,
+        export_value_id: u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_set_module_source_object(
+        env_handle: u32,
+        handle_id: u32,
+        source_object_id: u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_get_module_source_object(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_create_cached_data(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_set_import_module_dynamically_callback(
+        env_handle: u32,
+        callback_id: u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_set_initialize_import_meta_object_callback(
+        env_handle: u32,
+        callback_id: u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_import_module_dynamically(
+        env_handle: u32,
+        argc: u32,
+        argv_ids: *const u32,
+        result_out: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_unofficial_module_wrap_create_required_module_facade(
+        env_handle: u32,
+        handle_id: u32,
+        result_out: *mut u32,
+    ) -> i32;
     // Value creation
     fn snapi_bridge_get_undefined(out_id: *mut u32) -> i32;
     fn snapi_bridge_get_null(out_id: *mut u32) -> i32;
@@ -194,10 +428,21 @@ unsafe extern "C" {
         byte_length: u32,
         out_id: *mut u32,
     ) -> i32;
+    fn snapi_bridge_create_external_buffer(
+        data_addr: u64,
+        byte_length: u32,
+        out_id: *mut u32,
+    ) -> i32;
     fn snapi_bridge_get_arraybuffer_info(id: u32, data_out: *mut u64, byte_length: *mut u32)
         -> i32;
     fn snapi_bridge_detach_arraybuffer(id: u32) -> i32;
     fn snapi_bridge_is_detached_arraybuffer(id: u32, result: *mut i32) -> i32;
+    fn snapi_bridge_is_sharedarraybuffer(id: u32, result: *mut i32) -> i32;
+    fn snapi_bridge_create_sharedarraybuffer(
+        byte_length: u32,
+        data_out: *mut u64,
+        out_id: *mut u32,
+    ) -> i32;
     // TypedArray
     fn snapi_bridge_create_typedarray(
         typ: i32,
@@ -323,6 +568,12 @@ unsafe extern "C" {
     ) -> i32;
     fn snapi_bridge_alloc_cb_reg_id() -> u32;
     fn snapi_bridge_register_callback(reg_id: u32, wasm_fn_ptr: u32, data_val: u64);
+    fn snapi_bridge_register_callback_pair(
+        reg_id: u32,
+        wasm_getter_fn_ptr: u32,
+        wasm_setter_fn_ptr: u32,
+        data_val: u64,
+    );
     fn snapi_bridge_get_cb_info(
         argc_ptr: *mut u32,
         argv_out: *mut u32,
@@ -345,6 +596,17 @@ unsafe extern "C" {
         prop_setter_reg_ids: *const u32,
         prop_attributes: *const i32,
         out_id: *mut u32,
+    ) -> i32;
+    fn snapi_bridge_define_properties(
+        obj_id: u32,
+        prop_count: u32,
+        prop_names: *const *const i8,
+        prop_types: *const u32,
+        prop_value_ids: *const u32,
+        prop_method_reg_ids: *const u32,
+        prop_getter_reg_ids: *const u32,
+        prop_setter_reg_ids: *const u32,
+        prop_attributes: *const i32,
     ) -> i32;
     // Cleanup
     #[allow(dead_code)]
@@ -534,6 +796,974 @@ fn guest_unofficial_napi_process_microtasks(
 ) -> i32 {
     let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
     unsafe { snapi_bridge_unofficial_process_microtasks(env_handle) }
+}
+
+fn guest_unofficial_napi_request_gc_for_testing(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_request_gc_for_testing(env_handle) }
+}
+
+fn guest_unofficial_napi_get_promise_details(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    promise: i32,
+    state_ptr: i32,
+    result_ptr: i32,
+    has_result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let promise_id = if promise > 0 { promise as u32 } else { 0 };
+    let mut state = 0i32;
+    let mut result_id = 0u32;
+    let mut has_result = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_get_promise_details(
+            env_handle,
+            promise_id,
+            &mut state,
+            &mut result_id,
+            &mut has_result,
+        )
+    };
+    if status != 0 {
+        return status;
+    }
+    if state_ptr > 0 {
+        write_guest_i32(&mut env, state_ptr as u32, state);
+    }
+    if result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    if has_result_ptr > 0 {
+        write_guest_u8(&mut env, has_result_ptr as u32, (has_result != 0) as u8);
+    }
+    0
+}
+
+fn guest_unofficial_napi_get_proxy_details(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    proxy: i32,
+    target_ptr: i32,
+    handler_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let proxy_id = if proxy > 0 { proxy as u32 } else { 0 };
+    let mut target_id = 0u32;
+    let mut handler_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_get_proxy_details(
+            env_handle,
+            proxy_id,
+            &mut target_id,
+            &mut handler_id,
+        )
+    };
+    if status != 0 {
+        return status;
+    }
+    if target_ptr > 0 {
+        write_guest_u32(&mut env, target_ptr as u32, target_id);
+    }
+    if handler_ptr > 0 {
+        write_guest_u32(&mut env, handler_ptr as u32, handler_id);
+    }
+    0
+}
+
+fn guest_unofficial_napi_preview_entries(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    value: i32,
+    entries_ptr: i32,
+    is_key_value_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let value_id = if value > 0 { value as u32 } else { 0 };
+    let mut entries_id = 0u32;
+    let mut is_key_value = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_preview_entries(
+            env_handle,
+            value_id,
+            &mut entries_id,
+            &mut is_key_value,
+        )
+    };
+    if status != 0 {
+        return status;
+    }
+    if entries_ptr > 0 {
+        write_guest_u32(&mut env, entries_ptr as u32, entries_id);
+    }
+    if is_key_value_ptr > 0 {
+        write_guest_u8(&mut env, is_key_value_ptr as u32, (is_key_value != 0) as u8);
+    }
+    0
+}
+
+fn guest_unofficial_napi_get_call_sites(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    frames: i32,
+    callsites_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut callsites_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_get_call_sites(env_handle, frames as u32, &mut callsites_id)
+    };
+    if status == 0 && callsites_ptr > 0 {
+        write_guest_u32(&mut env, callsites_ptr as u32, callsites_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_get_caller_location(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    location_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut location_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_get_caller_location(env_handle, &mut location_id)
+    };
+    if status == 0 && location_ptr > 0 {
+        write_guest_u32(&mut env, location_ptr as u32, location_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_arraybuffer_view_has_buffer(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    value: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let value_id = if value > 0 { value as u32 } else { 0 };
+    let mut result = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_arraybuffer_view_has_buffer(env_handle, value_id, &mut result)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u8(&mut env, result_ptr as u32, (result != 0) as u8);
+    }
+    status
+}
+
+fn guest_unofficial_napi_get_constructor_name(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    value: i32,
+    name_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let value_id = if value > 0 { value as u32 } else { 0 };
+    let mut name_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_get_constructor_name(env_handle, value_id, &mut name_id)
+    };
+    if status == 0 && name_ptr > 0 {
+        write_guest_u32(&mut env, name_ptr as u32, name_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_create_private_symbol(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    desc_ptr: i32,
+    length: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let wl = length as u32;
+    let desc = if desc_ptr > 0 {
+        if wl == 0xFFFFFFFFu32 {
+            read_guest_c_string(&mut env, desc_ptr)
+        } else {
+            read_guest_bytes(&mut env, desc_ptr, wl as usize)
+        }
+    } else {
+        Some(Vec::new())
+    };
+    let Some(desc) = desc else {
+        return 1;
+    };
+    let cs = CString::new(desc).unwrap_or_default();
+    let mut out = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_create_private_symbol(env_handle, cs.as_ptr(), wl, &mut out)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, out);
+    }
+    status
+}
+
+fn guest_unofficial_napi_get_continuation_preserved_embedder_data(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut out = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_get_continuation_preserved_embedder_data(env_handle, &mut out)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, out);
+    }
+    status
+}
+
+fn guest_unofficial_napi_set_continuation_preserved_embedder_data(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    value: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let value_id = if value > 0 { value as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_set_continuation_preserved_embedder_data(env_handle, value_id) }
+}
+
+fn guest_unofficial_napi_notify_datetime_configuration_change(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_notify_datetime_configuration_change(env_handle) }
+}
+
+fn guest_unofficial_napi_create_serdes_binding(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut out = 0u32;
+    let status = unsafe { snapi_bridge_unofficial_create_serdes_binding(env_handle, &mut out) };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, out);
+    }
+    status
+}
+
+fn guest_napi_add_env_cleanup_hook(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    _napi_env: i32,
+    _fun: i32,
+    _arg: i32,
+) -> i32 {
+    0
+}
+
+fn guest_napi_remove_env_cleanup_hook(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    _napi_env: i32,
+    _fun: i32,
+    _arg: i32,
+) -> i32 {
+    0
+}
+
+fn guest_unofficial_napi_contextify_contains_module_syntax(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    code: i32,
+    filename: i32,
+    resource_name_or_undefined: i32,
+    cjs_var_in_scope: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let code_id = if code > 0 { code as u32 } else { 0 };
+    let filename_id = if filename > 0 { filename as u32 } else { 0 };
+    let resource_name_id = if resource_name_or_undefined > 0 {
+        resource_name_or_undefined as u32
+    } else {
+        0
+    };
+    let mut result = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_contains_module_syntax(
+            env_handle,
+            code_id,
+            filename_id,
+            resource_name_id,
+            cjs_var_in_scope,
+            &mut result,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u8(&mut env, result_ptr as u32, (result != 0) as u8);
+    }
+    status
+}
+
+fn guest_unofficial_napi_contextify_make_context(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    sandbox_or_symbol: i32,
+    name: i32,
+    origin_or_undefined: i32,
+    allow_code_gen_strings: i32,
+    allow_code_gen_wasm: i32,
+    own_microtask_queue: i32,
+    host_defined_option_id: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_make_context(
+            env_handle,
+            sandbox_or_symbol as u32,
+            name as u32,
+            if origin_or_undefined > 0 {
+                origin_or_undefined as u32
+            } else {
+                0
+            },
+            allow_code_gen_strings,
+            allow_code_gen_wasm,
+            own_microtask_queue,
+            if host_defined_option_id > 0 {
+                host_defined_option_id as u32
+            } else {
+                0
+            },
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+#[allow(clippy::too_many_arguments)]
+fn guest_unofficial_napi_contextify_run_script(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    sandbox_or_null: i32,
+    source: i32,
+    filename: i32,
+    line_offset: i32,
+    column_offset: i32,
+    timeout: i64,
+    display_errors: i32,
+    break_on_sigint: i32,
+    break_on_first_line: i32,
+    host_defined_option_id: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_run_script(
+            env_handle,
+            if sandbox_or_null > 0 {
+                sandbox_or_null as u32
+            } else {
+                0
+            },
+            source as u32,
+            filename as u32,
+            line_offset,
+            column_offset,
+            timeout,
+            display_errors,
+            break_on_sigint,
+            break_on_first_line,
+            if host_defined_option_id > 0 {
+                host_defined_option_id as u32
+            } else {
+                0
+            },
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_contextify_dispose_context(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    sandbox_or_context_global: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe {
+        snapi_bridge_unofficial_contextify_dispose_context(
+            env_handle,
+            sandbox_or_context_global as u32,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn guest_unofficial_napi_contextify_compile_function(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    code: i32,
+    filename: i32,
+    line_offset: i32,
+    column_offset: i32,
+    cached_data_or_undefined: i32,
+    produce_cached_data: i32,
+    parsing_context_or_undefined: i32,
+    context_extensions_or_undefined: i32,
+    params_or_undefined: i32,
+    host_defined_option_id: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_compile_function(
+            env_handle,
+            code as u32,
+            filename as u32,
+            line_offset,
+            column_offset,
+            if cached_data_or_undefined > 0 {
+                cached_data_or_undefined as u32
+            } else {
+                0
+            },
+            produce_cached_data,
+            if parsing_context_or_undefined > 0 {
+                parsing_context_or_undefined as u32
+            } else {
+                0
+            },
+            if context_extensions_or_undefined > 0 {
+                context_extensions_or_undefined as u32
+            } else {
+                0
+            },
+            if params_or_undefined > 0 {
+                params_or_undefined as u32
+            } else {
+                0
+            },
+            if host_defined_option_id > 0 {
+                host_defined_option_id as u32
+            } else {
+                0
+            },
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_contextify_compile_function_for_cjs_loader(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    code: i32,
+    filename: i32,
+    is_sea_main: i32,
+    should_detect_module: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_compile_function_for_cjs_loader(
+            env_handle,
+            code as u32,
+            filename as u32,
+            is_sea_main,
+            should_detect_module,
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_contextify_create_cached_data(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    code: i32,
+    filename: i32,
+    line_offset: i32,
+    column_offset: i32,
+    host_defined_option_id: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_create_cached_data(
+            env_handle,
+            code as u32,
+            filename as u32,
+            line_offset,
+            column_offset,
+            if host_defined_option_id > 0 {
+                host_defined_option_id as u32
+            } else {
+                0
+            },
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+#[allow(clippy::too_many_arguments)]
+fn guest_unofficial_napi_module_wrap_create_source_text(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    wrapper: i32,
+    url: i32,
+    context_or_undefined: i32,
+    source: i32,
+    line_offset: i32,
+    column_offset: i32,
+    cached_data_or_id: i32,
+    handle_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut handle_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_create_source_text(
+            env_handle,
+            wrapper as u32,
+            url as u32,
+            if context_or_undefined > 0 {
+                context_or_undefined as u32
+            } else {
+                0
+            },
+            source as u32,
+            line_offset,
+            column_offset,
+            if cached_data_or_id > 0 {
+                cached_data_or_id as u32
+            } else {
+                0
+            },
+            &mut handle_id,
+        )
+    };
+    if status == 0 && handle_ptr > 0 {
+        write_guest_u32(&mut env, handle_ptr as u32, handle_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_create_synthetic(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    wrapper: i32,
+    url: i32,
+    context_or_undefined: i32,
+    export_names: i32,
+    synthetic_eval_steps: i32,
+    handle_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut handle_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_create_synthetic(
+            env_handle,
+            wrapper as u32,
+            url as u32,
+            if context_or_undefined > 0 {
+                context_or_undefined as u32
+            } else {
+                0
+            },
+            export_names as u32,
+            synthetic_eval_steps as u32,
+            &mut handle_id,
+        )
+    };
+    if status == 0 && handle_ptr > 0 {
+        write_guest_u32(&mut env, handle_ptr as u32, handle_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_destroy(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_module_wrap_destroy(env_handle, handle as u32) }
+}
+
+fn guest_unofficial_napi_module_wrap_get_module_requests(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_get_module_requests(
+            env_handle,
+            handle as u32,
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_link(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    count: i32,
+    linked_handles_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let count_u = count as u32;
+    let linked_handles = if count_u > 0 {
+        let Some(ids) = read_guest_u32_array(&mut env, linked_handles_ptr, count_u as usize) else {
+            return 1;
+        };
+        ids
+    } else {
+        Vec::new()
+    };
+    unsafe {
+        snapi_bridge_unofficial_module_wrap_link(
+            env_handle,
+            handle as u32,
+            count_u,
+            linked_handles.as_ptr(),
+        )
+    }
+}
+
+fn guest_unofficial_napi_module_wrap_instantiate(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe { snapi_bridge_unofficial_module_wrap_instantiate(env_handle, handle as u32) }
+}
+
+fn guest_unofficial_napi_module_wrap_evaluate(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    timeout: i64,
+    break_on_sigint: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_evaluate(
+            env_handle,
+            handle as u32,
+            timeout,
+            break_on_sigint,
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_evaluate_sync(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_evaluate_sync(env_handle, handle as u32, &mut result_id)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_get_namespace(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_get_namespace(env_handle, handle as u32, &mut result_id)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_get_status(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    status_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut status_val = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_get_status(env_handle, handle as u32, &mut status_val)
+    };
+    if status == 0 && status_ptr > 0 {
+        write_guest_i32(&mut env, status_ptr as u32, status_val);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_get_error(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_get_error(env_handle, handle as u32, &mut result_id)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_has_top_level_await(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_has_top_level_await(
+            env_handle,
+            handle as u32,
+            &mut result,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u8(&mut env, result_ptr as u32, (result != 0) as u8);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_has_async_graph(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result = 0i32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_has_async_graph(env_handle, handle as u32, &mut result)
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u8(&mut env, result_ptr as u32, (result != 0) as u8);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_set_export(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    export_name: i32,
+    export_value: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe {
+        snapi_bridge_unofficial_module_wrap_set_export(
+            env_handle,
+            handle as u32,
+            export_name as u32,
+            if export_value > 0 {
+                export_value as u32
+            } else {
+                0
+            },
+        )
+    }
+}
+
+fn guest_unofficial_napi_module_wrap_set_module_source_object(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    source_object: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe {
+        snapi_bridge_unofficial_module_wrap_set_module_source_object(
+            env_handle,
+            handle as u32,
+            if source_object > 0 {
+                source_object as u32
+            } else {
+                0
+            },
+        )
+    }
+}
+
+fn guest_unofficial_napi_module_wrap_get_module_source_object(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_get_module_source_object(
+            env_handle,
+            handle as u32,
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_create_cached_data(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_create_cached_data(
+            env_handle,
+            handle as u32,
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_set_import_module_dynamically_callback(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    callback: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe {
+        snapi_bridge_unofficial_module_wrap_set_import_module_dynamically_callback(
+            env_handle,
+            if callback > 0 { callback as u32 } else { 0 },
+        )
+    }
+}
+
+fn guest_unofficial_napi_module_wrap_set_initialize_import_meta_object_callback(
+    _env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    callback: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    unsafe {
+        snapi_bridge_unofficial_module_wrap_set_initialize_import_meta_object_callback(
+            env_handle,
+            if callback > 0 { callback as u32 } else { 0 },
+        )
+    }
+}
+
+fn guest_unofficial_napi_module_wrap_import_module_dynamically(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    argc: i32,
+    argv_ptr: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let argc_u = argc as u32;
+    let argv_ids = if argc_u > 0 {
+        let Some(ids) = read_guest_u32_array(&mut env, argv_ptr, argc_u as usize) else {
+            return 1;
+        };
+        ids
+    } else {
+        Vec::new()
+    };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_import_module_dynamically(
+            env_handle,
+            argc_u,
+            argv_ids.as_ptr(),
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
+}
+
+fn guest_unofficial_napi_module_wrap_create_required_module_facade(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    napi_env: i32,
+    handle: i32,
+    result_ptr: i32,
+) -> i32 {
+    let env_handle = if napi_env > 0 { napi_env as u32 } else { 0 };
+    let mut result_id = 0u32;
+    let status = unsafe {
+        snapi_bridge_unofficial_module_wrap_create_required_module_facade(
+            env_handle,
+            handle as u32,
+            &mut result_id,
+        )
+    };
+    if status == 0 && result_ptr > 0 {
+        write_guest_u32(&mut env, result_ptr as u32, result_id);
+    }
+    status
 }
 
 // --- Singleton getters ---
@@ -1554,6 +2784,71 @@ fn guest_napi_create_arraybuffer(
     }
 }
 
+fn guest_napi_create_external_arraybuffer(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    _e: i32,
+    external_data: i32,
+    byte_length: i32,
+    _finalize_cb: i32,
+    _finalize_hint: i32,
+    rp: i32,
+) -> i32 {
+    let memory = env.data().memory.clone();
+    let Some(memory) = memory else {
+        return 1;
+    };
+
+    let host_addr: u64 = {
+        let (_, store_ref) = env.data_and_store_mut();
+        let view = memory.view(&store_ref);
+        let host_base = view.data_ptr() as u64;
+        host_base + external_data as u64
+    };
+
+    let mut out: u32 = 0;
+    let s =
+        unsafe { snapi_bridge_create_external_arraybuffer(host_addr, byte_length as u32, &mut out) };
+    if s == 0 {
+        env.data_mut()
+            .guest_data_ptrs
+            .insert(out, external_data as u32);
+        write_guest_u32(&mut env, rp as u32, out);
+    }
+    s
+}
+
+fn guest_napi_create_external_buffer(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    _e: i32,
+    external_data: i32,
+    byte_length: i32,
+    _finalize_cb: i32,
+    _finalize_hint: i32,
+    rp: i32,
+) -> i32 {
+    let memory = env.data().memory.clone();
+    let Some(memory) = memory else {
+        return 1;
+    };
+
+    let host_addr: u64 = {
+        let (_, store_ref) = env.data_and_store_mut();
+        let view = memory.view(&store_ref);
+        let host_base = view.data_ptr() as u64;
+        host_base + external_data as u64
+    };
+
+    let mut out: u32 = 0;
+    let s = unsafe { snapi_bridge_create_external_buffer(host_addr, byte_length as u32, &mut out) };
+    if s == 0 {
+        env.data_mut()
+            .guest_data_ptrs
+            .insert(out, external_data as u32);
+        write_guest_u32(&mut env, rp as u32, out);
+    }
+    s
+}
+
 fn guest_napi_get_arraybuffer_info(
     mut env: FunctionEnvMut<RuntimeEnv>,
     _e: i32,
@@ -1608,6 +2903,43 @@ fn guest_napi_is_detached_arraybuffer(
     if s == 0 {
         write_guest_u8(&mut env, rp as u32, r as u8);
     }
+    s
+}
+
+fn guest_node_api_is_sharedarraybuffer(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    _e: i32,
+    value: i32,
+    rp: i32,
+) -> i32 {
+    let mut r = 0i32;
+    let s = unsafe { snapi_bridge_is_sharedarraybuffer(value as u32, &mut r) };
+    if s == 0 {
+        write_guest_u8(&mut env, rp as u32, r as u8);
+    }
+    s
+}
+
+fn guest_node_api_create_sharedarraybuffer(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    _e: i32,
+    byte_length: i32,
+    data_ptr: i32,
+    rp: i32,
+) -> i32 {
+    let mut host_data_addr = 0u64;
+    let mut out = 0u32;
+    let s = unsafe {
+        snapi_bridge_create_sharedarraybuffer(byte_length as u32, &mut host_data_addr, &mut out)
+    };
+    if s != 0 {
+        return s;
+    }
+
+    if data_ptr > 0 {
+        write_guest_u32(&mut env, data_ptr as u32, host_data_addr as u32);
+    }
+    write_guest_u32(&mut env, rp as u32, out);
     s
 }
 
@@ -2173,16 +3505,14 @@ fn guest_napi_define_class(
         } else if getter_ptr != 0 && setter_ptr != 0 {
             // Getter + Setter
             let reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
-            unsafe { snapi_bridge_register_callback(reg_id, getter_ptr, data_ptr as u64) };
-            // Note: N-API shares the data pointer between getter and setter,
-            // so we use the same reg_id for both (getter takes precedence)
+            unsafe {
+                snapi_bridge_register_callback_pair(reg_id, getter_ptr, setter_ptr, data_ptr as u64)
+            };
             prop_types.push(4);
             prop_value_ids.push(0);
             prop_method_reg_ids.push(0);
             prop_getter_reg_ids.push(reg_id);
-            let setter_reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
-            unsafe { snapi_bridge_register_callback(setter_reg_id, setter_ptr, data_ptr as u64) };
-            prop_setter_reg_ids.push(setter_reg_id);
+            prop_setter_reg_ids.push(0);
         } else if getter_ptr != 0 {
             // Getter only
             let reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
@@ -2241,6 +3571,155 @@ fn guest_napi_define_class(
     }
     write_guest_u32(&mut env, rp as u32, out);
     0
+}
+
+fn guest_napi_define_properties(
+    mut env: FunctionEnvMut<RuntimeEnv>,
+    _e: i32,
+    obj: i32,
+    prop_count: i32,
+    props_ptr: i32,
+) -> i32 {
+    let pc = prop_count as u32;
+    if pc == 0 {
+        return unsafe {
+            snapi_bridge_define_properties(
+                obj as u32,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+    }
+
+    let total_bytes = pc as usize * PROP_DESC_SIZE;
+    let Some(raw) = read_guest_bytes(&mut env, props_ptr, total_bytes) else {
+        return 1;
+    };
+
+    let mut prop_names_c: Vec<CString> = Vec::with_capacity(pc as usize);
+    let mut prop_names_ptrs: Vec<*const i8> = Vec::with_capacity(pc as usize);
+    let mut prop_types: Vec<u32> = Vec::with_capacity(pc as usize);
+    let mut prop_value_ids: Vec<u32> = Vec::with_capacity(pc as usize);
+    let mut prop_method_reg_ids: Vec<u32> = Vec::with_capacity(pc as usize);
+    let mut prop_getter_reg_ids: Vec<u32> = Vec::with_capacity(pc as usize);
+    let mut prop_setter_reg_ids: Vec<u32> = Vec::with_capacity(pc as usize);
+    let mut prop_attributes: Vec<i32> = Vec::with_capacity(pc as usize);
+
+    for i in 0..pc as usize {
+        let base = i * PROP_DESC_SIZE;
+        let utf8name_guest =
+            u32::from_le_bytes([raw[base], raw[base + 1], raw[base + 2], raw[base + 3]]);
+        let _name_id =
+            u32::from_le_bytes([raw[base + 4], raw[base + 5], raw[base + 6], raw[base + 7]]);
+        let method_ptr =
+            u32::from_le_bytes([raw[base + 8], raw[base + 9], raw[base + 10], raw[base + 11]]);
+        let getter_ptr = u32::from_le_bytes([
+            raw[base + 12],
+            raw[base + 13],
+            raw[base + 14],
+            raw[base + 15],
+        ]);
+        let setter_ptr = u32::from_le_bytes([
+            raw[base + 16],
+            raw[base + 17],
+            raw[base + 18],
+            raw[base + 19],
+        ]);
+        let value_id = u32::from_le_bytes([
+            raw[base + 20],
+            raw[base + 21],
+            raw[base + 22],
+            raw[base + 23],
+        ]);
+        let attrs = i32::from_le_bytes([
+            raw[base + 24],
+            raw[base + 25],
+            raw[base + 26],
+            raw[base + 27],
+        ]);
+        let data_ptr = u32::from_le_bytes([
+            raw[base + 28],
+            raw[base + 29],
+            raw[base + 30],
+            raw[base + 31],
+        ]);
+
+        let pname = if utf8name_guest != 0 {
+            read_guest_c_string(&mut env, utf8name_guest as i32).unwrap_or_default()
+        } else {
+            vec![]
+        };
+        let c_pname = CString::new(pname).unwrap_or_default();
+
+        if method_ptr != 0 {
+            let reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
+            unsafe { snapi_bridge_register_callback(reg_id, method_ptr, data_ptr as u64) };
+            prop_types.push(1);
+            prop_value_ids.push(0);
+            prop_method_reg_ids.push(reg_id);
+            prop_getter_reg_ids.push(0);
+            prop_setter_reg_ids.push(0);
+        } else if getter_ptr != 0 && setter_ptr != 0 {
+            let reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
+            unsafe {
+                snapi_bridge_register_callback_pair(reg_id, getter_ptr, setter_ptr, data_ptr as u64)
+            };
+            prop_types.push(4);
+            prop_value_ids.push(0);
+            prop_method_reg_ids.push(0);
+            prop_getter_reg_ids.push(reg_id);
+            prop_setter_reg_ids.push(0);
+        } else if getter_ptr != 0 {
+            let reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
+            unsafe { snapi_bridge_register_callback(reg_id, getter_ptr, data_ptr as u64) };
+            prop_types.push(2);
+            prop_value_ids.push(0);
+            prop_method_reg_ids.push(0);
+            prop_getter_reg_ids.push(reg_id);
+            prop_setter_reg_ids.push(0);
+        } else if setter_ptr != 0 {
+            let reg_id = unsafe { snapi_bridge_alloc_cb_reg_id() };
+            unsafe { snapi_bridge_register_callback(reg_id, setter_ptr, data_ptr as u64) };
+            prop_types.push(3);
+            prop_value_ids.push(0);
+            prop_method_reg_ids.push(0);
+            prop_getter_reg_ids.push(0);
+            prop_setter_reg_ids.push(reg_id);
+        } else {
+            prop_types.push(0);
+            prop_value_ids.push(value_id);
+            prop_method_reg_ids.push(0);
+            prop_getter_reg_ids.push(0);
+            prop_setter_reg_ids.push(0);
+        }
+
+        prop_attributes.push(attrs);
+        prop_names_c.push(c_pname);
+    }
+
+    for cn in &prop_names_c {
+        prop_names_ptrs.push(cn.as_ptr());
+    }
+
+    unsafe {
+        snapi_bridge_define_properties(
+            obj as u32,
+            pc,
+            prop_names_ptrs.as_ptr(),
+            prop_types.as_ptr(),
+            prop_value_ids.as_ptr(),
+            prop_method_reg_ids.as_ptr(),
+            prop_getter_reg_ids.as_ptr(),
+            prop_setter_reg_ids.as_ptr(),
+            prop_attributes.as_ptr(),
+        )
+    }
 }
 
 // --- Script execution ---
@@ -2894,6 +4373,170 @@ fn register_napi_imports(store: &mut Store, fe: &FunctionEnv<RuntimeEnv>, io: &m
         "unofficial_napi_process_microtasks",
         guest_unofficial_napi_process_microtasks
     );
+    reg!(
+        "unofficial_napi_request_gc_for_testing",
+        guest_unofficial_napi_request_gc_for_testing
+    );
+    reg!(
+        "unofficial_napi_get_promise_details",
+        guest_unofficial_napi_get_promise_details
+    );
+    reg!(
+        "unofficial_napi_get_proxy_details",
+        guest_unofficial_napi_get_proxy_details
+    );
+    reg!(
+        "unofficial_napi_preview_entries",
+        guest_unofficial_napi_preview_entries
+    );
+    reg!(
+        "unofficial_napi_get_call_sites",
+        guest_unofficial_napi_get_call_sites
+    );
+    reg!(
+        "unofficial_napi_get_caller_location",
+        guest_unofficial_napi_get_caller_location
+    );
+    reg!(
+        "unofficial_napi_arraybuffer_view_has_buffer",
+        guest_unofficial_napi_arraybuffer_view_has_buffer
+    );
+    reg!(
+        "unofficial_napi_get_constructor_name",
+        guest_unofficial_napi_get_constructor_name
+    );
+    reg!(
+        "unofficial_napi_create_private_symbol",
+        guest_unofficial_napi_create_private_symbol
+    );
+    reg!(
+        "unofficial_napi_get_continuation_preserved_embedder_data",
+        guest_unofficial_napi_get_continuation_preserved_embedder_data
+    );
+    reg!(
+        "unofficial_napi_set_continuation_preserved_embedder_data",
+        guest_unofficial_napi_set_continuation_preserved_embedder_data
+    );
+    reg!(
+        "unofficial_napi_notify_datetime_configuration_change",
+        guest_unofficial_napi_notify_datetime_configuration_change
+    );
+    reg!(
+        "unofficial_napi_create_serdes_binding",
+        guest_unofficial_napi_create_serdes_binding
+    );
+    reg!(
+        "unofficial_napi_contextify_contains_module_syntax",
+        guest_unofficial_napi_contextify_contains_module_syntax
+    );
+    reg!(
+        "unofficial_napi_contextify_make_context",
+        guest_unofficial_napi_contextify_make_context
+    );
+    reg!(
+        "unofficial_napi_contextify_run_script",
+        guest_unofficial_napi_contextify_run_script
+    );
+    reg!(
+        "unofficial_napi_contextify_dispose_context",
+        guest_unofficial_napi_contextify_dispose_context
+    );
+    reg!(
+        "unofficial_napi_contextify_compile_function",
+        guest_unofficial_napi_contextify_compile_function
+    );
+    reg!(
+        "unofficial_napi_contextify_compile_function_for_cjs_loader",
+        guest_unofficial_napi_contextify_compile_function_for_cjs_loader
+    );
+    reg!(
+        "unofficial_napi_contextify_create_cached_data",
+        guest_unofficial_napi_contextify_create_cached_data
+    );
+    reg!(
+        "unofficial_napi_module_wrap_create_source_text",
+        guest_unofficial_napi_module_wrap_create_source_text
+    );
+    reg!(
+        "unofficial_napi_module_wrap_create_synthetic",
+        guest_unofficial_napi_module_wrap_create_synthetic
+    );
+    reg!(
+        "unofficial_napi_module_wrap_destroy",
+        guest_unofficial_napi_module_wrap_destroy
+    );
+    reg!(
+        "unofficial_napi_module_wrap_get_module_requests",
+        guest_unofficial_napi_module_wrap_get_module_requests
+    );
+    reg!(
+        "unofficial_napi_module_wrap_link",
+        guest_unofficial_napi_module_wrap_link
+    );
+    reg!(
+        "unofficial_napi_module_wrap_instantiate",
+        guest_unofficial_napi_module_wrap_instantiate
+    );
+    reg!(
+        "unofficial_napi_module_wrap_evaluate",
+        guest_unofficial_napi_module_wrap_evaluate
+    );
+    reg!(
+        "unofficial_napi_module_wrap_evaluate_sync",
+        guest_unofficial_napi_module_wrap_evaluate_sync
+    );
+    reg!(
+        "unofficial_napi_module_wrap_get_namespace",
+        guest_unofficial_napi_module_wrap_get_namespace
+    );
+    reg!(
+        "unofficial_napi_module_wrap_get_status",
+        guest_unofficial_napi_module_wrap_get_status
+    );
+    reg!(
+        "unofficial_napi_module_wrap_get_error",
+        guest_unofficial_napi_module_wrap_get_error
+    );
+    reg!(
+        "unofficial_napi_module_wrap_has_top_level_await",
+        guest_unofficial_napi_module_wrap_has_top_level_await
+    );
+    reg!(
+        "unofficial_napi_module_wrap_has_async_graph",
+        guest_unofficial_napi_module_wrap_has_async_graph
+    );
+    reg!(
+        "unofficial_napi_module_wrap_set_export",
+        guest_unofficial_napi_module_wrap_set_export
+    );
+    reg!(
+        "unofficial_napi_module_wrap_set_module_source_object",
+        guest_unofficial_napi_module_wrap_set_module_source_object
+    );
+    reg!(
+        "unofficial_napi_module_wrap_get_module_source_object",
+        guest_unofficial_napi_module_wrap_get_module_source_object
+    );
+    reg!(
+        "unofficial_napi_module_wrap_create_cached_data",
+        guest_unofficial_napi_module_wrap_create_cached_data
+    );
+    reg!(
+        "unofficial_napi_module_wrap_set_import_module_dynamically_callback",
+        guest_unofficial_napi_module_wrap_set_import_module_dynamically_callback
+    );
+    reg!(
+        "unofficial_napi_module_wrap_set_initialize_import_meta_object_callback",
+        guest_unofficial_napi_module_wrap_set_initialize_import_meta_object_callback
+    );
+    reg!(
+        "unofficial_napi_module_wrap_import_module_dynamically",
+        guest_unofficial_napi_module_wrap_import_module_dynamically
+    );
+    reg!(
+        "unofficial_napi_module_wrap_create_required_module_facade",
+        guest_unofficial_napi_module_wrap_create_required_module_facade
+    );
     // Singleton getters
     reg!("napi_get_undefined", guest_napi_get_undefined);
     reg!("napi_get_null", guest_napi_get_null);
@@ -2921,6 +4564,14 @@ fn register_napi_imports(store: &mut Store, fe: &FunctionEnv<RuntimeEnv>, io: &m
     reg!("napi_create_date", guest_napi_create_date);
     reg!("napi_create_external", guest_napi_create_external);
     reg!("napi_create_arraybuffer", guest_napi_create_arraybuffer);
+    reg!(
+        "napi_create_external_arraybuffer",
+        guest_napi_create_external_arraybuffer
+    );
+    reg!(
+        "napi_create_external_buffer",
+        guest_napi_create_external_buffer
+    );
     reg!("napi_create_typedarray", guest_napi_create_typedarray);
     reg!("napi_create_dataview", guest_napi_create_dataview);
     reg!("napi_create_promise", guest_napi_create_promise);
@@ -3007,6 +4658,14 @@ fn register_napi_imports(store: &mut Store, fe: &FunctionEnv<RuntimeEnv>, io: &m
         "napi_is_detached_arraybuffer",
         guest_napi_is_detached_arraybuffer
     );
+    reg!(
+        "node_api_is_sharedarraybuffer",
+        guest_node_api_is_sharedarraybuffer
+    );
+    reg!(
+        "node_api_create_sharedarraybuffer",
+        guest_node_api_create_sharedarraybuffer
+    );
     // TypedArray
     reg!("napi_get_typedarray_info", guest_napi_get_typedarray_info);
     // DataView
@@ -3075,12 +4734,18 @@ fn register_napi_imports(store: &mut Store, fe: &FunctionEnv<RuntimeEnv>, io: &m
     reg!("napi_add_finalizer", guest_napi_add_finalizer);
     // Constructor / Class
     reg!("napi_new_instance", guest_napi_new_instance);
+    reg!("napi_define_properties", guest_napi_define_properties);
     reg!("napi_define_class", guest_napi_define_class);
     // Fatal error
     reg!("napi_fatal_error", guest_napi_fatal_error);
     // Misc
     reg!("napi_get_last_error_info", guest_napi_get_last_error_info);
     reg!("napi_get_version", guest_napi_get_version);
+    reg!("napi_add_env_cleanup_hook", guest_napi_add_env_cleanup_hook);
+    reg!(
+        "napi_remove_env_cleanup_hook",
+        guest_napi_remove_env_cleanup_hook
+    );
 }
 
 // ============================================================
@@ -3178,7 +4843,7 @@ pub fn run_wasix_main_capture_stdout(wasm_path: &Path, args: &[&str]) -> Result<
         let func_env = FunctionEnv::new(
             &mut store,
             RuntimeEnv {
-                memory: Some(memory),
+                memory: Some(memory.clone()),
                 malloc_fn: None,
                 table: None,
                 guest_data_ptrs: std::collections::HashMap::new(),
@@ -3203,8 +4868,16 @@ pub fn run_wasix_main_capture_stdout(wasm_path: &Path, args: &[&str]) -> Result<
             .ok()
             .cloned();
 
+        let wasi_handles = wasmer_wasix::WasiModuleTreeHandles::Static(
+            wasmer_wasix::WasiModuleInstanceHandles::new(
+                memory.clone(),
+                &store,
+                instance.clone(),
+                func_env.as_ref(&store).table.clone(),
+            ),
+        );
         wasi_env
-            .initialize(&mut store, instance.clone())
+            .initialize_handles_and_layout(&mut store, instance.clone(), wasi_handles, None, true)
             .context("failed to initialize WASIX environment")?;
 
         let exit = if let Ok(main) = instance

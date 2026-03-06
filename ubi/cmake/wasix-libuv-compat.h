@@ -3,16 +3,62 @@
 
 #include <errno.h>
 #include <grp.h>
+#include <net/if.h>
+#include <netdb.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
-#if defined(__wasi__) && defined(__cplusplus)
-extern "C" pid_t fork(void);
+#if defined(__wasi__)
+static inline pid_t wasix_fork(void) {
+  errno = ENOSYS;
+  return -1;
+}
+#define fork wasix_fork
+
+static inline unsigned int wasix_if_nametoindex(const char* ifname) {
+  (void) ifname;
+  return 0;
+}
+#define if_nametoindex wasix_if_nametoindex
+
+static inline char* wasix_if_indextoname(unsigned int ifindex, char* ifname) {
+  (void) ifindex;
+  if (ifname != NULL) ifname[0] = '\0';
+  errno = ENXIO;
+  return NULL;
+}
+#define if_indextoname wasix_if_indextoname
+
+static inline int wasix_getservbyport_r(
+    int port,
+    const char* proto,
+    struct servent* se,
+    char* buf,
+    size_t buflen,
+    struct servent** result) {
+  (void) port;
+  (void) proto;
+  (void) se;
+  (void) buf;
+  (void) buflen;
+  if (result != NULL) *result = NULL;
+  errno = ENOSYS;
+  return ENOSYS;
+}
+#define getservbyport_r wasix_getservbyport_r
+
+static char* wasix_tzname[2] = {(char*) "UTC", (char*) "UTC"};
+static long wasix_timezone = 0;
+static int wasix_daylight = 0;
+#define tzname wasix_tzname
+#define timezone wasix_timezone
+#define daylight wasix_daylight
 #endif
 
 #ifndef SCM_RIGHTS

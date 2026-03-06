@@ -1,5 +1,33 @@
 #!/usr/bin/env sh
 
-export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-false}"
+export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-yes}"
+
+# Prefer the EH sysroot when using wasm exceptions.
+if [ -z "${WASIXCC_SYSROOT:-}" ] && [ "${WASIXCC_WASM_EXCEPTIONS}" = "yes" ]; then
+  WASIX_DEFAULT_SYSROOT="$(wasixcc --print-sysroot 2>/dev/null || true)"
+  WASIX_SYSROOT_PREFIX=""
+  WASIX_DEFAULT_BASENAME=""
+
+  if [ -n "${WASIX_DEFAULT_SYSROOT}" ]; then
+    WASIX_SYSROOT_PREFIX="$(dirname "${WASIX_DEFAULT_SYSROOT}")"
+    WASIX_DEFAULT_BASENAME="$(basename "${WASIX_DEFAULT_SYSROOT}")"
+  fi
+
+  if [ -z "${WASIX_SYSROOT_PREFIX}" ] && [ -n "${HOME:-}" ] && [ -d "${HOME}/.wasixcc/sysroot" ]; then
+    WASIX_SYSROOT_PREFIX="${HOME}/.wasixcc/sysroot"
+  fi
+
+  if [ -n "${WASIX_SYSROOT_PREFIX}" ]; then
+    for CANDIDATE in \
+      "${WASIX_SYSROOT_PREFIX}/sysroot-eh" \
+      "${WASIX_SYSROOT_PREFIX}/sysroot-ehpic" \
+      "${WASIX_SYSROOT_PREFIX}/sysroot"; do
+      if [ -d "${CANDIDATE}" ]; then
+        export WASIXCC_SYSROOT="${CANDIDATE}"
+        break
+      fi
+    done
+  fi
+fi
 
 exec wasixcc "$@"

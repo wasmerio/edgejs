@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 set(UBI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(NAPI_V8_ROOT "${UBI_ROOT}/../napi/v8")
 set(PROJECT_ROOT "${UBI_ROOT}/../")
@@ -239,6 +241,92 @@ target_include_directories(ubi_node_api
     "${NAPI_INCLUDE_ROOT}"
 )
 
+file(GLOB_RECURSE UBI_ICU_COMMON_SOURCES CONFIGURE_DEPENDS
+  "${PROJECT_ROOT}/deps/icu-small/source/common/*.cpp"
+)
+file(GLOB_RECURSE UBI_ICU_I18N_SOURCES CONFIGURE_DEPENDS
+  "${PROJECT_ROOT}/deps/icu-small/source/i18n/*.cpp"
+)
+
+set(UBI_ICU_DATA_BZ2 "${PROJECT_ROOT}/deps/icu-small/source/data/in/icudt78l.dat.bz2")
+set(UBI_ICU_EMBED_C "${CMAKE_CURRENT_BINARY_DIR}/generated/ubi_icudata.c")
+
+add_custom_command(
+  OUTPUT "${UBI_ICU_EMBED_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND
+    "${Python3_EXECUTABLE}" "${UBI_ROOT}/cmake/embed_binary.py"
+    --input "${UBI_ICU_DATA_BZ2}"
+    --output "${UBI_ICU_EMBED_C}"
+    --symbol "ubi_icudt78l_dat"
+    --compression bz2
+  DEPENDS
+    "${UBI_ROOT}/cmake/embed_binary.py"
+    "${UBI_ICU_DATA_BZ2}"
+  VERBATIM
+)
+
+add_library(ubi_icudata STATIC
+  "${UBI_ICU_EMBED_C}"
+)
+set_target_properties(ubi_icudata PROPERTIES LINKER_LANGUAGE C)
+
+add_library(ubi_icuuc STATIC
+  ${UBI_ICU_COMMON_SOURCES}
+  "${PROJECT_ROOT}/deps/icu-small/source/stubdata/stubdata.cpp"
+)
+target_include_directories(ubi_icuuc
+  PUBLIC
+    "${PROJECT_ROOT}/deps/icu-small/source/common"
+    "${PROJECT_ROOT}/deps/icu-small/source/i18n"
+)
+target_compile_definitions(ubi_icuuc
+  PRIVATE
+    HAVE_DLOPEN=0
+    U_DISABLE_RENAMING=1
+    UCONFIG_ONLY_HTML_CONVERSION=1
+    U_CHARSET_IS_UTF8=1
+    U_USING_ICU_NAMESPACE=0
+    U_ENABLE_DYLOAD=0
+    USE_CHROMIUM_ICU=1
+    U_ENABLE_TRACING=1
+    U_ENABLE_RESOURCE_TRACING=0
+    U_STATIC_IMPLEMENTATION
+    U_COMMON_IMPLEMENTATION
+    U_ICUDATAENTRY_IN_COMMON
+    UNISTR_FROM_STRING_EXPLICIT=
+    UNISTR_FROM_CHAR_EXPLICIT=
+)
+target_compile_options(ubi_icuuc PRIVATE -Wno-deprecated-declarations)
+target_link_libraries(ubi_icuuc PUBLIC ubi_icudata)
+
+add_library(ubi_icui18n STATIC
+  ${UBI_ICU_I18N_SOURCES}
+)
+target_include_directories(ubi_icui18n
+  PUBLIC
+    "${PROJECT_ROOT}/deps/icu-small/source/common"
+    "${PROJECT_ROOT}/deps/icu-small/source/i18n"
+)
+target_compile_definitions(ubi_icui18n
+  PRIVATE
+    HAVE_DLOPEN=0
+    U_DISABLE_RENAMING=1
+    UCONFIG_ONLY_HTML_CONVERSION=1
+    U_CHARSET_IS_UTF8=1
+    U_USING_ICU_NAMESPACE=0
+    U_ENABLE_DYLOAD=0
+    USE_CHROMIUM_ICU=1
+    U_ENABLE_TRACING=1
+    U_ENABLE_RESOURCE_TRACING=0
+    U_STATIC_IMPLEMENTATION
+    U_I18N_IMPLEMENTATION
+    UNISTR_FROM_STRING_EXPLICIT=
+    UNISTR_FROM_CHAR_EXPLICIT=
+)
+target_compile_options(ubi_icui18n PRIVATE -Wno-deprecated-declarations)
+target_link_libraries(ubi_icui18n PUBLIC ubi_icuuc)
+
 target_link_libraries(ubi_node_api PRIVATE uv_a)
 if(UBI_NAPI_PROVIDER STREQUAL "bundled-v8")
   target_link_libraries(ubi_node_api PUBLIC napi_v8)
@@ -358,6 +446,8 @@ target_link_libraries(ubi_runtime
   PUBLIC
     ubi_node_api
   PRIVATE
+    ubi_icui18n
+    ubi_icuuc
     ubi_simdjson
     ubi_simdutf
     ubi_ada

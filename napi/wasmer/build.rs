@@ -33,7 +33,13 @@ fn main() {
         .include(napi_v8_src.to_str().unwrap())
         .file("src/napi_bridge_init.cc")
         .file(napi_v8_src.join("js_native_api_v8.cc").to_str().unwrap())
-        .file(napi_v8_src.join("unofficial_napi.cc").to_str().unwrap());
+        .file(napi_v8_src.join("unofficial_napi.cc").to_str().unwrap())
+        .file(
+            napi_v8_src
+                .join("unofficial_napi_contextify.cc")
+                .to_str()
+                .unwrap(),
+        );
 
     for raw in v8_defines.split(&[';', ',', ' '][..]) {
         let entry = raw.trim();

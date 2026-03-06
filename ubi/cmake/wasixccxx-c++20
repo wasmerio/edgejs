@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 
-export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-true}"
+export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-yes}"
 
-# Prefer an EH sysroot variant that includes dlfcn.h when available.
-if [ -z "${WASIXCC_SYSROOT:-}" ] && [ "${WASIXCC_WASM_EXCEPTIONS}" = "true" ]; then
+# Prefer the EH sysroot; fall back to EH+PIC if needed.
+if [ -z "${WASIXCC_SYSROOT:-}" ] && [ "${WASIXCC_WASM_EXCEPTIONS}" = "yes" ]; then
   WASIX_DEFAULT_SYSROOT="$(wasixcc --print-sysroot 2>/dev/null || true)"
   WASIX_SYSROOT_PREFIX=""
   WASIX_DEFAULT_BASENAME=""
@@ -39,7 +39,7 @@ if [ -z "${WASIXCC_SYSROOT:-}" ] && [ "${WASIXCC_WASM_EXCEPTIONS}" = "true" ]; t
     fi
 
     for CANDIDATE in \
-      "${WASIX_SYSROOT_PREFIX}/sysroot-exnref-ehpic" \
+      "${WASIX_SYSROOT_PREFIX}/sysroot-eh" \
       "${WASIX_SYSROOT_PREFIX}/sysroot-ehpic" \
       "${WASIX_SYSROOT_PREFIX}/sysroot"; do
       case ":${WASIX_CANDIDATES}:" in
