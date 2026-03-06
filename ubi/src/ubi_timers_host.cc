@@ -34,6 +34,10 @@ struct TimersHostState {
   uint32_t pending_handle_closes = 0;
 };
 
+constexpr int kImmediateCount = 0;
+constexpr int kImmediateRefCount = 1;
+constexpr int kImmediateHasOutstanding = 2;
+
 std::unordered_map<napi_env, std::unique_ptr<TimersHostState>> g_timers_states;
 std::unordered_set<napi_env> g_timers_cleanup_hook_registered;
 
@@ -180,16 +184,25 @@ void SetFunctionRef(napi_env env, napi_value fn, napi_ref* ref_slot) {
   napi_create_reference(env, fn, 1, ref_slot);
 }
 
-bool HasImmediateWork(const TimersHostState* st) {
-  if (st == nullptr || st->cleanup_started) return false;
-  if (st->immediate_info_ptr == nullptr) return true;
-  constexpr int kCount = 0;
-  constexpr int kHasOutstanding = 2;
-  return st->immediate_info_ptr[kCount] > 0 || st->immediate_info_ptr[kHasOutstanding] > 0;
+bool CallImmediateCallback(TimersHostState* st);
+void ApplyImmediateRefState(TimersHostState* st, bool ref);
+
+uint32_t ImmediateCount(const TimersHostState* st) {
+  if (st == nullptr || st->immediate_info_ptr == nullptr) return 0;
+  const int32_t count = st->immediate_info_ptr[kImmediateCount];
+  return count > 0 ? static_cast<uint32_t>(count) : 0;
 }
 
-void StopImmediateLoop(TimersHostState* st);
-bool CallImmediateCallback(TimersHostState* st);
+uint32_t ImmediateRefCount(const TimersHostState* st) {
+  if (st == nullptr || st->immediate_info_ptr == nullptr) return 0;
+  const int32_t count = st->immediate_info_ptr[kImmediateRefCount];
+  return count > 0 ? static_cast<uint32_t>(count) : 0;
+}
+
+bool ImmediateHasOutstanding(const TimersHostState* st) {
+  if (st == nullptr || st->immediate_info_ptr == nullptr) return false;
+  return st->immediate_info_ptr[kImmediateHasOutstanding] != 0;
+}
 
 void EnsureTimerHandle(TimersHostState* st) {
   if (st == nullptr || st->timer_initialized) return;
@@ -209,8 +222,27 @@ void EnsureCheckHandle(TimersHostState* st) {
   if (uv_check_init(loop, &st->check_handle) != 0) return;
   st->check_handle.data = st;
   uv_unref(reinterpret_cast<uv_handle_t*>(&st->check_handle));
+  if (uv_check_start(&st->check_handle,
+                     [](uv_check_t* handle) {
+                       auto* state = static_cast<TimersHostState*>(handle->data);
+                       if (state == nullptr || state->env == nullptr || ImmediateCount(state) == 0) {
+                         return;
+                       }
+                       do {
+                         if (!CallImmediateCallback(state)) {
+                           return;
+                         }
+                       } while (ImmediateHasOutstanding(state) && state->env != nullptr);
+
+                       if (ImmediateRefCount(state) == 0) {
+                         ApplyImmediateRefState(state, false);
+                       }
+                     }) != 0) {
+    return;
+  }
   st->check_initialized = true;
-  DebugLog("check handle initialized (unref)");
+  st->check_running = true;
+  DebugLog("check handle initialized and started (unref)");
 }
 
 void EnsureIdleHandle(TimersHostState* st) {
@@ -219,9 +251,8 @@ void EnsureIdleHandle(TimersHostState* st) {
   if (loop == nullptr) return;
   if (uv_idle_init(loop, &st->idle_handle) == 0) {
     st->idle_handle.data = st;
-    uv_unref(reinterpret_cast<uv_handle_t*>(&st->idle_handle));
     st->idle_initialized = true;
-    DebugLog("idle handle initialized (unref)");
+    DebugLog("idle handle initialized");
   }
 }
 
@@ -245,46 +276,6 @@ bool CallImmediateCallback(TimersHostState* st) {
     return false;
   }
   return true;
-}
-
-void StartImmediateLoop(TimersHostState* st) {
-  if (st == nullptr) return;
-  EnsureCheckHandle(st);
-  EnsureIdleHandle(st);
-  if (!st->check_initialized || st->check_running) return;
-  if (uv_check_start(&st->check_handle,
-                     [](uv_check_t* handle) {
-                       auto* state = static_cast<TimersHostState*>(handle->data);
-                       if (!HasImmediateWork(state)) {
-                         StopImmediateLoop(state);
-                         return;
-                       }
-                       if (!CallImmediateCallback(state)) return;
-                       if (!HasImmediateWork(state)) {
-                         StopImmediateLoop(state);
-                       }
-                     }) == 0) {
-    st->check_running = true;
-    if (st->idle_initialized && !st->idle_running) {
-      if (uv_idle_start(&st->idle_handle, [](uv_idle_t* /*handle*/) {}) == 0) {
-        st->idle_running = true;
-      }
-    }
-    DebugLog("immediate loop started");
-  }
-}
-
-void StopImmediateLoop(TimersHostState* st) {
-  if (st == nullptr) return;
-  if (st->check_initialized && st->check_running) {
-    uv_check_stop(&st->check_handle);
-    st->check_running = false;
-    DebugLog("immediate loop stopped");
-  }
-  if (st->idle_initialized && st->idle_running) {
-    uv_idle_stop(&st->idle_handle);
-    st->idle_running = false;
-  }
 }
 
 double CallTimersCallback(TimersHostState* st, double now) {
@@ -326,14 +317,17 @@ void ApplyTimerRefState(TimersHostState* st, bool ref) {
 void ApplyImmediateRefState(TimersHostState* st, bool ref) {
   if (st == nullptr) return;
   EnsureCheckHandle(st);
-  if (!st->check_initialized) return;
+  EnsureIdleHandle(st);
+  if (!st->idle_initialized) return;
   if (ref) {
-    uv_ref(reinterpret_cast<uv_handle_t*>(&st->check_handle));
-    StartImmediateLoop(st);
+    if (!st->idle_running && uv_idle_start(&st->idle_handle, [](uv_idle_t* /*handle*/) {}) == 0) {
+      st->idle_running = true;
+    }
   } else {
-    uv_unref(reinterpret_cast<uv_handle_t*>(&st->check_handle));
-    if (HasImmediateWork(st)) StartImmediateLoop(st);
-    else StopImmediateLoop(st);
+    if (st->idle_running) {
+      uv_idle_stop(&st->idle_handle);
+      st->idle_running = false;
+    }
   }
   DebugLog("toggleImmediateRef(%s)", ref ? "true" : "false");
 }
@@ -372,7 +366,6 @@ napi_value SetupTimers(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (argc >= 1) SetFunctionRef(env, argv[0], &st->immediate_callback_ref);
   if (argc >= 2) SetFunctionRef(env, argv[1], &st->timers_callback_ref);
-  if (HasImmediateWork(st)) StartImmediateLoop(st);
   DebugLog("setupTimers(immediate=%s, timers=%s)",
            st->immediate_callback_ref ? "set" : "unset",
            st->timers_callback_ref ? "set" : "unset");
@@ -531,7 +524,6 @@ int32_t UbiGetActiveTimeoutCount(napi_env env) {
 uint32_t UbiGetActiveImmediateRefCount(napi_env env) {
   const TimersHostState* st = GetState(env);
   if (st == nullptr || st->immediate_info_ptr == nullptr) return 0;
-  constexpr int kRefCount = 1;
-  const int32_t count = st->immediate_info_ptr[kRefCount];
+  const int32_t count = st->immediate_info_ptr[kImmediateRefCount];
   return count > 0 ? static_cast<uint32_t>(count) : 0;
 }

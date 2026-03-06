@@ -927,10 +927,8 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
     } else {
       uv_run(loop, UV_RUN_DEFAULT);
     }
-    // Node drains nextTick/task queue between libuv turns, even when
-    // no JS callback has been invoked in this iteration.
-    (void)DrainProcessTickCallback(env);
-    // Match Node's event-loop turn: drain platform tasks after libuv run.
+    // Match Node's embedder loop shape: libuv callbacks and callback scopes
+    // own nextTick draining; the loop turn itself only drains platform tasks.
     (void)UbiRuntimePlatformDrainTasks(env);
 
     int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
