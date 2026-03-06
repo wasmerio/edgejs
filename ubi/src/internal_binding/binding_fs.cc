@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <uv.h>
 
 #include "internal_binding/helpers.h"
 
@@ -544,9 +545,103 @@ void CompleteReq(napi_env env, ReqKind kind, napi_value req, napi_value oncomple
 }
 
 struct FileHandleWrap {
+  napi_env env = nullptr;
   napi_ref wrapper_ref = nullptr;
+  napi_ref closing_promise_ref = nullptr;
+  napi_deferred closing_deferred = nullptr;
   int32_t fd = -1;
+  bool closing = false;
+  bool closed = false;
 };
+
+struct FileHandleCloseReq {
+  napi_env env = nullptr;
+  FileHandleWrap* wrap = nullptr;
+  uv_fs_t req{};
+};
+
+void HoldFileHandleRef(FileHandleWrap* wrap) {
+  if (wrap == nullptr || wrap->env == nullptr || wrap->wrapper_ref == nullptr) return;
+  uint32_t ref_count = 0;
+  (void)napi_reference_ref(wrap->env, wrap->wrapper_ref, &ref_count);
+}
+
+void ReleaseFileHandleRef(FileHandleWrap* wrap) {
+  if (wrap == nullptr || wrap->env == nullptr || wrap->wrapper_ref == nullptr) return;
+  uint32_t ref_count = 0;
+  (void)napi_reference_unref(wrap->env, wrap->wrapper_ref, &ref_count);
+}
+
+napi_value CreateUvExceptionValue(napi_env env, int errorno, const char* syscall) {
+  const char* code = uv_err_name(errorno);
+  const char* message = uv_strerror(errorno);
+  std::string full_message;
+  if (syscall != nullptr && *syscall != '\0') {
+    full_message.append(syscall);
+    full_message.push_back(' ');
+  }
+  full_message.append(message != nullptr ? message : "Unknown system error");
+
+  napi_value message_value = nullptr;
+  napi_value error = nullptr;
+  napi_create_string_utf8(env, full_message.c_str(), NAPI_AUTO_LENGTH, &message_value);
+  napi_create_error(env, nullptr, message_value, &error);
+  if (error == nullptr) return Undefined(env);
+
+  napi_value errno_value = nullptr;
+  napi_create_int32(env, errorno, &errno_value);
+  napi_set_named_property(env, error, "errno", errno_value);
+
+  napi_value code_value = nullptr;
+  napi_create_string_utf8(env, code != nullptr ? code : "UV_UNKNOWN", NAPI_AUTO_LENGTH, &code_value);
+  napi_set_named_property(env, error, "code", code_value);
+
+  if (syscall != nullptr && *syscall != '\0') {
+    napi_value syscall_value = nullptr;
+    napi_create_string_utf8(env, syscall, NAPI_AUTO_LENGTH, &syscall_value);
+    napi_set_named_property(env, error, "syscall", syscall_value);
+  }
+
+  return error;
+}
+
+void FinishFileHandleClose(FileHandleCloseReq* close_req, int result) {
+  if (close_req == nullptr) return;
+  FileHandleWrap* wrap = close_req->wrap;
+  napi_env env = close_req->env;
+
+  if (wrap != nullptr) {
+    wrap->closing = false;
+    if (result >= 0) {
+      wrap->closed = true;
+      wrap->fd = -1;
+    }
+  }
+
+  if (env != nullptr && wrap != nullptr && wrap->closing_deferred != nullptr) {
+    if (result < 0) {
+      napi_value err = CreateUvExceptionValue(env, result, "close");
+      (void)napi_reject_deferred(env, wrap->closing_deferred, err);
+    } else {
+      (void)napi_resolve_deferred(env, wrap->closing_deferred, Undefined(env));
+    }
+    wrap->closing_deferred = nullptr;
+  }
+
+  if (env != nullptr && wrap != nullptr) {
+    ResetRef(env, &wrap->closing_promise_ref);
+    ReleaseFileHandleRef(wrap);
+  }
+
+  uv_fs_req_cleanup(&close_req->req);
+  delete close_req;
+}
+
+void AfterFileHandleClose(uv_fs_t* req) {
+  auto* close_req = static_cast<FileHandleCloseReq*>(req != nullptr ? req->data : nullptr);
+  if (close_req == nullptr) return;
+  FinishFileHandleClose(close_req, static_cast<int>(req->result));
+}
 
 FileHandleWrap* UnwrapFileHandle(napi_env env, napi_value this_arg) {
   if (this_arg == nullptr) return nullptr;
@@ -558,6 +653,7 @@ FileHandleWrap* UnwrapFileHandle(napi_env env, napi_value this_arg) {
 void FileHandleFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<FileHandleWrap*>(data);
   if (wrap == nullptr) return;
+  ResetRef(env, &wrap->closing_promise_ref);
   ResetRef(env, &wrap->wrapper_ref);
   delete wrap;
 }
@@ -569,6 +665,7 @@ napi_value FileHandleCtor(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
   if (this_arg == nullptr) return nullptr;
   auto* wrap = new FileHandleWrap();
+  wrap->env = env;
   if (argc >= 1 && argv[0] != nullptr) napi_get_value_int32(env, argv[0], &wrap->fd);
   napi_wrap(env, this_arg, wrap, FileHandleFinalize, nullptr, &wrap->wrapper_ref);
   return this_arg;
@@ -585,37 +682,37 @@ napi_value FileHandleGetFd(napi_env env, napi_callback_info info) {
 }
 
 napi_value FileHandleClose(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
+  size_t argc = 0;
   napi_value this_arg = nullptr;
-  napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
+  napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   FileHandleWrap* wrap = UnwrapFileHandle(env, this_arg);
   if (wrap == nullptr) return Undefined(env);
 
-  napi_value req = argc >= 1 ? argv[0] : nullptr;
-  napi_value oncomplete = nullptr;
-  ReqKind req_kind = ParseReq(env, req, &oncomplete);
+  if (wrap->fd < 0 || wrap->closed) return MakeResolvedPromise(env, Undefined(env));
 
-  napi_value err = nullptr;
-  if (wrap->fd >= 0) {
-    napi_value fd_value = nullptr;
-    napi_create_int32(env, wrap->fd, &fd_value);
-    napi_value ignored = nullptr;
-    if (!CallRaw(env, "close", 1, &fd_value, &ignored, &err)) {
-      if (err == nullptr) err = Undefined(env);
-    } else {
-      wrap->fd = -1;
-    }
+  napi_value closing_promise = GetRefValue(env, wrap->closing_promise_ref);
+  if (closing_promise != nullptr && wrap->closing) return closing_promise;
+
+  napi_deferred deferred = nullptr;
+  napi_value promise = nullptr;
+  if (napi_create_promise(env, &deferred, &promise) != napi_ok || promise == nullptr) return Undefined(env);
+
+  napi_create_reference(env, promise, 1, &wrap->closing_promise_ref);
+  wrap->closing_deferred = deferred;
+  wrap->closing = true;
+
+  auto* close_req = new FileHandleCloseReq();
+  close_req->env = env;
+  close_req->wrap = wrap;
+  close_req->req.data = close_req;
+  HoldFileHandleRef(wrap);
+
+  const int rc = uv_fs_close(uv_default_loop(), &close_req->req, wrap->fd, AfterFileHandleClose);
+  if (rc < 0) {
+    FinishFileHandleClose(close_req, rc);
   }
 
-  if (req_kind == ReqKind::kPromise) return err != nullptr && !IsUndefined(env, err) ? MakeRejectedPromise(env, err)
-                                                                                       : MakeResolvedPromise(env, Undefined(env));
-  CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
-  if (err != nullptr && !IsUndefined(env, err)) {
-    napi_throw(env, err);
-    return nullptr;
-  }
-  return Undefined(env);
+  return promise;
 }
 
 napi_value FileHandleReleaseFD(napi_env env, napi_callback_info info) {
@@ -624,7 +721,11 @@ napi_value FileHandleReleaseFD(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   FileHandleWrap* wrap = UnwrapFileHandle(env, this_arg);
   int32_t old_fd = wrap == nullptr ? -1 : wrap->fd;
-  if (wrap != nullptr) wrap->fd = -1;
+  if (wrap != nullptr) {
+    wrap->fd = -1;
+    wrap->closing = false;
+    wrap->closed = true;
+  }
   napi_value out = nullptr;
   napi_create_int32(env, old_fd, &out);
   return out != nullptr ? out : Undefined(env);
@@ -826,6 +927,7 @@ napi_value FsAccess(napi_env env, napi_callback_info info) {
     }
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -868,6 +970,7 @@ napi_value FsStatCommon(napi_env env,
     }
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -1018,6 +1121,7 @@ napi_value FsRead(napi_env env, napi_callback_info info) {
   if (!CallRaw(env, "readSync", 5, call_argv, &out, &err)) {
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -1060,6 +1164,42 @@ napi_value FsOpen(napi_env env, napi_callback_info info) {
     return Undefined(env);
   }
   return out;
+}
+
+napi_value FsRealpath(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  napi_value req = argc >= 3 ? argv[2] : nullptr;
+  napi_value oncomplete = nullptr;
+  ReqKind req_kind = ParseReq(env, req, &oncomplete);
+
+  std::string encoding = "utf8";
+  if (argc >= 2 && argv[1] != nullptr) ValueToUtf8(env, argv[1], &encoding);
+
+  napi_value call_argv[1] = {argc >= 1 ? argv[0] : Undefined(env)};
+  napi_value raw_out = nullptr;
+  napi_value err = nullptr;
+  if (!CallRaw(env, "realpath", 1, call_argv, &raw_out, &err)) {
+    if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
+    CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
+    if (err != nullptr) {
+      napi_throw(env, err);
+      return nullptr;
+    }
+    return Undefined(env);
+  }
+
+  napi_value out = raw_out;
+  if (encoding == "buffer") out = BufferFromValue(env, raw_out, nullptr);
+  if (req_kind == ReqKind::kPromise) return MakeResolvedPromise(env, out);
+  if (req_kind == ReqKind::kCallback) {
+    CompleteReq(env, req_kind, req, oncomplete, nullptr, out);
+    return Undefined(env);
+  }
+  return out != nullptr ? out : Undefined(env);
 }
 
 napi_value FsClose(napi_env env, napi_callback_info info) {
@@ -1129,6 +1269,7 @@ napi_value FsReadBuffers(napi_env env, napi_callback_info info) {
     if (!CallRaw(env, "readSync", 5, mutable_args, &chunk_out, &err)) {
       if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
       CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+      if (req_kind == ReqKind::kCallback) return Undefined(env);
       if (err != nullptr) {
         napi_throw(env, err);
         return nullptr;
@@ -1164,6 +1305,7 @@ napi_value FsWriteBuffer(napi_env env, napi_callback_info info) {
   if (!CallRaw(env, "writeSync", 5, call_argv, &out, &err)) {
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -1208,6 +1350,7 @@ napi_value FsWriteString(napi_env env, napi_callback_info info) {
   if (!CallRaw(env, "writeSync", 5, call_argv, &out, &err)) {
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -1255,6 +1398,7 @@ napi_value FsWriteBuffers(napi_env env, napi_callback_info info) {
     if (!CallRaw(env, "writeSync", 5, call_argv, &chunk_out, &err)) {
       if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
       CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+      if (req_kind == ReqKind::kCallback) return Undefined(env);
       if (err != nullptr) {
         napi_throw(env, err);
         return nullptr;
@@ -1289,6 +1433,7 @@ napi_value FsOpenFileHandle(napi_env env, napi_callback_info info) {
   if (!CallRaw(env, "open", 3, call_argv, &fd_value, &err)) {
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -1318,11 +1463,11 @@ napi_value FsInternalModuleStat(napi_env env, napi_callback_info info) {
   if (argc < 1 || !ValueToUtf8(env, argv[0], &path)) return Undefined(env);
 
   std::error_code ec;
-  const auto status = std::filesystem::symlink_status(path, ec);
+  const auto status = std::filesystem::status(path, ec);
   int32_t out_value = -1;
   if (!ec) {
     if (std::filesystem::is_directory(status)) out_value = 1;
-    else if (std::filesystem::is_regular_file(status) || std::filesystem::is_symlink(status)) out_value = 0;
+    else if (std::filesystem::is_regular_file(status)) out_value = 0;
     else out_value = 0;
   } else {
     out_value = (ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory) ? -2 : -1;
@@ -1495,6 +1640,7 @@ napi_value FsLink(napi_env env, napi_callback_info info) {
   if (!CallRaw(env, "link", 2, call_argv, &out, &err)) {
     if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
     CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+    if (req_kind == ReqKind::kCallback) return Undefined(env);
     if (err != nullptr) {
       napi_throw(env, err);
       return nullptr;
@@ -1520,6 +1666,7 @@ napi_value FsFdatasync(napi_env env, napi_callback_info info) {
     if (!CallRaw(env, "fsync", 1, call_argv, &out, &err)) {
       if (req_kind == ReqKind::kPromise) return MakeRejectedPromise(env, err);
       CompleteReq(env, req_kind, req, oncomplete, err, Undefined(env));
+      if (req_kind == ReqKind::kCallback) return Undefined(env);
       if (err != nullptr) {
         napi_throw(env, err);
         return nullptr;
@@ -1689,6 +1836,7 @@ napi_value ResolveFs(napi_env env, const ResolveOptions& options) {
   SetNamedMethod(env, binding, "fstat", FsFstat);
   SetNamedMethod(env, binding, "statfs", FsStatfs);
   SetNamedMethod(env, binding, "readdir", FsReaddir);
+  SetNamedMethod(env, binding, "realpath", FsRealpath);
   SetNamedMethod(env, binding, "read", FsRead);
   SetNamedMethod(env, binding, "readBuffers", FsReadBuffers);
   SetNamedMethod(env, binding, "writeBuffer", FsWriteBuffer);

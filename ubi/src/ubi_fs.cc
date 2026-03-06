@@ -1724,3 +1724,11 @@ napi_value UbiInstallFsBinding(napi_env env) {
 
   return binding;
 }
+
+napi_value UbiInstallFsDirBinding(napi_env env) {
+  napi_value binding = nullptr;
+  if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) {
+    return nullptr;
+  }
+  return binding;
+}

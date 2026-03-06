@@ -145,6 +145,42 @@ void ReplaceAll(std::string* text, const std::string& from, const std::string& t
   }
 }
 
+bool RuntimeHasIntl(napi_env env) {
+  napi_value global = nullptr;
+  if (env == nullptr || napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
+
+  napi_value intl = nullptr;
+  if (napi_get_named_property(env, global, "Intl", &intl) != napi_ok || intl == nullptr) return false;
+
+  napi_valuetype type = napi_undefined;
+  return napi_typeof(env, intl, &type) == napi_ok && (type == napi_object || type == napi_function);
+}
+
+void ReplaceJsonBooleanOrNumber(std::string* text, const char* key, bool value) {
+  if (text == nullptr || key == nullptr) return;
+
+  const std::string needle = std::string("\"") + key + "\"";
+  size_t key_pos = text->find(needle);
+  if (key_pos == std::string::npos) return;
+
+  size_t colon = text->find(':', key_pos + needle.size());
+  if (colon == std::string::npos) return;
+
+  size_t value_start = colon + 1;
+  while (value_start < text->size() &&
+         ((*text)[value_start] == ' ' || (*text)[value_start] == '\t' || (*text)[value_start] == '\n' ||
+          (*text)[value_start] == '\r')) {
+    ++value_start;
+  }
+
+  size_t value_end = value_start;
+  while (value_end < text->size() && ((*text)[value_end] == '-' || std::isalnum(static_cast<unsigned char>((*text)[value_end])))) {
+    ++value_end;
+  }
+
+  text->replace(value_start, value_end - value_start, value ? "1" : "0");
+}
+
 std::string LoadBuiltinsConfigJson() {
   static std::string cached;
   if (!cached.empty()) return cached;
@@ -2389,7 +2425,8 @@ static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderSta
   }
 
   napi_value config_json = nullptr;
-  const std::string builtins_config_json = LoadBuiltinsConfigJson();
+  std::string builtins_config_json = LoadBuiltinsConfigJson();
+  ReplaceJsonBooleanOrNumber(&builtins_config_json, "v8_enable_i18n_support", RuntimeHasIntl(env));
   if (napi_create_string_utf8(env, builtins_config_json.c_str(), NAPI_AUTO_LENGTH, &config_json) != napi_ok ||
       config_json == nullptr ||
       napi_set_named_property(env, binding, "config", config_json) != napi_ok) {
@@ -3190,6 +3227,9 @@ static napi_value DispatchResolveBinding(napi_env env, void* raw_state, const ch
   }
   if (std::strcmp(name, "fs") == 0) {
     return GetOrCreateBinding(state, env, "fs", UbiInstallFsBinding);
+  }
+  if (std::strcmp(name, "fs_dir") == 0) {
+    return GetOrCreateBinding(state, env, "fs_dir", UbiInstallFsDirBinding);
   }
   if (std::strcmp(name, "http_parser") == 0) {
     return GetOrCreateBinding(state, env, "http_parser", UbiInstallHttpParserBinding);

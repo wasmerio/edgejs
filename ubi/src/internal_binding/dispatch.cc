@@ -23,8 +23,10 @@ napi_value ResolveEncodingBinding(napi_env env, const ResolveOptions& options);
 napi_value ResolveErrors(napi_env env, const ResolveOptions& options);
 napi_value ResolveFsEventWrap(napi_env env, const ResolveOptions& options);
 napi_value ResolveFs(napi_env env, const ResolveOptions& options);
+napi_value ResolveFsDir(napi_env env, const ResolveOptions& options);
 napi_value ResolveHeapUtils(napi_env env, const ResolveOptions& options);
 napi_value ResolveHttpParser(napi_env env, const ResolveOptions& options);
+napi_value ResolveIcu(napi_env env, const ResolveOptions& options);
 napi_value ResolveJsStream(napi_env env, const ResolveOptions& options);
 napi_value ResolveInternalOnlyV8(napi_env env, const ResolveOptions& options);
 napi_value ResolveModuleWrap(napi_env env, const ResolveOptions& options);
@@ -71,7 +73,7 @@ struct BindingResolverEntry {
   ResolverFn resolver;
 };
 
-constexpr std::array<BindingResolverEntry, 54> kResolvers = {{
+constexpr std::array<BindingResolverEntry, 56> kResolvers = {{
     {"async_wrap", ResolveAsyncWrap},
     {"async_context_frame", ResolveAsyncContextFrame},
     {"block_list", ResolveBlockList},
@@ -88,8 +90,10 @@ constexpr std::array<BindingResolverEntry, 54> kResolvers = {{
     {"errors", ResolveErrors},
     {"fs_event_wrap", ResolveFsEventWrap},
     {"fs", ResolveFs},
+    {"fs_dir", ResolveFsDir},
     {"heap_utils", ResolveHeapUtils},
     {"http_parser", ResolveHttpParser},
+    {"icu", ResolveIcu},
     {"js_stream", ResolveJsStream},
     {"internal_only_v8", ResolveInternalOnlyV8},
     {"module_wrap", ResolveModuleWrap},

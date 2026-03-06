@@ -267,8 +267,10 @@ add_library(ubi_runtime STATIC
   src/internal_binding/binding_errors.cc
   src/internal_binding/binding_fs_event_wrap.cc
   src/internal_binding/binding_fs.cc
+  src/internal_binding/binding_fs_dir.cc
   src/internal_binding/binding_heap_utils.cc
   src/internal_binding/binding_http_parser.cc
+  src/internal_binding/binding_icu.cc
   src/internal_binding/binding_js_stream.cc
   src/internal_binding/binding_internal_only_v8.cc
   src/internal_binding/binding_module_wrap.cc
@@ -342,6 +344,8 @@ target_include_directories(ubi_runtime
     "${PROJECT_ROOT}/deps"
     "${PROJECT_ROOT}/deps/llhttp/include"
     "${PROJECT_ROOT}/deps/ncrypto"
+    "${PROJECT_ROOT}/node/deps/icu-small/source/common"
+    "${PROJECT_ROOT}/node/deps/icu-small/source/i18n"
 )
 target_link_libraries(ubi_runtime
   PUBLIC
@@ -355,6 +359,9 @@ target_link_libraries(ubi_runtime
     c-ares::cares
     OpenSSL::Crypto
 )
+if(APPLE)
+  target_link_libraries(ubi_runtime PRIVATE icucore)
+endif()
 if(UBI_NAPI_PROVIDER STREQUAL "bundled-v8")
   target_link_libraries(ubi_runtime PUBLIC napi_v8)
 endif()

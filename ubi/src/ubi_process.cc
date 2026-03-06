@@ -318,6 +318,39 @@ std::string FindNodeConfigGypiText() {
   return {};
 }
 
+bool HasV8I18nSupport(napi_env env) {
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
+
+  napi_value intl = nullptr;
+  if (napi_get_named_property(env, global, "Intl", &intl) != napi_ok || intl == nullptr) return false;
+
+  napi_valuetype intl_type = napi_undefined;
+  if (napi_typeof(env, intl, &intl_type) != napi_ok) return false;
+  return intl_type == napi_object || intl_type == napi_function;
+}
+
+bool SetProcessConfigVariableInt(napi_env env, napi_value variables_obj, const char* key, int32_t value) {
+  if (variables_obj == nullptr || key == nullptr) return false;
+  napi_value js_value = nullptr;
+  if (napi_create_int32(env, value, &js_value) != napi_ok || js_value == nullptr) return false;
+  return napi_set_named_property(env, variables_obj, key, js_value) == napi_ok;
+}
+
+bool OverrideProcessConfigRuntimeVariables(napi_env env, napi_value config_obj) {
+  if (config_obj == nullptr) return false;
+
+  napi_value variables_obj = nullptr;
+  const napi_status get_status = napi_get_named_property(env, config_obj, "variables", &variables_obj);
+  if (get_status != napi_ok || variables_obj == nullptr) {
+    if (napi_create_object(env, &variables_obj) != napi_ok || variables_obj == nullptr) return false;
+    if (napi_set_named_property(env, config_obj, "variables", variables_obj) != napi_ok) return false;
+  }
+
+  const int32_t v8_i18n_support = HasV8I18nSupport(env) ? 1 : 0;
+  return SetProcessConfigVariableInt(env, variables_obj, "v8_enable_i18n_support", v8_i18n_support);
+}
+
 napi_value BuildMinimalProcessConfigObject(napi_env env) {
   napi_value config_obj = nullptr;
   if (napi_create_object(env, &config_obj) != napi_ok || config_obj == nullptr) return nullptr;
@@ -325,11 +358,9 @@ napi_value BuildMinimalProcessConfigObject(napi_env env) {
   napi_value variables_obj = nullptr;
   if (napi_create_object(env, &variables_obj) != napi_ok || variables_obj == nullptr) return nullptr;
 
-  napi_value zero = nullptr;
-  if (napi_create_int32(env, 0, &zero) != napi_ok || zero == nullptr) return nullptr;
   const char* int_var_keys[] = {"v8_enable_i18n_support", "node_quic", "asan", "node_shared_openssl"};
   for (const char* key : int_var_keys) {
-    if (napi_set_named_property(env, variables_obj, key, zero) != napi_ok) return nullptr;
+    if (!SetProcessConfigVariableInt(env, variables_obj, key, 0)) return nullptr;
   }
 
   napi_value shareable_builtins = nullptr;
@@ -375,6 +406,8 @@ napi_value BuildMinimalProcessConfigObject(napi_env env) {
   variables_desc.value = variables_obj;
   variables_desc.attributes = napi_enumerable;
   if (napi_define_properties(env, config_obj, 1, &variables_desc) != napi_ok) return nullptr;
+
+  if (!OverrideProcessConfigRuntimeVariables(env, config_obj)) return nullptr;
 
   return config_obj;
 }
@@ -434,7 +467,10 @@ napi_value ParseProcessConfigObjectFromText(napi_env env, const std::string& con
 napi_value BuildProcessConfigObject(napi_env env) {
   const std::string config_text = FindNodeConfigGypiText();
   napi_value parsed = ParseProcessConfigObjectFromText(env, config_text);
-  if (parsed != nullptr) return parsed;
+  if (parsed != nullptr) {
+    if (!OverrideProcessConfigRuntimeVariables(env, parsed)) return nullptr;
+    return parsed;
+  }
   return BuildMinimalProcessConfigObject(env);
 }
 

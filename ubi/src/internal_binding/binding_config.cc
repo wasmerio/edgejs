@@ -71,6 +71,23 @@ bool GetProcessConfigVariable(napi_env env, const char* key) {
   return IsTruthy(env, value);
 }
 
+void SyncProcessConfigIntlSupport(napi_env env, bool has_intl) {
+  napi_value global = GetGlobal(env);
+  napi_value process = GetNamed(env, global, "process");
+  napi_value config = GetNamed(env, process, "config");
+  if (config == nullptr) return;
+
+  napi_value variables = GetNamed(env, config, "variables");
+  if (variables == nullptr) {
+    if (napi_create_object(env, &variables) != napi_ok || variables == nullptr) return;
+    if (napi_set_named_property(env, config, "variables", variables) != napi_ok) return;
+  }
+
+  napi_value value = nullptr;
+  if (napi_create_int32(env, has_intl ? 1 : 0, &value) != napi_ok || value == nullptr) return;
+  napi_set_named_property(env, variables, "v8_enable_i18n_support", value);
+}
+
 napi_value ConfigGetDefaultLocale(napi_env env, napi_callback_info /*info*/) {
   const char* keys[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
   for (const char* key : keys) {
@@ -109,6 +126,8 @@ napi_value ResolveConfig(napi_env env, const ResolveOptions& /*options*/) {
   const bool fips_mode =
       GetProcessConfigVariable(env, "openssl_is_fips") || GetProcessConfigVariable(env, "node_fipsinstall");
   const bool is_debug_build = GetProcessConfigVariable(env, "debug");
+
+  SyncProcessConfigIntlSupport(env, has_intl);
 
   SetBool(env, out, "hasIntl", has_intl);
   SetBool(env, out, "hasSmallICU", has_small_icu);

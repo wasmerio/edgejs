@@ -77,7 +77,7 @@ namespace {
 
 v8::MaybeLocal<v8::Promise> NapiHostImportModuleDynamically(
     v8::Local<v8::Context> context, v8::Local<v8::Data> /*host_defined_options*/,
-    v8::Local<v8::Value> /*resource_name*/, v8::Local<v8::String> specifier,
+    v8::Local<v8::Value> resource_name, v8::Local<v8::String> specifier,
     v8::Local<v8::FixedArray> /*import_attributes*/) {
   v8::Isolate* isolate = context->GetIsolate();
   v8::EscapableHandleScope handle_scope(isolate);
@@ -100,9 +100,9 @@ v8::MaybeLocal<v8::Promise> NapiHostImportModuleDynamically(
   }
 
   v8::Local<v8::Function> helper = helper_value.As<v8::Function>();
-  v8::Local<v8::Value> argv[1] = {specifier};
+  v8::Local<v8::Value> argv[2] = {specifier, resource_name};
   v8::Local<v8::Value> result;
-  if (!helper->Call(context, global, 1, argv).ToLocal(&result)) {
+  if (!helper->Call(context, global, 2, argv).ToLocal(&result)) {
     if (try_catch.HasCaught()) {
       resolver->Reject(context, try_catch.Exception()).FromMaybe(false);
       try_catch.Reset();

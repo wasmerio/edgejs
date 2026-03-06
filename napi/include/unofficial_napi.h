@@ -135,6 +135,124 @@ NAPI_EXTERN napi_status unofficial_napi_contextify_create_cached_data(
     napi_value host_defined_option_id,
     napi_value* cached_data_buffer_out);
 
+// Unofficial helpers for implementing internalBinding('module_wrap') on embedders.
+// These keep V8 module objects behind an opaque native handle so bindings stay N-API only.
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_create_source_text(
+    napi_env env,
+    napi_value wrapper,
+    napi_value url,
+    napi_value context_or_undefined,
+    napi_value source,
+    int32_t line_offset,
+    int32_t column_offset,
+    napi_value cached_data_or_id,
+    void** handle_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_create_synthetic(
+    napi_env env,
+    napi_value wrapper,
+    napi_value url,
+    napi_value context_or_undefined,
+    napi_value export_names,
+    napi_value synthetic_eval_steps,
+    void** handle_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_destroy(
+    napi_env env,
+    void* handle);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_get_module_requests(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_link(
+    napi_env env,
+    void* handle,
+    size_t count,
+    void* const* linked_handles);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_instantiate(
+    napi_env env,
+    void* handle);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_evaluate(
+    napi_env env,
+    void* handle,
+    int64_t timeout,
+    bool break_on_sigint,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_evaluate_sync(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_get_namespace(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_get_status(
+    napi_env env,
+    void* handle,
+    int32_t* status_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_get_error(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_has_top_level_await(
+    napi_env env,
+    void* handle,
+    bool* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_has_async_graph(
+    napi_env env,
+    void* handle,
+    bool* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_set_export(
+    napi_env env,
+    void* handle,
+    napi_value export_name,
+    napi_value export_value);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_set_module_source_object(
+    napi_env env,
+    void* handle,
+    napi_value source_object);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_get_module_source_object(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_create_cached_data(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_set_import_module_dynamically_callback(
+    napi_env env,
+    napi_value callback);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_set_initialize_import_meta_object_callback(
+    napi_env env,
+    napi_value callback);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_import_module_dynamically(
+    napi_env env,
+    size_t argc,
+    napi_value* argv,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_create_required_module_facade(
+    napi_env env,
+    void* handle,
+    napi_value* result_out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
