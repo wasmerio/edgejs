@@ -3068,12 +3068,9 @@ napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(
 
 napi_status NAPI_CDECL napi_adjust_external_memory(
     node_api_basic_env basic_env, int64_t change_in_bytes, int64_t* adjusted_value) {
-  static int64_t total = 0;
   napi_env env = const_cast<napi_env>(basic_env);
   if (!CheckEnv(env) || adjusted_value == nullptr) return napi_invalid_arg;
-  total += change_in_bytes;
-  if (total < 0) total = 0;
-  *adjusted_value = total;
+  *adjusted_value = env->isolate->AdjustAmountOfExternalAllocatedMemory(change_in_bytes);
   return napi_ok;
 }
 
