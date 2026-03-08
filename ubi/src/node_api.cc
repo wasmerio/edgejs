@@ -18,6 +18,8 @@ struct napi_async_work__ {
   uv_work_t req{};
   bool queued = false;
   bool deleting = false;
+  bool in_after_work = false;
+  bool delete_pending = false;
 };
 
 struct napi_threadsafe_function__ {
@@ -139,8 +141,15 @@ void UvExecute(uv_work_t* req) {
 void UvAfterWork(uv_work_t* req, int status) {
   auto* work = static_cast<napi_async_work__*>(req->data);
   if (work == nullptr || work->complete == nullptr || work->deleting) return;
+  work->queued = false;
+  work->in_after_work = true;
   napi_status napi_status_code = (status == UV_ECANCELED) ? napi_cancelled : napi_ok;
   work->complete(work->env, napi_status_code, work->data);
+  work->in_after_work = false;
+  if (work->delete_pending) {
+    work->deleting = true;
+    delete work;
+  }
 }
 
 }  // namespace
@@ -259,6 +268,10 @@ napi_status NAPI_CDECL napi_create_async_work(napi_env env,
 
 napi_status NAPI_CDECL napi_delete_async_work(napi_env env, napi_async_work work) {
   if (!CheckEnv(env) || work == nullptr) return napi_invalid_arg;
+  if (work->in_after_work || work->queued) {
+    work->delete_pending = true;
+    return napi_ok;
+  }
   work->deleting = true;
   delete work;
   return napi_ok;
