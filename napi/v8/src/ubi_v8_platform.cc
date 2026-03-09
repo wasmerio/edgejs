@@ -1,6 +1,7 @@
 #include "ubi_v8_platform.h"
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -9,7 +10,6 @@
 #include <vector>
 
 #include <libplatform/libplatform.h>
-#include <uv.h>
 
 namespace {
 
@@ -227,7 +227,10 @@ bool UbiV8Platform::IdleTasksEnabled(v8::Isolate* isolate) {
 }
 
 double UbiV8Platform::MonotonicallyIncreasingTime() {
-  return fallback_ != nullptr ? fallback_->MonotonicallyIncreasingTime() : (uv_hrtime() / 1e9);
+  if (fallback_ != nullptr) return fallback_->MonotonicallyIncreasingTime();
+  using clock = std::chrono::steady_clock;
+  const auto now = clock::now().time_since_epoch();
+  return std::chrono::duration<double>(now).count();
 }
 
 double UbiV8Platform::CurrentClockTimeMillis() {
