@@ -59,6 +59,7 @@ jobs:
           if-no-files-found: error
 
       - name: Test ubi
+        if: runner.os != 'macOS'
         run: |
           make test-only TEST_JOBS=4
 

@@ -19,6 +19,9 @@ extern "C" {
 #ifndef RTLD_LOCAL
 #define RTLD_LOCAL 0x0000
 #endif
+#ifndef RTLD_DEFAULT
+#define RTLD_DEFAULT ((void*) 0)
+#endif
 
 static inline void* dlopen(const char* filename, int flags) {
   (void) filename;
