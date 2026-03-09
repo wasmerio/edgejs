@@ -6,6 +6,36 @@ on:
   workflow_dispatch:
 
 jobs:
+  metadata:
+    name: metadata
+    runs-on: ubuntu-latest
+    outputs:
+      ubi_version: ${{ steps.version.outputs.ubi_version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      release_name: ${{ steps.version.outputs.release_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute release metadata
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          major="$(sed -n 's/^#define UBI_MAJOR_VERSION //p' ubi/src/ubi_version.h)"
+          minor="$(sed -n 's/^#define UBI_MINOR_VERSION //p' ubi/src/ubi_version.h)"
+          patch="$(sed -n 's/^#define UBI_PATCH_VERSION //p' ubi/src/ubi_version.h)"
+          if [[ -z "${major}" || -z "${minor}" || -z "${patch}" ]]; then
+            echo "Failed to parse UBI version from ubi/src/ubi_version.h" >&2
+            exit 1
+          fi
+          ubi_version="${major}.${minor}.${patch}"
+          release_tag="${ubi_version}-nightly"
+          release_name="${release_tag}"
+          {
+            echo "ubi_version=${ubi_version}"
+            echo "release_tag=${release_tag}"
+            echo "release_name=${release_name}"
+          } >> "${GITHUB_OUTPUT}"
+
   build-linux:
     name: build-linux
     runs-on: ubuntu-latest
@@ -70,6 +100,107 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
+
+  publish-nightly:
+    name: publish-nightly
+    runs-on: ubuntu-latest
+    needs:
+      - metadata
+      - build-linux
+      - build-macos
+      - build-wasix-linux
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PLEASE_GH_TOKEN }}
+      TARGET_REPO: wasmerio/ubi-nightlies
+      RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
+      RELEASE_NAME: ${{ needs.metadata.outputs.release_name }}
+      UBI_VERSION: ${{ needs.metadata.outputs.ubi_version }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ubi-linux
+          path: release-assets/linux
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ubi-macos
+          path: release-assets/macos
+
+      - name: Download WASIX artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ubi-wasix
+          path: release-assets/wasix
+
+      - name: Collect release assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          mapfile -t files < <(find release-assets -type f -name '*.zip' | sort)
+          {
+            echo "asset_count=${#files[@]}"
+            echo "asset_list<<'EOF'"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+          printf 'Discovered %s release asset(s)\n' "${#files[@]}"
+          printf '%s\n' "${files[@]}"
+
+      - name: Create release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "Automated nightly build for UBI ${UBI_VERSION}."
+            echo
+            echo "- Source repo: ${GITHUB_REPOSITORY}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Workflow run: ${RUN_URL}"
+            echo "- Uploaded assets: ${{ steps.assets.outputs.asset_count }}"
+          } > release-notes.md
+
+      - name: Ensure nightly release exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "${RELEASE_TAG}" --repo "${TARGET_REPO}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --repo "${TARGET_REPO}" \
+              --target "${GITHUB_SHA}" \
+              --title "${RELEASE_NAME}" \
+              --notes-file release-notes.md \
+              --prerelease \
+              --latest=false
+          fi
+          release_id="$(gh api "repos/${TARGET_REPO}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          gh api \
+            --method PATCH \
+            "repos/${TARGET_REPO}/releases/${release_id}" \
+            -f name="${RELEASE_NAME}" \
+            -F prerelease=true \
+            -F make_latest=false \
+            -F body=@release-notes.md \
+            >/dev/null
+
+      - name: Upload nightly assets
+        if: ${{ steps.assets.outputs.asset_count != '0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(printf '%s\n' "${{ steps.assets.outputs.asset_list }}" | sed '/^$/d')
+          gh release upload "${RELEASE_TAG}" \
+            --repo "${TARGET_REPO}" \
+            --clobber \
+            "${files[@]}"
 
   build-macos:
     name: build-macos
