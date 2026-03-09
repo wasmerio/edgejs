@@ -148,7 +148,7 @@ jobs:
           mapfile -t files < <(find release-assets -type f -name '*.zip' | sort)
           {
             echo "asset_count=${#files[@]}"
-            echo "asset_list<<'EOF'"
+            echo "asset_list<<EOF"
             printf '%s\n' "${files[@]}"
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
