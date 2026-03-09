@@ -322,16 +322,82 @@ if(UBI_NAPI_PROVIDER STREQUAL "imports")
 endif()
 
 set(UBI_ICU_INCLUDE_DIRS
-  "${PROJECT_ROOT}/deps/icu-small/source/common"
-  "${PROJECT_ROOT}/deps/icu-small/source/i18n"
+  "${PROJECT_ROOT}/node/deps/icu-small/source/common"
+  "${PROJECT_ROOT}/node/deps/icu-small/source/i18n"
+  "${PROJECT_ROOT}/node/deps/icu-small/source/stubdata"
 )
 set(UBI_ICU_LINK_LIBS "")
-if(APPLE)
-  list(APPEND UBI_ICU_LINK_LIBS icucore)
-elseif(NOT UBI_IS_WASIX_TARGET)
-  find_package(ICU REQUIRED COMPONENTS uc)
-  set(UBI_ICU_INCLUDE_DIRS ${ICU_INCLUDE_DIRS})
-  list(APPEND UBI_ICU_LINK_LIBS ICU::uc)
+if(NOT UBI_IS_WASIX_TARGET)
+  file(GLOB_RECURSE UBI_ICU_COMMON_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_ROOT}/node/deps/icu-small/source/common/*.cpp"
+  )
+  file(GLOB_RECURSE UBI_ICU_I18N_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_ROOT}/node/deps/icu-small/source/i18n/*.cpp"
+  )
+
+  set(UBI_ICU_BASE_DEFINES
+    U_ATTRIBUTE_DEPRECATED=
+    UCONFIG_NO_SERVICE=1
+    U_ENABLE_DYLOAD=0
+    U_STATIC_IMPLEMENTATION=1
+    U_HAVE_STD_STRING=1
+    UCONFIG_NO_BREAK_ITERATION=0
+    U_DISABLE_RENAMING=1
+  )
+
+  add_library(ubi_icu_stubdata STATIC
+    "${PROJECT_ROOT}/node/deps/icu-small/source/stubdata/stubdata.cpp"
+  )
+  target_include_directories(ubi_icu_stubdata
+    PUBLIC
+      "${PROJECT_ROOT}/node/deps/icu-small/source/common"
+      "${PROJECT_ROOT}/node/deps/icu-small/source/stubdata"
+  )
+  target_compile_definitions(ubi_icu_stubdata
+    PRIVATE
+      ${UBI_ICU_BASE_DEFINES}
+      U_COMMON_IMPLEMENTATION=1
+  )
+
+  add_library(ubi_icu_common STATIC
+    ${UBI_ICU_COMMON_SOURCES}
+  )
+  target_include_directories(ubi_icu_common
+    PUBLIC
+      "${PROJECT_ROOT}/node/deps/icu-small/source/common"
+  )
+  target_compile_definitions(ubi_icu_common
+    PRIVATE
+      ${UBI_ICU_BASE_DEFINES}
+      U_COMMON_IMPLEMENTATION=1
+  )
+  target_link_libraries(ubi_icu_common
+    PUBLIC
+      ubi_icu_stubdata
+  )
+
+  add_library(ubi_icu_i18n STATIC
+    ${UBI_ICU_I18N_SOURCES}
+  )
+  target_include_directories(ubi_icu_i18n
+    PUBLIC
+      "${PROJECT_ROOT}/node/deps/icu-small/source/common"
+      "${PROJECT_ROOT}/node/deps/icu-small/source/i18n"
+  )
+  target_compile_definitions(ubi_icu_i18n
+    PRIVATE
+      ${UBI_ICU_BASE_DEFINES}
+      U_I18N_IMPLEMENTATION=1
+  )
+  target_link_libraries(ubi_icu_i18n
+    PUBLIC
+      ubi_icu_common
+  )
+
+  list(APPEND UBI_ICU_LINK_LIBS
+    ubi_icu_i18n
+    ubi_icu_common
+  )
 endif()
 
 add_library(ubi_ncrypto STATIC
