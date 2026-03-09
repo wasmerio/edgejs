@@ -9,6 +9,17 @@ OPENSSL_WASIX_DIR="${PROJECT_ROOT}/deps/openssl-wasix"
 
 export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-yes}"
 
+optimize_wasm() {
+  local input="$1"
+  local output="$2"
+  if command -v wasm-opt >/dev/null 2>&1; then
+    wasm-opt --emit-exnref -o "${output}" "${input}"
+    return
+  fi
+  echo "warning: wasm-opt not found in PATH; copying ${input} to ${output}" >&2
+  cp "${input}" "${output}"
+}
+
 "${SCRIPT_DIR}/setup-wasix-deps.sh"
 
 if [[ ! -f "${OPENSSL_WASIX_DIR}/libcrypto.a" || ! -f "${OPENSSL_WASIX_DIR}/libssl.a" ]]; then
@@ -43,11 +54,11 @@ cmake \
 cmake --build "${BUILD_DIR}" -j4
 
 if [[ -f "${BUILD_DIR}/ubi" ]]; then
-  wasm-opt --emit-exnref -o "${BUILD_DIR}/ubi.wasm" "${BUILD_DIR}/ubi"
+  optimize_wasm "${BUILD_DIR}/ubi" "${BUILD_DIR}/ubi.wasm"
 fi
 
 if [[ -f "${BUILD_DIR}/ubienv" ]]; then
-  wasm-opt --emit-exnref -o "${BUILD_DIR}/ubienv.wasm" "${BUILD_DIR}/ubienv"
+  optimize_wasm "${BUILD_DIR}/ubienv" "${BUILD_DIR}/ubienv.wasm"
 fi
 
 echo "Built WASIX target at ${BUILD_DIR}/ubi.wasm"

@@ -19,9 +19,9 @@ fn main() {
 
     // V8 paths
     let v8_include = std::env::var("V8_INCLUDE_DIR")
-        .expect("V8_INCLUDE_DIR must be set; enter the repo via `nix develop`");
-    let v8_lib =
-        std::env::var("V8_LIB_DIR").expect("V8_LIB_DIR must be set; enter the repo via `nix develop`");
+        .expect("V8_INCLUDE_DIR must be set (for example by CI or devshell setup)");
+    let v8_lib = std::env::var("V8_LIB_DIR")
+        .expect("V8_LIB_DIR must be set (for example by CI or devshell setup)");
     let v8_include_dir = std::path::Path::new(&v8_include);
     let v8_lib_dir = std::path::Path::new(&v8_lib);
     assert!(
