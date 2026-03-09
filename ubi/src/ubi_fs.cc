@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <string>
 #include <vector>

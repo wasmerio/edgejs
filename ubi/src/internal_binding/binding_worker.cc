@@ -1,6 +1,7 @@
 #include "internal_binding/dispatch.h"
 #include "internal_binding/binding_messaging.h"
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <mutex>

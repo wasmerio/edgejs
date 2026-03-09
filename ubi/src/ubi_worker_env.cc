@@ -1,5 +1,7 @@
 #include "ubi_worker_env.h"
 
+#include <array>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 
