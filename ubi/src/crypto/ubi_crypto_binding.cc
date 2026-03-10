@@ -79,10 +79,11 @@ struct RootCertLoadPlan {
 RootCertLoadPlan g_root_cert_load_plan;
 
 bool AddCertificateToStore(X509_STORE* store, X509* cert);
-EVP_PKEY* ParsePrivateKeyWithPassphrase(const uint8_t* data,
-                                        size_t len,
-                                        const std::string& passphrase,
-                                        bool has_passphrase);
+EVP_PKEY* ParsePrivateKeyWithPassphraseImpl(const uint8_t* data,
+                                            size_t len,
+                                            const uint8_t* passphrase,
+                                            size_t passphrase_len,
+                                            bool has_passphrase);
 
 bool EnsureTicketKeys(SecureContextHolder* holder) {
   if (holder == nullptr) return false;
@@ -626,12 +627,23 @@ void EnsureRootCertThreadCleanupHook(napi_env env) {
   }
 }
 
-bool GetBufferSourceBytes(napi_env env, napi_value value, uint8_t** data, size_t* len) {
+bool GetAnyBufferSourceBytesImpl(napi_env env, napi_value value, uint8_t** data, size_t* len) {
   static uint8_t kEmptyBufferSentinel = 0;
   if (GetBufferBytes(env, value, data, len)) return true;
 
   bool is_arraybuffer = false;
   if (napi_is_arraybuffer(env, value, &is_arraybuffer) == napi_ok && is_arraybuffer) {
+    void* raw = nullptr;
+    size_t byte_len = 0;
+    if (napi_get_arraybuffer_info(env, value, &raw, &byte_len) != napi_ok) return false;
+    if (raw == nullptr && byte_len != 0) return false;
+    *data = raw != nullptr ? static_cast<uint8_t*>(raw) : &kEmptyBufferSentinel;
+    *len = byte_len;
+    return true;
+  }
+
+  bool is_sharedarraybuffer = false;
+  if (node_api_is_sharedarraybuffer(env, value, &is_sharedarraybuffer) == napi_ok && is_sharedarraybuffer) {
     void* raw = nullptr;
     size_t byte_len = 0;
     if (napi_get_arraybuffer_info(env, value, &raw, &byte_len) != napi_ok) return false;
@@ -853,32 +865,15 @@ void ThrowError(napi_env env, const char* code, const char* message) {
   if (err != nullptr) napi_throw(env, err);
 }
 
-int OpenSslErrorPriority(unsigned long err) {
-  if (err == 0) return -1;
-  const char* reason = ERR_reason_error_string(err);
-  if (reason == nullptr) return 0;
-  if (std::strstr(reason, "bad decrypt") != nullptr) return 110;
-  if (std::strstr(reason, "wrong final block length") != nullptr) return 108;
-  if (std::strstr(reason, "data not multiple of block length") != nullptr) return 107;
-  if (std::strstr(reason, "bignum too long") != nullptr) return 106;
-  if (std::strstr(reason, "pss saltlen too small") != nullptr) return 100;
-  if (std::strstr(reason, "interrupted or cancelled") != nullptr) return 90;
-  if (std::strstr(reason, "illegal or unsupported padding mode") != nullptr) return 80;
-  return 0;
+unsigned long ConsumeOpenSslError() {
+  const unsigned long first = ERR_get_error();
+  while (ERR_get_error() != 0) {
+  }
+  return first;
 }
 
 void ThrowLastOpenSslError(napi_env env, const char* fallback_code, const char* fallback_message) {
-  unsigned long err = 0;
-  unsigned long selected = 0;
-  int selected_priority = -1;
-  while ((err = ERR_get_error()) != 0) {
-    const int priority = OpenSslErrorPriority(err);
-    if (selected == 0 || priority > selected_priority) {
-      selected = err;
-      selected_priority = priority;
-    }
-  }
-  ThrowOpenSslError(env, fallback_code, selected, fallback_message);
+  ThrowOpenSslError(env, fallback_code, ConsumeOpenSslError(), fallback_message);
 }
 
 ncrypto::Digest ResolveDigest(const std::string& name) {
@@ -900,7 +895,7 @@ std::string CanonicalizeDigestName(const std::string& in) {
   return out;
 }
 
-void SecureContextFinalizer(napi_env env, void* data, void* hint) {
+void SecureContextFinalizer(node_api_basic_env env, void* data, void* hint) {
   (void)env;
   (void)hint;
   auto* holder = reinterpret_cast<SecureContextHolder*>(data);
@@ -1164,7 +1159,7 @@ napi_value CryptoRandomFillSync(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
   uint8_t* data = nullptr;
   size_t len = 0;
-  if (!GetBufferSourceBytes(env, argv[0], &data, &len)) {
+  if (!GetAnyBufferSourceBytesImpl(env, argv[0], &data, &len)) {
     ThrowError(env, "ERR_INVALID_ARG_TYPE", "buffer must be an ArrayBuffer or ArrayBufferView");
     return nullptr;
   }
@@ -1310,8 +1305,8 @@ napi_value CryptoHkdfSync(napi_env env, napi_callback_info info) {
   uint8_t *ikm = nullptr, *salt = nullptr, *info_bytes = nullptr;
   size_t ikm_len = 0, salt_len = 0, info_len = 0;
   if (!GetKeyBytes(env, argv[1], &key_owned, &ikm, &ikm_len) ||
-      !GetBufferSourceBytes(env, argv[2], &salt, &salt_len) ||
-      !GetBufferSourceBytes(env, argv[3], &info_bytes, &info_len)) {
+      !GetAnyBufferSourceBytesImpl(env, argv[2], &salt, &salt_len) ||
+      !GetAnyBufferSourceBytesImpl(env, argv[3], &info_bytes, &info_len)) {
     ThrowError(env, "ERR_INVALID_ARG_TYPE", "hkdf input/salt/info must be Buffers or strings");
     return nullptr;
   }
@@ -1966,7 +1961,11 @@ napi_value CryptoSecureContextSetKey(napi_env env, napi_callback_info info) {
     ThrowError(env, "ERR_INVALID_ARG_TYPE", "passphrase must be a string or Buffer");
     return nullptr;
   }
-  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                                 key_len,
+                                                 reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                                 passphrase.size(),
+                                                 has_passphrase);
   if (pkey == nullptr) {
     ThrowLastOpenSslError(env, "ERR_CRYPTO_OPERATION_FAILED", "Failed to parse private key");
     return nullptr;
@@ -2225,7 +2224,9 @@ napi_value CryptoSecureContextLoadPKCS12(napi_env env, napi_callback_info info) 
   PKCS12* pkcs12 = nullptr;
   if (!d2i_PKCS12_bio(bio, &pkcs12)) {
     BIO_free(bio);
-    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load PFX certificate");
+    const unsigned long err = ConsumeOpenSslError();
+    const char* reason = ERR_reason_error_string(err);
+    napi_throw_error(env, nullptr, reason != nullptr ? reason : "Unknown error");
     return nullptr;
   }
   BIO_free(bio);
@@ -2242,13 +2243,15 @@ napi_value CryptoSecureContextLoadPKCS12(napi_env env, napi_callback_info info) 
 
   if (ok != 1) {
 #if OPENSSL_VERSION_MAJOR >= 3
-    const unsigned long err = ERR_peek_last_error();
-    if (ERR_GET_REASON(err) == ERR_R_UNSUPPORTED) {
+    const unsigned long peek_err = ERR_peek_last_error();
+    if (ERR_GET_REASON(peek_err) == ERR_R_UNSUPPORTED) {
       ThrowError(env, "ERR_CRYPTO_UNSUPPORTED_OPERATION", "Unsupported PKCS12 PFX data");
       return nullptr;
     }
 #endif
-    ThrowLastOpenSslError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load PFX certificate");
+    const unsigned long err = ConsumeOpenSslError();
+    const char* reason = ERR_reason_error_string(err);
+    napi_throw_error(env, nullptr, reason != nullptr ? reason : "Unknown error");
     return nullptr;
   }
 
@@ -2470,34 +2473,33 @@ napi_value CryptoSecureContextGetIssuer(napi_env env, napi_callback_info info) {
   return out;
 }
 
-EVP_PKEY* ParsePrivateKeyWithPassphrase(const uint8_t* data,
-                                        size_t len,
-                                        const std::string& passphrase,
-                                        bool has_passphrase) {
-  struct PasswordCallbackData {
-    const unsigned char* data = nullptr;
+EVP_PKEY* ParsePrivateKeyWithPassphraseImpl(const uint8_t* data,
+                                            size_t len,
+                                            const uint8_t* passphrase,
+                                            size_t passphrase_len,
+                                            bool has_passphrase) {
+  ERR_clear_error();
+  struct PassphraseSpan {
+    const uint8_t* data = nullptr;
     size_t len = 0;
-    bool provided = false;
   };
   auto password_callback = [](char* buf, int size, int /*rwflag*/, void* userdata) -> int {
-    auto* cb_data = static_cast<PasswordCallbackData*>(userdata);
-    if (cb_data == nullptr || !cb_data->provided) return 0;
-    if (size <= 0) return 0;
-    const size_t max_copy = static_cast<size_t>(size);
-    const size_t copy_len = cb_data->len < max_copy ? cb_data->len : max_copy;
-    if (copy_len > 0 && cb_data->data != nullptr) {
-      std::memcpy(buf, cb_data->data, copy_len);
+    auto* span = static_cast<PassphraseSpan*>(userdata);
+    if (span == nullptr) return -1;
+    const size_t buflen = static_cast<size_t>(size);
+    if (buflen < span->len) return -1;
+    if (span->len > 0 && span->data != nullptr) {
+      std::memcpy(buf, span->data, span->len);
     }
-    return static_cast<int>(copy_len);
+    return static_cast<int>(span->len);
   };
 
   BIO* bio = BIO_new_mem_buf(data, static_cast<int>(len));
   if (bio == nullptr) return nullptr;
-  PasswordCallbackData cb_data;
-  cb_data.data = has_passphrase ? reinterpret_cast<const unsigned char*>(passphrase.data()) : nullptr;
-  cb_data.len = has_passphrase ? passphrase.size() : 0;
-  cb_data.provided = has_passphrase;
-  void* passphrase_arg = &cb_data;
+  PassphraseSpan passphrase_span;
+  passphrase_span.data = has_passphrase ? passphrase : nullptr;
+  passphrase_span.len = has_passphrase ? passphrase_len : 0;
+  void* passphrase_arg = has_passphrase ? &passphrase_span : nullptr;
   pem_password_cb* password_cb = password_callback;
   EVP_PKEY* pkey = PEM_read_bio_PrivateKey(bio, nullptr, password_cb, passphrase_arg);
   const bool looks_like_pem = (len > 0 && data[0] == '-');
@@ -2515,48 +2517,72 @@ EVP_PKEY* ParsePrivateKeyWithPassphrase(const uint8_t* data,
 }
 
 EVP_PKEY* ParsePrivateKey(const uint8_t* data, size_t len) {
-  return ParsePrivateKeyWithPassphrase(data, len, "", false);
+  return ParsePrivateKeyWithPassphraseImpl(data, len, nullptr, 0, false);
+}
+
+template <typename ParseFn>
+EVP_PKEY* TryParsePublicPemBlock(BIO* bio, const char* name, ParseFn&& parse) {
+  if (bio == nullptr || name == nullptr) return nullptr;
+  if (BIO_reset(bio) != 1) return nullptr;
+
+  unsigned char* der_data = nullptr;
+  long der_len = 0;
+  if (PEM_bytes_read_bio(&der_data, &der_len, nullptr, name, bio, nullptr, nullptr) != 1) {
+    return nullptr;
+  }
+
+  const unsigned char* der = der_data;
+  EVP_PKEY* pkey = parse(&der, der_len);
+  OPENSSL_free(der_data);
+  return pkey;
 }
 
 EVP_PKEY* ParsePublicKeyOrCert(const uint8_t* data, size_t len) {
+  ERR_clear_error();
   BIO* bio = BIO_new_mem_buf(data, static_cast<int>(len));
   if (bio == nullptr) return nullptr;
   const bool looks_like_pem = (len > 0 && data[0] == '-');
-  EVP_PKEY* pkey = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
-  if (pkey == nullptr) {
-    (void)BIO_reset(bio);
-    RSA* rsa = PEM_read_bio_RSAPublicKey(bio, nullptr, nullptr, nullptr);
-    if (rsa != nullptr) {
-      pkey = EVP_PKEY_new();
-      if (pkey == nullptr || EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
-        if (pkey != nullptr) EVP_PKEY_free(pkey);
-        RSA_free(rsa);
-        pkey = nullptr;
-      }
+  EVP_PKEY* pkey = nullptr;
+  if (looks_like_pem) {
+    pkey = TryParsePublicPemBlock(bio, "PUBLIC KEY", [](const unsigned char** der, long der_len) {
+      return d2i_PUBKEY(nullptr, der, der_len);
+    });
+    if (pkey == nullptr) {
+      pkey = TryParsePublicPemBlock(bio, "RSA PUBLIC KEY", [](const unsigned char** der, long der_len) {
+        return d2i_PublicKey(EVP_PKEY_RSA, nullptr, der, der_len);
+      });
     }
-  }
-  if (pkey == nullptr && !looks_like_pem) {
+    if (pkey == nullptr) {
+      pkey = TryParsePublicPemBlock(bio, "CERTIFICATE", [](const unsigned char** der, long der_len) {
+        X509* cert = d2i_X509(nullptr, der, der_len);
+        if (cert == nullptr) return static_cast<EVP_PKEY*>(nullptr);
+        EVP_PKEY* public_key = X509_get_pubkey(cert);
+        X509_free(cert);
+        return public_key;
+      });
+    }
+  } else {
     (void)BIO_reset(bio);
     pkey = d2i_PUBKEY_bio(bio, nullptr);
-  }
-  if (pkey == nullptr && !looks_like_pem) {
-    (void)BIO_reset(bio);
-    RSA* rsa = d2i_RSAPublicKey_bio(bio, nullptr);
-    if (rsa != nullptr) {
-      pkey = EVP_PKEY_new();
-      if (pkey == nullptr || EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
-        if (pkey != nullptr) EVP_PKEY_free(pkey);
-        RSA_free(rsa);
-        pkey = nullptr;
+    if (pkey == nullptr) {
+      (void)BIO_reset(bio);
+      RSA* rsa = d2i_RSAPublicKey_bio(bio, nullptr);
+      if (rsa != nullptr) {
+        pkey = EVP_PKEY_new();
+        if (pkey == nullptr || EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
+          if (pkey != nullptr) EVP_PKEY_free(pkey);
+          RSA_free(rsa);
+          pkey = nullptr;
+        }
       }
     }
-  }
-  if (pkey == nullptr) {
-    (void)BIO_reset(bio);
-    X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
-    if (cert != nullptr) {
-      pkey = X509_get_pubkey(cert);
-      X509_free(cert);
+    if (pkey == nullptr) {
+      (void)BIO_reset(bio);
+      X509* cert = d2i_X509_bio(bio, nullptr);
+      if (cert != nullptr) {
+        pkey = X509_get_pubkey(cert);
+        X509_free(cert);
+      }
     }
   }
   BIO_free(bio);
@@ -2825,7 +2851,11 @@ napi_value CryptoGetAsymmetricKeyDetails(napi_env env, napi_callback_info info) 
     }
   }
 
-  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                                 key_len,
+                                                 reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                                 passphrase.size(),
+                                                 has_passphrase);
   if (pkey == nullptr) pkey = ParsePublicKeyOrCert(key_bytes, key_len);
   if (pkey == nullptr) {
     napi_value null_v = nullptr;
@@ -2968,7 +2998,11 @@ napi_value CryptoGetAsymmetricKeyType(napi_env env, napi_callback_info info) {
       return nullptr;
     }
   }
-  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                                 key_len,
+                                                 reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                                 passphrase.size(),
+                                                 has_passphrase);
   if (pkey == nullptr) pkey = ParsePublicKeyOrCert(key_bytes, key_len);
   if (pkey == nullptr) {
     napi_value null_v = nullptr;
@@ -3026,7 +3060,14 @@ napi_value CryptoPublicEncrypt(napi_env env, napi_callback_info info) {
   }
 
   EVP_PKEY* pkey = ParsePublicKeyOrCert(key_bytes, key_len);
-  if (pkey == nullptr) pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  if (pkey == nullptr) {
+    ERR_clear_error();
+    pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                         key_len,
+                                         reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                         passphrase.size(),
+                                         has_passphrase);
+  }
   if (pkey == nullptr) {
     ThrowLastOpenSslError(env, "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE", "Invalid public key");
     return nullptr;
@@ -3109,7 +3150,11 @@ napi_value CryptoPrivateEncrypt(napi_env env, napi_callback_info info) {
   int32_t padding = RSA_PKCS1_PADDING;
   if (argc >= 6 && argv[5] != nullptr) napi_get_value_int32(env, argv[5], &padding);
 
-  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                                 key_len,
+                                                 reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                                 passphrase.size(),
+                                                 has_passphrase);
   if (pkey == nullptr) {
     ThrowLastOpenSslError(env, "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE", "Invalid private key");
     return nullptr;
@@ -3170,7 +3215,11 @@ napi_value CryptoPrivateDecrypt(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                                 key_len,
+                                                 reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                                 passphrase.size(),
+                                                 has_passphrase);
   if (pkey == nullptr) {
     ThrowLastOpenSslError(env, "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE", "Invalid private key");
     return nullptr;
@@ -3254,7 +3303,14 @@ napi_value CryptoPublicDecrypt(napi_env env, napi_callback_info info) {
   if (argc >= 6 && argv[5] != nullptr) napi_get_value_int32(env, argv[5], &padding);
 
   EVP_PKEY* pkey = ParsePublicKeyOrCert(key_bytes, key_len);
-  if (pkey == nullptr) pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  if (pkey == nullptr) {
+    ERR_clear_error();
+    pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                         key_len,
+                                         reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                         passphrase.size(),
+                                         has_passphrase);
+  }
   if (pkey == nullptr) {
     ThrowLastOpenSslError(env, "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE", "Invalid public key");
     return nullptr;
@@ -3452,7 +3508,11 @@ napi_value CryptoSignOneShot(napi_env env, napi_callback_info info) {
     }
   }
 
-  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                                 key_len,
+                                                 reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                                 passphrase.size(),
+                                                 has_passphrase);
   if (pkey == nullptr) {
     if (!has_passphrase && key_format == 0) {
       napi_throw_type_error(env, "ERR_MISSING_PASSPHRASE", "Passphrase required for encrypted key");
@@ -3727,7 +3787,13 @@ napi_value CryptoVerifyOneShot(napi_env env, napi_callback_info info) {
   }
 
   EVP_PKEY* pkey = ParsePublicKeyOrCert(key_bytes, key_len);
-  if (pkey == nullptr) pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
+  if (pkey == nullptr) {
+    pkey = ParsePrivateKeyWithPassphrase(key_bytes,
+                                         key_len,
+                                         reinterpret_cast<const uint8_t*>(passphrase.data()),
+                                         passphrase.size(),
+                                         has_passphrase);
+  }
   if (pkey == nullptr) {
     if (!has_passphrase && key_format == 0) {
       napi_throw_type_error(env, "ERR_MISSING_PASSPHRASE", "Passphrase required for encrypted key");
@@ -3908,6 +3974,18 @@ void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback fn)
 }
 
 }  // namespace
+
+bool GetAnyBufferSourceBytes(napi_env env, napi_value value, uint8_t** data, size_t* len) {
+  return GetAnyBufferSourceBytesImpl(env, value, data, len);
+}
+
+EVP_PKEY* ParsePrivateKeyWithPassphrase(const uint8_t* data,
+                                        size_t len,
+                                        const uint8_t* passphrase,
+                                        size_t passphrase_len,
+                                        bool has_passphrase) {
+  return ParsePrivateKeyWithPassphraseImpl(data, len, passphrase, passphrase_len, has_passphrase);
+}
 
 napi_value CryptoGetBundledRootCertificates(napi_env env, napi_callback_info /*info*/) {
   std::vector<std::string> certs;

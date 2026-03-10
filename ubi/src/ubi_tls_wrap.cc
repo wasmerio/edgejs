@@ -1121,6 +1121,9 @@ void EmitHandshakeDoneIfPending(TlsWrap* wrap) {
   if (wrap == nullptr || wrap->ssl == nullptr || !wrap->handshake_done_pending || wrap->handshake_done_emitted) {
     return;
   }
+  if (wrap->parent_write_in_progress || !wrap->pending_encrypted_writes.empty()) {
+    return;
+  }
   wrap->handshake_done_pending = false;
   wrap->handshake_done_emitted = true;
   if (wrap->keepalive_needed) {
@@ -2060,8 +2063,8 @@ void Cycle(TlsWrap* wrap) {
     if (PumpPendingAppWrites(wrap)) keep_going = true;
     if (MaybeEmitClientOcspResponse(wrap, wrap->established)) keep_going = true;
     if (wrap->ssl != nullptr) {
-      EmitHandshakeDoneIfPending(wrap);
       TryStartParentWrite(wrap);
+      EmitHandshakeDoneIfPending(wrap);
       MaybeStartTlsShutdown(wrap);
     }
     if (!wrap->parent_write_in_progress && wrap->pending_encrypted_writes.empty()) {

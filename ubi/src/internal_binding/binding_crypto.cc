@@ -176,6 +176,14 @@ bool GetByteSpan(napi_env env, napi_value value, const uint8_t** data, size_t* l
   *data = nullptr;
   *length = 0;
 
+  uint8_t* mutable_data = nullptr;
+  size_t mutable_length = 0;
+  if (ubi::crypto::GetAnyBufferSourceBytes(env, value, &mutable_data, &mutable_length)) {
+    *data = mutable_data;
+    *length = mutable_length;
+    return true;
+  }
+
   bool is_buffer = false;
   if (napi_is_buffer(env, value, &is_buffer) == napi_ok && is_buffer) {
     void* raw = nullptr;
@@ -222,29 +230,6 @@ bool GetByteSpan(napi_env env, napi_value value, const uint8_t** data, size_t* l
     }
     *data = static_cast<const uint8_t*>(raw);
     *length = len * bytes_per_element;
-    return true;
-  }
-
-  bool is_arraybuffer = false;
-  if (napi_is_arraybuffer(env, value, &is_arraybuffer) == napi_ok && is_arraybuffer) {
-    void* raw = nullptr;
-    if (napi_get_arraybuffer_info(env, value, &raw, length) != napi_ok || raw == nullptr) return false;
-    *data = static_cast<const uint8_t*>(raw);
-    return true;
-  }
-
-  bool is_dataview = false;
-  if (napi_is_dataview(env, value, &is_dataview) == napi_ok && is_dataview) {
-    size_t byte_length = 0;
-    void* raw = nullptr;
-    napi_value arraybuffer = nullptr;
-    size_t byte_offset = 0;
-    if (napi_get_dataview_info(env, value, &byte_length, &raw, &arraybuffer, &byte_offset) != napi_ok ||
-        raw == nullptr) {
-      return false;
-    }
-    *data = static_cast<const uint8_t*>(raw);
-    *length = byte_length;
     return true;
   }
 
@@ -641,71 +626,6 @@ const char* MapOpenSslErrorCode(unsigned long err) {
   return nullptr;
 }
 
-int OpenSslErrorPriority(unsigned long err) {
-  if (err == 0) return -1;
-  const char* library = ERR_lib_error_string(err);
-  const char* reason = ERR_reason_error_string(err);
-  if (reason != nullptr &&
-      std::strcmp(reason, "bad decrypt") == 0) {
-    return 110;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "wrong final block length") == 0) {
-    return 108;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "data not multiple of block length") == 0) {
-    return 107;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bignum too long") == 0) {
-    return 106;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "missing OID") == 0) {
-    return 95;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "modulus too small") == 0) {
-    return 94;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bits too small") == 0) {
-    return 94;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bad generator") == 0) {
-    return 94;
-  }
-  if (reason != nullptr &&
-      (std::strcmp(reason, "mismatching domain parameters") == 0 ||
-       std::strcmp(reason, "different parameters") == 0)) {
-    return 94;
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "interrupted or cancelled") == 0) {
-    return 90;
-  }
-  if (library != nullptr &&
-      reason != nullptr &&
-      std::strcmp(library, "DECODER routines") == 0 &&
-      std::strcmp(reason, "unsupported") == 0) {
-    return 90;
-  }
-#if OPENSSL_VERSION_NUMBER < 0x30000000L
-  const char* function = ERR_func_error_string(err);
-  if (library != nullptr &&
-      reason != nullptr &&
-      function != nullptr &&
-      std::strcmp(library, "PEM routines") == 0 &&
-      std::strcmp(function, "get_name") == 0 &&
-      std::strcmp(reason, "no start line") == 0) {
-    return 80;
-  }
-#endif
-  return 0;
-}
-
 napi_value CreateOpenSslError(napi_env env,
                               const char* code,
                               unsigned long err,
@@ -762,15 +682,8 @@ napi_value CreateOpenSslErrorStackException(napi_env env, const ncrypto::CryptoE
 }
 
 void ThrowLastOpenSslMessage(napi_env env, const char* fallback_message) {
-  unsigned long err = 0;
-  unsigned long selected = 0;
-  int selected_priority = -1;
-  while ((err = ERR_get_error()) != 0) {
-    const int priority = OpenSslErrorPriority(err);
-    if (selected == 0 || priority > selected_priority) {
-      selected = err;
-      selected_priority = priority;
-    }
+  const unsigned long selected = ERR_get_error();
+  while (ERR_get_error() != 0) {
   }
   if (selected == 0) {
     napi_throw_error(env, nullptr, fallback_message);
@@ -780,15 +693,8 @@ void ThrowLastOpenSslMessage(napi_env env, const char* fallback_message) {
 }
 
 unsigned long ConsumePreferredOpenSslError() {
-  unsigned long err = 0;
-  unsigned long selected = 0;
-  int selected_priority = -1;
-  while ((err = ERR_get_error()) != 0) {
-    const int priority = OpenSslErrorPriority(err);
-    if (selected == 0 || priority > selected_priority) {
-      selected = err;
-      selected_priority = priority;
-    }
+  const unsigned long selected = ERR_get_error();
+  while (ERR_get_error() != 0) {
   }
   return selected;
 }
@@ -816,15 +722,8 @@ void SetPreferredOpenSslError(std::string* code,
                               const char* fallback_message) {
   if (code == nullptr || message == nullptr) return;
 
-  unsigned long err = 0;
-  unsigned long selected = 0;
-  int selected_priority = -1;
-  while ((err = ERR_get_error()) != 0) {
-    const int priority = OpenSslErrorPriority(err);
-    if (selected == 0 || priority > selected_priority) {
-      selected = err;
-      selected_priority = priority;
-    }
+  const unsigned long selected = ERR_get_error();
+  while (ERR_get_error() != 0) {
   }
 
   if (selected != 0) {
@@ -1136,29 +1035,7 @@ EVP_PKEY* ParsePrivateKeyBytesWithPassphrase(const uint8_t* data,
                                              const uint8_t* passphrase,
                                              size_t passphrase_len,
                                              bool has_passphrase) {
-  if (data == nullptr || len == 0) return nullptr;
-  auto looks_like_pem = [](const uint8_t* bytes, size_t size) {
-    size_t i = 0;
-    while (i < size && (bytes[i] == ' ' || bytes[i] == '\t' || bytes[i] == '\r' || bytes[i] == '\n')) ++i;
-    static constexpr char kPemPrefix[] = "-----BEGIN ";
-    const size_t prefix_len = sizeof(kPemPrefix) - 1;
-    return size >= i + prefix_len && std::memcmp(bytes + i, kPemPrefix, prefix_len) == 0;
-  };
-  BIO* bio = BIO_new_mem_buf(data, static_cast<int>(len));
-  if (bio == nullptr) return nullptr;
-  void* passphrase_ptr = has_passphrase
-                             ? const_cast<unsigned char*>(
-                                   passphrase_len == 0 ? reinterpret_cast<const unsigned char*>("")
-                                                       : passphrase)
-                             : nullptr;
-  EVP_PKEY* pkey = nullptr;
-  if (looks_like_pem(data, len)) {
-    pkey = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, passphrase_ptr);
-  } else {
-    pkey = d2i_PrivateKey_bio(bio, nullptr);
-  }
-  BIO_free(bio);
-  return pkey;
+  return ubi::crypto::ParsePrivateKeyWithPassphrase(data, len, passphrase, passphrase_len, has_passphrase);
 }
 
 EVP_PKEY* ParsePrivateKeyBytes(const uint8_t* data, size_t len) {
@@ -3298,7 +3175,15 @@ EVP_PKEY* ParseKeyObjectAsymmetricKey(KeyObjectWrap* wrap) {
     if (EVP_PKEY_up_ref(wrap->native_pkey) != 1) return nullptr;
     return wrap->native_pkey;
   }
-  return ParseAnyKeyBytes(wrap->key_data, wrap->key_passphrase, wrap->has_key_passphrase);
+  if (wrap->key_type == kKeyTypePrivate) {
+    return ParsePrivateKeyBytesWithPassphrase(
+        wrap->key_data.data(),
+        wrap->key_data.size(),
+        wrap->key_passphrase.data(),
+        wrap->key_passphrase.size(),
+        wrap->has_key_passphrase);
+  }
+  return ParsePublicKeyBytes(wrap->key_data.data(), wrap->key_data.size());
 }
 
 void ResetKeyObjectNativeKey(KeyObjectWrap* wrap) {
@@ -3581,13 +3466,61 @@ napi_value KeyObjectInit(napi_env env, napi_callback_info info) {
   int32_t key_type = kKeyTypeSecret;
   if (argc >= 1 && argv[0] != nullptr) napi_get_value_int32(env, argv[0], &key_type);
   wrap->key_type = key_type;
-  wrap->key_data = (argc >= 2 && argv[1] != nullptr) ? ValueToBytes(env, argv[1]) : std::vector<uint8_t>{};
+  KeyObjectWrap* source_wrap = (argc >= 2 && argv[1] != nullptr) ? UnwrapKeyObject(env, argv[1]) : nullptr;
+  wrap->key_data.clear();
   wrap->key_passphrase.clear();
   wrap->has_key_passphrase = false;
   if (argc >= 5 && !IsNullOrUndefinedValue(env, argv[4])) {
     wrap->key_passphrase = ValueToBytes(env, argv[4]);
     wrap->has_key_passphrase = true;
   }
+
+  if (source_wrap != nullptr) {
+    if (wrap->key_type == kKeyTypeSecret || source_wrap->key_type == kKeyTypeSecret) {
+      napi_throw(env,
+                 CreateErrorWithCode(env,
+                                     "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE",
+                                     "Invalid key object type"));
+      return nullptr;
+    }
+
+    EVP_PKEY* pkey = ParseKeyObjectAsymmetricKey(source_wrap);
+    if (pkey == nullptr) {
+      std::string error_code;
+      std::string error_message;
+      SetPreferredOpenSslError(&error_code, &error_message, "ERR_CRYPTO_OPERATION_FAILED", "Failed to read key");
+      napi_throw(env, CreateErrorWithCode(env, error_code.c_str(), error_message.c_str()));
+      return nullptr;
+    }
+
+    if (wrap->key_type == kKeyTypePrivate) {
+      if (source_wrap->key_type != kKeyTypePrivate) {
+        EVP_PKEY_free(pkey);
+        napi_throw(env,
+                   CreateErrorWithCode(env,
+                                       "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE",
+                                       "Invalid key object type"));
+        return nullptr;
+      }
+      wrap->key_data = ExportPrivateDerPkcs8(pkey);
+    } else if (wrap->key_type == kKeyTypePublic) {
+      wrap->key_data = ExportPublicDerSpki(pkey);
+    }
+    EVP_PKEY_free(pkey);
+
+    wrap->key_passphrase.clear();
+    wrap->has_key_passphrase = false;
+    if (wrap->key_data.empty()) {
+      napi_throw(env, CreateErrorWithCode(env, "ERR_CRYPTO_OPERATION_FAILED", "Failed to read key"));
+      return nullptr;
+    }
+
+    napi_value out = nullptr;
+    napi_get_boolean(env, true, &out);
+    return out != nullptr ? out : Undefined(env);
+  }
+
+  wrap->key_data = (argc >= 2 && argv[1] != nullptr) ? ValueToBytes(env, argv[1]) : std::vector<uint8_t>{};
 
   if (wrap->key_type == kKeyTypePrivate) {
     EVP_PKEY* pkey = ParsePrivateKeyBytesWithPassphrase(
@@ -3611,19 +3544,30 @@ napi_value KeyObjectInit(napi_env env, napi_callback_info info) {
     EVP_PKEY_free(pkey);
   } else if (wrap->key_type == kKeyTypePublic) {
     EVP_PKEY* pkey = ParsePublicKeyBytes(wrap->key_data.data(), wrap->key_data.size());
-    if (pkey == nullptr) {
+    if (pkey != nullptr) {
+      wrap->key_data = ExportPublicDerSpki(pkey);
+    } else {
       pkey = ParsePrivateKeyBytesWithPassphrase(
           wrap->key_data.data(),
           wrap->key_data.size(),
           wrap->key_passphrase.data(),
           wrap->key_passphrase.size(),
           wrap->has_key_passphrase);
+      if (pkey != nullptr) {
+        wrap->key_data = ExportPublicDerSpki(pkey);
+        wrap->key_passphrase.clear();
+        wrap->has_key_passphrase = false;
+      }
     }
     if (pkey == nullptr) {
       ThrowLastOpenSslMessage(env, "Failed to read public key");
       return nullptr;
     }
     EVP_PKEY_free(pkey);
+    if (wrap->key_data.empty()) {
+      napi_throw(env, CreateErrorWithCode(env, "ERR_CRYPTO_OPERATION_FAILED", "Failed to read public key"));
+      return nullptr;
+    }
   }
 
   napi_value out = nullptr;
@@ -6027,8 +5971,7 @@ EVP_PKEY* GetAsymmetricKeyFromValue(napi_env env,
     }
     EVP_PKEY* pkey = ParseKeyObjectAsymmetricKey(wrap);
     if (pkey == nullptr) {
-      *error_code = "ERR_CRYPTO_OPERATION_FAILED";
-      *error_message = "Failed to parse key";
+      SetPreferredOpenSslError(error_code, error_message, "ERR_CRYPTO_OPERATION_FAILED", "Failed to parse key");
     }
     return pkey;
   }
@@ -7785,7 +7728,8 @@ napi_value RSACipherJobRun(napi_env env, napi_callback_info info) {
 
   EVP_PKEY* pkey = ParseKeyObjectAsymmetricKey(key_wrap);
   if (pkey == nullptr) {
-    napi_value result = BuildJobErrorResult(env, "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE", "Invalid key object");
+    napi_value result =
+        BuildJobOpenSslErrorResult(env, "ERR_CRYPTO_OPERATION_FAILED", "Failed to parse key");
     return FinalizeJobRunResult(env, this_arg, wrap, result);
   }
 
