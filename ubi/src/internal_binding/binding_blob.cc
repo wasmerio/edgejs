@@ -29,6 +29,9 @@ struct StoredDataObject {
 struct BlobBindingState {
   std::unordered_map<std::string, StoredDataObject> objects;
   napi_ref binding_ref = nullptr;
+  napi_ref handle_slice_ref = nullptr;
+  napi_ref handle_get_reader_ref = nullptr;
+  napi_ref reader_pull_ref = nullptr;
 };
 
 std::unordered_map<napi_env, BlobBindingState> g_blob_state;
@@ -51,6 +54,9 @@ void OnBlobEnvCleanup(void* data) {
   }
   it->second.objects.clear();
   DeleteRefIfPresent(env, &it->second.binding_ref);
+  DeleteRefIfPresent(env, &it->second.handle_slice_ref);
+  DeleteRefIfPresent(env, &it->second.handle_get_reader_ref);
+  DeleteRefIfPresent(env, &it->second.reader_pull_ref);
   g_blob_state.erase(it);
 }
 
@@ -70,6 +76,15 @@ bool GetNamedProperty(napi_env env, napi_value obj, const char* key, napi_value*
   bool has = false;
   if (napi_has_named_property(env, obj, key, &has) != napi_ok || !has) return false;
   return napi_get_named_property(env, obj, key, out) == napi_ok && *out != nullptr;
+}
+
+napi_value GetRefValue(napi_env env, napi_ref ref) {
+  if (env == nullptr || ref == nullptr) return nullptr;
+  napi_value value = nullptr;
+  if (napi_get_reference_value(env, ref, &value) != napi_ok || value == nullptr) {
+    return nullptr;
+  }
+  return value;
 }
 
 bool ValueToUtf8(napi_env env, napi_value value, std::string* out) {
@@ -185,29 +200,48 @@ napi_value BlobReaderPullCallback(napi_env env, napi_callback_info info);
 napi_value BlobHandleSliceCallback(napi_env env, napi_callback_info info);
 napi_value BlobHandleGetReaderCallback(napi_env env, napi_callback_info info);
 
+napi_value GetOrCreateCachedFunction(napi_env env,
+                                     napi_ref* slot,
+                                     const char* name,
+                                     napi_callback callback) {
+  if (slot == nullptr || callback == nullptr) return nullptr;
+
+  napi_value cached = GetRefValue(env, *slot);
+  if (cached != nullptr) return cached;
+
+  napi_value fn = nullptr;
+  if (napi_create_function(env, name, NAPI_AUTO_LENGTH, callback, nullptr, &fn) != napi_ok ||
+      fn == nullptr) {
+    return nullptr;
+  }
+
+  DeleteRefIfPresent(env, slot);
+  if (napi_create_reference(env, fn, 1, slot) != napi_ok) {
+    return fn;
+  }
+  return fn;
+}
+
 napi_value CreateBlobHandle(napi_env env, napi_value data_arraybuffer) {
+  EnsureBlobCleanupHook(env);
+  BlobBindingState& state = g_blob_state[env];
+
   napi_value handle = nullptr;
   if (napi_create_object(env, &handle) != napi_ok || handle == nullptr) return Undefined(env);
   if (napi_set_named_property(env, handle, kBlobDataKey, data_arraybuffer) != napi_ok) {
     return Undefined(env);
   }
 
-  napi_value slice_fn = nullptr;
-  if (napi_create_function(
-          env, "slice", NAPI_AUTO_LENGTH, BlobHandleSliceCallback, nullptr, &slice_fn) != napi_ok ||
-      slice_fn == nullptr ||
+  napi_value slice_fn = GetOrCreateCachedFunction(
+      env, &state.handle_slice_ref, "slice", BlobHandleSliceCallback);
+  if (slice_fn == nullptr ||
       napi_set_named_property(env, handle, "slice", slice_fn) != napi_ok) {
     return Undefined(env);
   }
 
-  napi_value get_reader_fn = nullptr;
-  if (napi_create_function(env,
-                           "getReader",
-                           NAPI_AUTO_LENGTH,
-                           BlobHandleGetReaderCallback,
-                           nullptr,
-                           &get_reader_fn) != napi_ok ||
-      get_reader_fn == nullptr ||
+  napi_value get_reader_fn = GetOrCreateCachedFunction(
+      env, &state.handle_get_reader_ref, "getReader", BlobHandleGetReaderCallback);
+  if (get_reader_fn == nullptr ||
       napi_set_named_property(env, handle, "getReader", get_reader_fn) != napi_ok) {
     return Undefined(env);
   }
@@ -291,10 +325,11 @@ napi_value BlobHandleGetReaderCallback(napi_env env, napi_callback_info info) {
   if (napi_get_boolean(env, false, &done) != napi_ok || done == nullptr) return Undefined(env);
   if (napi_set_named_property(env, reader, kBlobReaderDoneKey, done) != napi_ok) return Undefined(env);
 
-  napi_value pull_fn = nullptr;
-  if (napi_create_function(
-          env, "pull", NAPI_AUTO_LENGTH, BlobReaderPullCallback, nullptr, &pull_fn) != napi_ok ||
-      pull_fn == nullptr ||
+  EnsureBlobCleanupHook(env);
+  BlobBindingState& state = g_blob_state[env];
+  napi_value pull_fn = GetOrCreateCachedFunction(
+      env, &state.reader_pull_ref, "pull", BlobReaderPullCallback);
+  if (pull_fn == nullptr ||
       napi_set_named_property(env, reader, "pull", pull_fn) != napi_ok) {
     return Undefined(env);
   }

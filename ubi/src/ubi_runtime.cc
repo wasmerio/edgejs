@@ -46,6 +46,7 @@
 #include "ubi_http_parser.h"
 #include "ubi_module_loader.h"
 #include "ubi_os.h"
+#include "ubi_option_helpers.h"
 #include "ubi_path.h"
 #include "ubi_pipe_wrap.h"
 #include "ubi_signal_wrap.h"
@@ -68,8 +69,9 @@ namespace {
 
 thread_local std::string g_ubi_current_script_path;
 thread_local std::vector<std::string> g_ubi_exec_argv;
+thread_local std::vector<std::string> g_ubi_effective_exec_argv;
 std::vector<std::string> g_ubi_cli_exec_argv;
-std::string g_ubi_process_title;
+thread_local std::string g_ubi_process_title;
 thread_local std::vector<std::string> g_ubi_script_argv;
 const auto g_process_start_time = std::chrono::steady_clock::now();
 std::once_flag g_process_stdio_init_once;
@@ -532,6 +534,32 @@ int GetProcessExitCodeOrZero(napi_env env) {
   return has_exit_code ? exit_code : 0;
 }
 
+bool IsProcessExiting(napi_env env) {
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
+    return false;
+  }
+  bool has_process = false;
+  if (napi_has_named_property(env, global, "process", &has_process) != napi_ok || !has_process) {
+    return false;
+  }
+  napi_value process_obj = nullptr;
+  if (napi_get_named_property(env, global, "process", &process_obj) != napi_ok || process_obj == nullptr) {
+    return false;
+  }
+  bool has_exiting = false;
+  if (napi_has_named_property(env, process_obj, "_exiting", &has_exiting) != napi_ok || !has_exiting) {
+    return false;
+  }
+  napi_value exiting_value = nullptr;
+  if (napi_get_named_property(env, process_obj, "_exiting", &exiting_value) != napi_ok ||
+      exiting_value == nullptr) {
+    return false;
+  }
+  bool exiting = false;
+  return napi_get_value_bool(env, exiting_value, &exiting) == napi_ok && exiting;
+}
+
 bool SetProcessExitCodeIfNeeded(napi_env env, int exit_code, bool only_if_unset) {
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
@@ -631,11 +659,6 @@ bool DispatchUncaughtException(napi_env env,
   if (effective_exception_out != nullptr) *effective_exception_out = exception;
   if (fatal_exit_code_out != nullptr) *fatal_exit_code_out = -1;
   if (exception == nullptr) return false;
-  // Worker-thread environments should surface uncaught exceptions back to the
-  // parent Worker object instead of running process._fatalException locally.
-  if (!UbiWorkerEnvOwnsProcessState(env)) {
-    return false;
-  }
 
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
@@ -666,6 +689,17 @@ bool DispatchUncaughtException(napi_env env,
   napi_value handled_value = nullptr;
   const napi_status status = napi_call_function(env, process_obj, fatal_exception_fn, 2, argv, &handled_value);
   if (status != napi_ok) {
+    if (!UbiWorkerEnvOwnsProcessState(env) &&
+        (UbiWorkerEnvStopRequested(env) || IsProcessExiting(env))) {
+      bool has_pending = false;
+      if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+        napi_value ignored = nullptr;
+        (void)napi_get_and_clear_last_exception(env, &ignored);
+      }
+      if (handled_out != nullptr) *handled_out = true;
+      return true;
+    }
+
     bool has_pending = false;
     if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
       napi_value pending = nullptr;
@@ -1139,6 +1173,12 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
 
   int idle_drain_turns = 0;
   while (true) {
+    if (IsProcessExiting(env)) {
+      break;
+    }
+    if (!UbiWorkerEnvOwnsProcessState(env) && UbiWorkerEnvStopRequested(env)) {
+      break;
+    }
     if (loop_timeout_ms > 0) {
       const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - loop_start)
@@ -1230,7 +1270,9 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
     }
   }
 
-  EmitProcessLifecycleEvent(env, "exit", GetProcessExitCodeOrZero(env), true);
+  if (!IsProcessExiting(env)) {
+    EmitProcessLifecycleEvent(env, "exit", GetProcessExitCodeOrZero(env), true);
+  }
   const int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
   if (async_status >= 0) {
     return async_status;
@@ -1264,13 +1306,114 @@ std::string EscapeForSingleQuotedJs(const std::string& in) {
   return out;
 }
 
-void ParseNodeStyleFlagsFromSource(const char* source_text) {
-  g_ubi_exec_argv.clear();
-  for (const auto& arg : g_ubi_cli_exec_argv) {
-    g_ubi_exec_argv.push_back(arg);
+std::string ExtractProcessTitleFromExecArgv(const std::vector<std::string>& exec_argv) {
+  std::string title;
+  for (size_t i = 0; i < exec_argv.size(); ++i) {
+    const std::string& token = exec_argv[i];
+    static constexpr const char kTitlePrefix[] = "--title=";
+    if (token.rfind(kTitlePrefix, 0) == 0) {
+      title = token.substr(sizeof(kTitlePrefix) - 1);
+      continue;
+    }
+    if (token == "--title" && i + 1 < exec_argv.size()) {
+      title = ubi_options::MaybeUnescapeLeadingDashOptionValue(exec_argv[++i]);
+    }
   }
-  g_ubi_process_title.clear();
-  if (source_text == nullptr) return;
+  return title;
+}
+
+ubi_options::EffectiveCliState BuildEffectiveCliStateForCurrentEnv(
+    napi_env env,
+    const std::vector<std::string>& raw_exec_argv) {
+  ubi_options::EffectiveCliState state;
+
+  std::vector<std::pair<ubi_options::fs::path, bool>> env_specs;
+  ubi_options::CollectEnvFileSpecs(raw_exec_argv, &env_specs);
+  ubi_options::ApplyEnvFiles(env_specs, &state.env_updates, &state.warnings, &state.error);
+  if (!state.error.empty()) {
+    state.ok = false;
+    return state;
+  }
+
+  std::string node_options_source;
+  bool has_env_override = false;
+  if (env != nullptr && !UbiWorkerEnvOwnsProcessState(env) && !UbiWorkerEnvSharesEnvironment(env)) {
+    const std::map<std::string, std::string> entries = UbiWorkerEnvSnapshotEnvVars(env);
+    auto it = entries.find("NODE_OPTIONS");
+    if (it != entries.end()) {
+      node_options_source = it->second;
+      has_env_override = true;
+    }
+  }
+
+  if (!has_env_override) {
+    if (const char* env_node_options = std::getenv("NODE_OPTIONS");
+        env_node_options != nullptr) {
+      node_options_source = env_node_options;
+      has_env_override = true;
+    }
+  }
+
+  if (!has_env_override) {
+    auto it = state.env_updates.find("NODE_OPTIONS");
+    if (it != state.env_updates.end()) {
+      node_options_source = it->second;
+    }
+  }
+
+  if (!node_options_source.empty()) {
+    state.node_options_tokens =
+        ubi_options::ParseNodeOptionsString(node_options_source, &state.error);
+    if (!state.error.empty()) {
+      state.ok = false;
+      return state;
+    }
+  }
+
+  std::vector<ubi_options::fs::path> config_paths;
+  ubi_options::CollectConfigFileSpecs(raw_exec_argv, &config_paths);
+  for (const auto& path : config_paths) {
+    std::string error;
+    std::vector<std::string> flags = ubi_options::ParseConfigFileFlags(path, &error);
+    if (!error.empty()) {
+      state.ok = false;
+      state.error = error;
+      return state;
+    }
+    state.config_tokens.insert(state.config_tokens.end(), flags.begin(), flags.end());
+  }
+
+  state.effective_tokens.reserve(state.node_options_tokens.size() +
+                                 state.config_tokens.size() +
+                                 raw_exec_argv.size());
+  state.effective_tokens.insert(state.effective_tokens.end(),
+                                state.node_options_tokens.begin(),
+                                state.node_options_tokens.end());
+  state.effective_tokens.insert(state.effective_tokens.end(),
+                                state.config_tokens.begin(),
+                                state.config_tokens.end());
+  state.effective_tokens.insert(state.effective_tokens.end(),
+                                raw_exec_argv.begin(),
+                                raw_exec_argv.end());
+  return state;
+}
+
+void ParseNodeStyleFlagsFromSource(napi_env env, const char* source_text) {
+  if (env != nullptr && UbiWorkerEnvOwnsProcessState(env)) {
+    g_ubi_exec_argv = g_ubi_cli_exec_argv;
+  }
+
+  const ubi_options::EffectiveCliState effective_state =
+      BuildEffectiveCliStateForCurrentEnv(env, g_ubi_exec_argv);
+  g_ubi_effective_exec_argv =
+      effective_state.ok ? effective_state.effective_tokens : g_ubi_exec_argv;
+
+  if (source_text == nullptr) {
+    g_ubi_process_title = ExtractProcessTitleFromExecArgv(g_ubi_effective_exec_argv);
+    return;
+  }
+
+  std::vector<std::string> source_flag_tokens;
   std::istringstream in{std::string(source_text)};
   std::string line;
   while (std::getline(in, line)) {
@@ -1280,13 +1423,14 @@ void ParseNodeStyleFlagsFromSource(const char* source_text) {
     std::istringstream tokens(rest);
     std::string token;
     while (tokens >> token) {
-      g_ubi_exec_argv.push_back(token);
-      static constexpr const char kTitlePrefix[] = "--title=";
-      if (token.rfind(kTitlePrefix, 0) == 0) {
-        g_ubi_process_title = token.substr(sizeof(kTitlePrefix) - 1);
-      }
+      source_flag_tokens.push_back(token);
     }
   }
+
+  g_ubi_exec_argv.insert(g_ubi_exec_argv.end(), source_flag_tokens.begin(), source_flag_tokens.end());
+  g_ubi_effective_exec_argv.insert(
+      g_ubi_effective_exec_argv.end(), source_flag_tokens.begin(), source_flag_tokens.end());
+  g_ubi_process_title = ExtractProcessTitleFromExecArgv(g_ubi_effective_exec_argv);
 }
 
 bool IsPowerOfTwo(uint64_t value) {
@@ -1310,7 +1454,7 @@ bool ReadExecArgvUint64Option(const char* prefix, uint64_t* out, bool* found) {
   if (found != nullptr) *found = false;
   if (prefix == nullptr || out == nullptr) return false;
   const std::string needle(prefix);
-  for (const auto& arg : g_ubi_exec_argv) {
+  for (const auto& arg : g_ubi_effective_exec_argv) {
     if (arg.rfind(needle, 0) != 0) continue;
     std::string_view raw(arg.data() + needle.size(), arg.size() - needle.size());
     uint64_t parsed = 0;
@@ -1459,7 +1603,7 @@ bool ConfigureOpenSslFromExecArgv(const std::vector<std::string>& exec_argv,
 
 bool ExecArgvHasFlag(const char* flag) {
   if (flag == nullptr || flag[0] == '\0') return false;
-  for (const auto& arg : g_ubi_exec_argv) {
+  for (const auto& arg : g_ubi_effective_exec_argv) {
     if (arg == flag) return true;
   }
   return false;
@@ -1767,7 +1911,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  ParseNodeStyleFlagsFromSource(source_text);
+  ParseNodeStyleFlagsFromSource(env, source_text);
   if (!ConfigureSecureHeapFromExecArgv(error_out)) {
     return 1;
   }
@@ -2420,9 +2564,12 @@ napi_status UbiMakeCallbackWithFlags(napi_env env,
   callback_scope_depth++;
   napi_status status = UbiCallCallbackWithDomain(env, recv, callback, argc, argv, result);
 
-  const bool skip_task_queues = (flags & kUbiMakeCallbackSkipTaskQueues) != 0;
-  bool has_pending = false;
-  if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+  auto handle_pending_exception = [&](napi_status current_status) -> napi_status {
+    bool has_pending = false;
+    if (napi_is_exception_pending(env, &has_pending) != napi_ok || !has_pending) {
+      return current_status;
+    }
+
     std::string fatal_error;
     const int fatal_status = HandlePendingExceptionAfterLoopStep(env, &fatal_error);
     if (fatal_status >= 0) {
@@ -2437,12 +2584,20 @@ napi_status UbiMakeCallbackWithFlags(napi_env env,
       if (uv_loop_t* loop = UbiGetEnvLoop(env); loop != nullptr) {
         uv_stop(loop);
       }
-      status = napi_pending_exception;
-    } else if (status == napi_pending_exception) {
-      status = napi_ok;
+      return napi_pending_exception;
     }
+
+    return current_status == napi_pending_exception ? napi_ok : current_status;
+  };
+
+  const bool skip_task_queues = (flags & kUbiMakeCallbackSkipTaskQueues) != 0;
+  status = handle_pending_exception(status);
+  if (status == napi_pending_exception) {
+    callback_scope_depth--;
+    return status;
   } else if (status == napi_ok && callback_scope_depth == 1 && !skip_task_queues) {
     status = UbiRunCallbackScopeCheckpoint(env);
+    status = handle_pending_exception(status);
   }
 
   callback_scope_depth--;
@@ -2663,9 +2818,12 @@ int UbiRunScriptFileWithLoop(napi_env env,
   const bool check_syntax_mode =
       ExecArgvHasFlagIn(g_ubi_cli_exec_argv, "--check") ||
       ExecArgvHasFlagIn(g_ubi_cli_exec_argv, "-c");
+  const std::string normalized_script_path =
+      script_path != nullptr ? ubi_path::NormalizeFileURLOrPath(script_path) : std::string();
+  const char* fs_script_path = normalized_script_path.empty() ? script_path : normalized_script_path.c_str();
   std::string source = ";";
   if (!check_syntax_mode) {
-    if (!ReadTextFile(script_path, &source)) {
+    if (!ReadTextFile(fs_script_path, &source)) {
       if (error_out != nullptr) {
         std::string details = "Failed to read script file";
         if (script_path != nullptr && script_path[0] != '\0') {
@@ -2682,8 +2840,8 @@ int UbiRunScriptFileWithLoop(napi_env env,
 #if !defined(_WIN32)
   {
     const char* node_test_dir = std::getenv("NODE_TEST_DIR");
-    if (node_test_dir != nullptr && script_path != nullptr) {
-      const std::string script_path_s(script_path);
+    if (node_test_dir != nullptr && fs_script_path != nullptr) {
+      const std::string script_path_s(fs_script_path);
       const std::string test_dir_s(node_test_dir);
       if (!test_dir_s.empty() && script_path_s.rfind(test_dir_s, 0) == 0) {
         char cwd_buf[4096] = {'\0'};
@@ -2724,6 +2882,8 @@ int UbiRunWorkerThreadMain(napi_env env,
 
   g_ubi_current_script_path.clear();
   g_ubi_exec_argv = exec_argv;
+  g_ubi_effective_exec_argv = exec_argv;
+  g_ubi_process_title.clear();
   g_ubi_script_argv.clear();
 
   static constexpr char kWorkerBootstrapSource[] =
@@ -2739,7 +2899,9 @@ int UbiRunWorkerThreadMain(napi_env env,
 }
 
 bool UbiInitializeOpenSslForCli(std::string* error_out) {
-  if (!ConfigureOpenSslFromExecArgv(g_ubi_cli_exec_argv, error_out)) {
+  const ubi_options::EffectiveCliState state = ubi_options::BuildEffectiveCliState(g_ubi_cli_exec_argv);
+  const std::vector<std::string>& exec_argv = state.ok ? state.effective_tokens : g_ubi_cli_exec_argv;
+  if (!ConfigureOpenSslFromExecArgv(exec_argv, error_out)) {
     return false;
   }
   // Match Node's startup behavior closely enough to fail fast when the loaded

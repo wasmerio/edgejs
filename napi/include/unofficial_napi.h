@@ -1,6 +1,8 @@
 #ifndef UNOFFICIAL_NAPI_H_
 #define UNOFFICIAL_NAPI_H_
 
+#include <stdint.h>
+
 #include "js_native_api.h"
 
 #ifdef __cplusplus
@@ -8,9 +10,21 @@ extern "C" {
 #endif
 
 // Unofficial/test-only helper APIs for creating and releasing an env scope.
+typedef struct {
+  size_t max_young_generation_size_in_bytes;
+  size_t max_old_generation_size_in_bytes;
+  size_t code_range_size_in_bytes;
+  void* stack_limit;
+} unofficial_napi_env_create_options;
+
 NAPI_EXTERN napi_status unofficial_napi_create_env(int32_t module_api_version,
                                                    napi_env* env_out,
                                                    void** scope_out);
+NAPI_EXTERN napi_status unofficial_napi_create_env_with_options(
+    int32_t module_api_version,
+    const unofficial_napi_env_create_options* options,
+    napi_env* env_out,
+    void** scope_out);
 NAPI_EXTERN napi_status unofficial_napi_release_env(void* scope);
 
 // Unofficial/test-only helper. Requests a full GC cycle for testing.
@@ -55,6 +69,8 @@ using unofficial_napi_fatal_error_callback =
     void (*)(napi_env env, const char* location, const char* message);
 using unofficial_napi_oom_error_callback =
     void (*)(napi_env env, const char* location, bool is_heap_oom, const char* detail);
+using unofficial_napi_near_heap_limit_callback =
+    size_t (*)(napi_env env, void* data, size_t current_heap_limit, size_t initial_heap_limit);
 
 // Unofficial helpers for embedder-native fatal/OOM handling.
 // These callbacks run from the engine's fatal error hooks.
@@ -62,6 +78,14 @@ NAPI_EXTERN napi_status unofficial_napi_set_fatal_error_callbacks(
     napi_env env,
     unofficial_napi_fatal_error_callback fatal_callback,
     unofficial_napi_oom_error_callback oom_callback);
+NAPI_EXTERN napi_status unofficial_napi_set_near_heap_limit_callback(
+    napi_env env,
+    unofficial_napi_near_heap_limit_callback callback,
+    void* data);
+NAPI_EXTERN napi_status unofficial_napi_remove_near_heap_limit_callback(
+    napi_env env,
+    size_t heap_limit);
+NAPI_EXTERN napi_status unofficial_napi_set_stack_limit(napi_env env, void* stack_limit);
 
 // Unofficial helpers used by util/options parity work in ubi.
 // These expose engine-specific data that is not available in the public N-API.
@@ -144,6 +168,57 @@ NAPI_EXTERN napi_status unofficial_napi_get_process_memory_info(
     double* heap_used_out,
     double* external_out,
     double* array_buffers_out);
+
+#define UNOFFICIAL_NAPI_HEAP_SPACE_NAME_MAX_LENGTH 64
+
+typedef struct {
+  uint64_t total_heap_size;
+  uint64_t total_heap_size_executable;
+  uint64_t total_physical_size;
+  uint64_t total_available_size;
+  uint64_t used_heap_size;
+  uint64_t heap_size_limit;
+  uint64_t does_zap_garbage;
+  uint64_t malloced_memory;
+  uint64_t peak_malloced_memory;
+  uint64_t number_of_native_contexts;
+  uint64_t number_of_detached_contexts;
+  uint64_t total_global_handles_size;
+  uint64_t used_global_handles_size;
+  uint64_t external_memory;
+} unofficial_napi_heap_statistics;
+
+typedef struct {
+  char space_name[UNOFFICIAL_NAPI_HEAP_SPACE_NAME_MAX_LENGTH];
+  uint64_t space_size;
+  uint64_t space_used_size;
+  uint64_t space_available_size;
+  uint64_t physical_space_size;
+} unofficial_napi_heap_space_statistics;
+
+typedef struct {
+  uint64_t code_and_metadata_size;
+  uint64_t bytecode_and_metadata_size;
+  uint64_t external_script_source_size;
+  uint64_t cpu_profiler_metadata_size;
+} unofficial_napi_heap_code_statistics;
+
+NAPI_EXTERN napi_status unofficial_napi_get_heap_statistics(
+    napi_env env,
+    unofficial_napi_heap_statistics* stats_out);
+
+NAPI_EXTERN napi_status unofficial_napi_get_heap_space_count(
+    napi_env env,
+    uint32_t* count_out);
+
+NAPI_EXTERN napi_status unofficial_napi_get_heap_space_statistics(
+    napi_env env,
+    uint32_t space_index,
+    unofficial_napi_heap_space_statistics* stats_out);
+
+NAPI_EXTERN napi_status unofficial_napi_get_heap_code_statistics(
+    napi_env env,
+    unofficial_napi_heap_code_statistics* stats_out);
 
 // Unofficial helpers for Node's async_context_frame parity. These expose the
 // engine continuation-preserved embedder data used by AsyncContextFrame.

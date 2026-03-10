@@ -199,7 +199,11 @@ napi_value NotifyCallback(napi_env env, napi_callback_info /*info*/) {
 }
 
 napi_value LoopIdleTimeCallback(napi_env env, napi_callback_info /*info*/) {
-  return ReturnNumber(env, 0);
+  uv_loop_t* loop = nullptr;
+  if (napi_get_uv_event_loop(env, &loop) != napi_ok || loop == nullptr) {
+    return ReturnNumber(env, 0);
+  }
+  return ReturnNumber(env, static_cast<double>(uv_metrics_idle_time(loop)) / 1e6);
 }
 
 napi_value UvMetricsInfoCallback(napi_env env, napi_callback_info /*info*/) {
@@ -282,6 +286,7 @@ napi_value ResolvePerformance(napi_env env, const ResolveOptions& /*options*/) {
   SetMilestoneValue(env, milestones, kEnvironment, now_ns);
   SetMilestoneValue(env, milestones, kNodeStart, now_ns);
   SetMilestoneValue(env, milestones, kV8Start, now_ns);
+  SetMilestoneValue(env, milestones, kLoopStart, now_ns);
 
   DeleteRefIfPresent(env, &state.milestones_ref);
   napi_create_reference(env, milestones, 1, &state.milestones_ref);

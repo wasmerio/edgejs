@@ -740,6 +740,7 @@ napi_status UbiEnsureEnvLoop(napi_env env, uv_loop_t** loop_out) {
       delete loop;
       return napi_generic_failure;
     }
+    (void)uv_loop_configure(loop, UV_METRICS_IDLE_TIME);
     state.loop = loop;
   }
   if (loop_out != nullptr) *loop_out = state.loop;

@@ -73,10 +73,18 @@ struct MessagingState {
   napi_ref deserializer_create_object_ref = nullptr;
   napi_ref emit_message_ref = nullptr;
   napi_ref message_port_ctor_ref = nullptr;
+  napi_ref message_port_ctor_token_ref = nullptr;
   napi_ref no_message_symbol_ref = nullptr;
   napi_ref oninit_symbol_ref = nullptr;
+  napi_ref hybrid_dispatch_symbol_ref = nullptr;
+  napi_ref currently_receiving_ports_symbol_ref = nullptr;
   uint32_t next_shared_handle_id = 1;
   std::unordered_map<uint32_t, napi_ref> shared_handle_refs;
+};
+
+constexpr napi_type_tag kMessagePortTypeTag = {
+    0x0f0f1d6c1f8c4ce1ULL,
+    0x9ab22b54f44c7dd3ULL,
 };
 
 std::unordered_map<napi_env, MessagingState> g_messaging_states;
@@ -87,9 +95,24 @@ std::unordered_map<std::string, std::weak_ptr<BroadcastChannelGroup>> g_broadcas
 napi_value ResolveDOMExceptionValue(napi_env env);
 napi_value ResolveEmitMessageValue(napi_env env);
 MessagePortWrap* UnwrapMessagePort(napi_env env, napi_value value);
+MessagePortWrap* UnwrapMessagePortThisOrThrow(napi_env env, napi_value value);
+napi_value MoveMessagePortPostMessageBridgeCallback(napi_env env, napi_callback_info info);
 napi_value GetTransferListValue(napi_env env, napi_value value);
 bool ApplyArrayBufferTransfers(napi_env env, napi_value options);
 napi_value TryRequireModule(napi_env env, const char* module_name);
+napi_value CreateInternalMessagePortInstance(napi_env env);
+napi_value MoveMessagePortToContextCallback(napi_env env, napi_callback_info info);
+bool IsArrayBufferLike(napi_env env, napi_value value);
+bool IsMapValue(napi_env env, napi_value value);
+bool IsSetValue(napi_env env, napi_value value);
+bool IsCloneableTransferableValue(napi_env env, napi_value value);
+bool IsTransferableValue(napi_env env, napi_value value);
+bool IsBlobHandleValue(napi_env env, napi_value value);
+bool IsInstanceOfValue(napi_env env, napi_value value, napi_value ctor);
+bool IsFsFileHandleValue(napi_env env, napi_value value);
+bool IsPlainObjectContainer(napi_env env, napi_value value);
+std::string GetObjectTag(napi_env env, napi_value value);
+std::string GetCtorNameForValue(napi_env env, napi_value value);
 
 napi_value GetNamed(napi_env env, napi_value obj, const char* key) {
   napi_value out = nullptr;
@@ -174,8 +197,11 @@ void OnMessagingEnvCleanup(void* data) {
   DeleteRefIfPresent(env, &it->second.deserializer_create_object_ref);
   DeleteRefIfPresent(env, &it->second.emit_message_ref);
   DeleteRefIfPresent(env, &it->second.message_port_ctor_ref);
+  DeleteRefIfPresent(env, &it->second.message_port_ctor_token_ref);
   DeleteRefIfPresent(env, &it->second.no_message_symbol_ref);
   DeleteRefIfPresent(env, &it->second.oninit_symbol_ref);
+  DeleteRefIfPresent(env, &it->second.hybrid_dispatch_symbol_ref);
+  DeleteRefIfPresent(env, &it->second.currently_receiving_ports_symbol_ref);
   g_messaging_states.erase(it);
 }
 
@@ -308,6 +334,222 @@ void SetRefToValue(napi_env env, napi_ref* slot, napi_value value) {
   DeleteRefIfPresent(env, slot);
   if (value == nullptr) return;
   napi_create_reference(env, value, 1, slot);
+}
+
+napi_value ResolveRegisteredSymbol(napi_env env, napi_ref* slot, const char* name) {
+  napi_value cached = GetRefValue(env, slot != nullptr ? *slot : nullptr);
+  if (cached != nullptr && !IsUndefinedValue(env, cached)) return cached;
+
+  napi_value global = GetGlobal(env);
+  napi_value symbol_ctor = GetNamed(env, global, "Symbol");
+  napi_value for_fn = GetNamed(env, symbol_ctor, "for");
+  if (!IsFunction(env, for_fn)) return nullptr;
+
+  napi_value name_value = nullptr;
+  if (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &name_value) != napi_ok ||
+      name_value == nullptr) {
+    return nullptr;
+  }
+
+  napi_value symbol = nullptr;
+  napi_value argv[1] = {name_value};
+  if (napi_call_function(env, symbol_ctor, for_fn, 1, argv, &symbol) != napi_ok || symbol == nullptr) {
+    ClearPendingException(env);
+    return nullptr;
+  }
+
+  SetRefToValue(env, slot, symbol);
+  return symbol;
+}
+
+std::string StringifyValueForCloneError(napi_env env, napi_value value) {
+  if (value == nullptr) return {};
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok) {
+    ClearPendingException(env);
+    return {};
+  }
+
+  if (type == napi_symbol) {
+    napi_value global = GetGlobal(env);
+    napi_value string_ctor = GetNamed(env, global, "String");
+    if (!IsFunction(env, string_ctor)) return {};
+    napi_value rendered = nullptr;
+    napi_value argv[1] = {value};
+    if (napi_call_function(env, global, string_ctor, 1, argv, &rendered) != napi_ok || rendered == nullptr) {
+      ClearPendingException(env);
+      return {};
+    }
+    return ValueToUtf8(env, rendered);
+  }
+
+  return ValueToUtf8(env, value);
+}
+
+std::string DescribeCloneFailureValue(napi_env env, napi_value value) {
+  if (value == nullptr) return {};
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok) {
+    ClearPendingException(env);
+    return {};
+  }
+
+  if (type == napi_object) {
+    if (IsPlainObjectContainer(env, value)) return {};
+
+    bool is_array = false;
+    if (napi_is_array(env, value, &is_array) == napi_ok && is_array) return {};
+
+    if (IsArrayBufferLike(env, value) ||
+        IsMapValue(env, value) ||
+        IsSetValue(env, value) ||
+        IsBlobHandleValue(env, value) ||
+        IsTransferableValue(env, value) ||
+        IsCloneableTransferableValue(env, value) ||
+        UnwrapMessagePort(env, value) != nullptr) {
+      return {};
+    }
+
+    const std::string tag = GetObjectTag(env, value);
+    if (tag == "[object Object]") {
+      return "Cannot clone object of unsupported type.";
+    }
+    const std::string ctor_name = GetCtorNameForValue(env, value);
+    if (!ctor_name.empty()) {
+      static const std::unordered_set<std::string> kKnownCloneableCtors = {
+          "Object",          "Array",          "ArrayBuffer",   "SharedArrayBuffer",
+          "DataView",        "Int8Array",      "Uint8Array",    "Uint8ClampedArray",
+          "Int16Array",      "Uint16Array",    "Int32Array",    "Uint32Array",
+          "Float32Array",    "Float64Array",   "BigInt64Array", "BigUint64Array",
+          "Map",             "Set",            "Date",          "RegExp",
+          "Error",           "EvalError",      "RangeError",    "ReferenceError",
+          "SyntaxError",     "TypeError",      "URIError",      "DOMException",
+          "MessagePort",     "Blob",           "File",          "URL",
+          "URLSearchParams", "Promise",
+      };
+      if (kKnownCloneableCtors.find(ctor_name) == kKnownCloneableCtors.end()) {
+        return "Cannot clone object of unsupported type.";
+      }
+    }
+    return {};
+  }
+
+  if (type != napi_symbol && type != napi_function) return {};
+
+  const std::string rendered = StringifyValueForCloneError(env, value);
+  if (rendered.empty()) return {};
+  return rendered + " could not be cloned.";
+}
+
+std::string TryGetStructuredCloneErrorMessage(napi_env env, napi_value value) {
+  if (env == nullptr || value == nullptr) return {};
+
+  napi_value global = GetGlobal(env);
+  napi_value structured_clone = GetNamed(env, global, "structuredClone");
+  if (!IsFunction(env, structured_clone)) return {};
+
+  napi_value cloned = nullptr;
+  napi_value argv[1] = {value};
+  if (napi_call_function(env, global, structured_clone, 1, argv, &cloned) == napi_ok) {
+    return {};
+  }
+
+  bool has_pending = false;
+  if (napi_is_exception_pending(env, &has_pending) != napi_ok || !has_pending) {
+    return {};
+  }
+
+  napi_value err = nullptr;
+  if (napi_get_and_clear_last_exception(env, &err) != napi_ok || err == nullptr) {
+    return {};
+  }
+
+  napi_value message = GetNamed(env, err, "message");
+  return message != nullptr ? ValueToUtf8(env, message) : std::string();
+}
+
+bool ThrowDirectCloneFailureIfDetected(napi_env env, napi_value value) {
+  const std::string message = DescribeCloneFailureValue(env, value);
+  if (message.empty()) return false;
+  napi_value err = CreateDataCloneError(env, message.c_str());
+  if (err != nullptr) napi_throw(env, err);
+  return true;
+}
+
+napi_value ResolveHybridDispatchSymbol(napi_env env) {
+  auto& state = EnsureMessagingState(env);
+  return ResolveRegisteredSymbol(env,
+                                 &state.hybrid_dispatch_symbol_ref,
+                                 "nodejs.internal.kHybridDispatch");
+}
+
+napi_value ResolveCurrentlyReceivingPortsSymbol(napi_env env) {
+  auto& state = EnsureMessagingState(env);
+  return ResolveRegisteredSymbol(env,
+                                 &state.currently_receiving_ports_symbol_ref,
+                                 "nodejs.internal.kCurrentlyReceivingPorts");
+}
+
+napi_value GetMessagePortCtorToken(napi_env env) {
+  auto it = g_messaging_states.find(env);
+  if (it == g_messaging_states.end()) return nullptr;
+  return GetRefValue(env, it->second.message_port_ctor_token_ref);
+}
+
+bool IsInternalMessagePortCtorCall(napi_env env, size_t argc, napi_value* argv) {
+  if (argc < 1 || argv == nullptr || argv[0] == nullptr) return false;
+  napi_value token = GetMessagePortCtorToken(env);
+  if (token == nullptr) return false;
+
+  bool same = false;
+  return napi_strict_equals(env, argv[0], token, &same) == napi_ok && same;
+}
+
+bool TryHybridDispatchMessageToPort(napi_env env,
+                                    napi_value port,
+                                    napi_value payload,
+                                    const char* type,
+                                    napi_value ports) {
+  if (port == nullptr) return false;
+
+  napi_value hybrid_dispatch_symbol = ResolveHybridDispatchSymbol(env);
+  if (hybrid_dispatch_symbol == nullptr) return false;
+
+  napi_value hook = nullptr;
+  if (napi_get_property(env, port, hybrid_dispatch_symbol, &hook) != napi_ok || !IsFunction(env, hook)) {
+    ClearPendingException(env);
+    return false;
+  }
+
+  napi_value currently_receiving_ports_symbol = ResolveCurrentlyReceivingPortsSymbol(env);
+  napi_value type_value = nullptr;
+  napi_value undefined = Undefined(env);
+  napi_value ignored = nullptr;
+  napi_status status = napi_generic_failure;
+
+  if (ports == nullptr) napi_create_array_with_length(env, 0, &ports);
+  napi_create_string_utf8(env, type != nullptr ? type : "message", NAPI_AUTO_LENGTH, &type_value);
+
+  if (currently_receiving_ports_symbol != nullptr) {
+    napi_set_property(env, port, currently_receiving_ports_symbol, ports != nullptr ? ports : undefined);
+  }
+
+  napi_value argv[3] = {
+    payload != nullptr ? payload : undefined,
+    type_value != nullptr ? type_value : undefined,
+    undefined,
+  };
+  status = UbiMakeCallback(env, port, hook, 3, argv, &ignored);
+
+  if (currently_receiving_ports_symbol != nullptr) {
+    napi_set_property(env, port, currently_receiving_ports_symbol, undefined);
+  }
+
+  if (status == napi_ok) return true;
+  ClearPendingException(env);
+  return false;
 }
 
 bool IsCloneableTransferableValue(napi_env env, napi_value value) {
@@ -480,6 +722,104 @@ bool IsBlockListHandleCloneMarker(napi_env env, napi_value value, napi_value* da
   return IsHandleCloneMarker(env, value, "__ubiBlockListHandleCloneMarker", data_out);
 }
 
+napi_value GetFsBindingValue(napi_env env) {
+  return GetInternalBindingValue(env, "fs");
+}
+
+napi_value GetFsBindingCtor(napi_env env, const char* name) {
+  return GetNamed(env, GetFsBindingValue(env), name);
+}
+
+bool IsFsFileHandleValue(napi_env env, napi_value value) {
+  return IsInstanceOfValue(env, value, GetFsBindingCtor(env, "FileHandle"));
+}
+
+napi_value GetCryptoModuleValue(napi_env env) {
+  return TryRequireModule(env, "crypto");
+}
+
+napi_value GetCryptoModuleCtor(napi_env env, const char* name) {
+  return GetNamed(env, GetCryptoModuleValue(env), name);
+}
+
+bool IsCryptoKeyObjectValue(napi_env env, napi_value value) {
+  return IsInstanceOfValue(env, value, GetCryptoModuleCtor(env, "KeyObject"));
+}
+
+napi_value CreateFileHandleCloneMarker(napi_env env, napi_value handle) {
+  if (!IsFsFileHandleValue(env, handle)) return nullptr;
+
+  napi_value release_fd = GetNamed(env, handle, "releaseFD");
+  if (!IsFunction(env, release_fd)) return nullptr;
+
+  napi_value fd_value = nullptr;
+  if (napi_call_function(env, handle, release_fd, 0, nullptr, &fd_value) != napi_ok || fd_value == nullptr) {
+    return nullptr;
+  }
+
+  int32_t fd = -1;
+  if (napi_get_value_int32(env, fd_value, &fd) != napi_ok || fd < 0) {
+    return nullptr;
+  }
+
+  return CreateHandleCloneMarker(env, "__ubiFileHandleCloneMarker", fd_value);
+}
+
+bool IsFileHandleCloneMarker(napi_env env, napi_value value, napi_value* data_out) {
+  return IsHandleCloneMarker(env, value, "__ubiFileHandleCloneMarker", data_out);
+}
+
+napi_value CreateCryptoKeyObjectCloneMarker(napi_env env, napi_value value) {
+  if (!IsCryptoKeyObjectValue(env, value)) return nullptr;
+
+  napi_value type_value = GetNamed(env, value, "type");
+  napi_value export_fn = GetNamed(env, value, "export");
+  if (type_value == nullptr || !IsFunction(env, export_fn)) return nullptr;
+
+  const std::string key_type = ValueToUtf8(env, type_value);
+  napi_value export_result = nullptr;
+
+  if (key_type == "secret") {
+    if (napi_call_function(env, value, export_fn, 0, nullptr, &export_result) != napi_ok || export_result == nullptr) {
+      return nullptr;
+    }
+  } else {
+    napi_value options = nullptr;
+    napi_value format = nullptr;
+    napi_value type = nullptr;
+    const char* export_type = key_type == "public" ? "spki" : "pkcs8";
+    if ((key_type != "public" && key_type != "private") ||
+        napi_create_object(env, &options) != napi_ok || options == nullptr ||
+        napi_create_string_utf8(env, "der", NAPI_AUTO_LENGTH, &format) != napi_ok || format == nullptr ||
+        napi_create_string_utf8(env, export_type, NAPI_AUTO_LENGTH, &type) != napi_ok || type == nullptr ||
+        napi_set_named_property(env, options, "format", format) != napi_ok ||
+        napi_set_named_property(env, options, "type", type) != napi_ok) {
+      return nullptr;
+    }
+
+    napi_value argv[1] = {options};
+    if (napi_call_function(env, value, export_fn, 1, argv, &export_result) != napi_ok || export_result == nullptr) {
+      return nullptr;
+    }
+  }
+
+  napi_value data = nullptr;
+  napi_value type_string = nullptr;
+  if (napi_create_object(env, &data) != napi_ok || data == nullptr ||
+      napi_create_string_utf8(env, key_type.c_str(), NAPI_AUTO_LENGTH, &type_string) != napi_ok ||
+      type_string == nullptr ||
+      napi_set_named_property(env, data, "type", type_string) != napi_ok ||
+      napi_set_named_property(env, data, "data", export_result) != napi_ok) {
+    return nullptr;
+  }
+
+  return CreateHandleCloneMarker(env, "__ubiCryptoKeyObjectCloneMarker", data);
+}
+
+bool IsCryptoKeyObjectCloneMarker(napi_env env, napi_value value, napi_value* data_out) {
+  return IsHandleCloneMarker(env, value, "__ubiCryptoKeyObjectCloneMarker", data_out);
+}
+
 bool IsJSTransferableCloneMarker(napi_env env, napi_value value, napi_value* data_out, napi_value* info_out) {
   if (data_out != nullptr) *data_out = nullptr;
   if (info_out != nullptr) *info_out = nullptr;
@@ -536,7 +876,9 @@ bool IsProcessEnvValue(napi_env env, napi_value value) {
   return napi_strict_equals(env, value, process_env, &same) == napi_ok && same;
 }
 
-napi_value PrepareTransferableDataForStructuredClone(napi_env env, napi_value value);
+napi_value PrepareTransferableDataForStructuredClone(napi_env env,
+                                                     napi_value value,
+                                                     bool allow_host_object_transfer = false);
 napi_value RestoreTransferableDataAfterStructuredClone(napi_env env, napi_value value);
 struct ValueTransformPair {
   napi_value source = nullptr;
@@ -547,6 +889,7 @@ bool PrepareJSTransferableCloneData(
 napi_value CreateJSTransferableCloneMarker(napi_env env, napi_value value);
 napi_value DeserializeJSTransferableCloneMarker(napi_env env, napi_value data, napi_value deserialize_info);
 napi_value CloneRootJSTransferableValueForQueue(napi_env env, napi_value value);
+bool IsPlainObjectContainer(napi_env env, napi_value value);
 napi_value TransformTransferredPortsForQueue(
     napi_env env,
     napi_value value,
@@ -557,7 +900,9 @@ bool CollectTransferredPorts(
     napi_value transfer_list,
     std::vector<QueuedMessage::TransferredPortEntry>* out);
 
-napi_value CloneArrayEntriesForStructuredClone(napi_env env, napi_value array) {
+napi_value CloneArrayEntriesForStructuredClone(napi_env env,
+                                               napi_value array,
+                                               bool allow_host_object_transfer) {
   uint32_t length = 0;
   if (napi_get_array_length(env, array, &length) != napi_ok) return nullptr;
 
@@ -567,14 +912,16 @@ napi_value CloneArrayEntriesForStructuredClone(napi_env env, napi_value array) {
   for (uint32_t i = 0; i < length; ++i) {
     napi_value item = nullptr;
     if (napi_get_element(env, array, i, &item) != napi_ok) return nullptr;
-    napi_value cloned = PrepareTransferableDataForStructuredClone(env, item);
+    napi_value cloned = PrepareTransferableDataForStructuredClone(env, item, allow_host_object_transfer);
     if (cloned == nullptr) return nullptr;
     if (napi_set_element(env, out, i, cloned) != napi_ok) return nullptr;
   }
   return out;
 }
 
-napi_value CloneObjectPropertiesForStructuredClone(napi_env env, napi_value object) {
+napi_value CloneObjectPropertiesForStructuredClone(napi_env env,
+                                                   napi_value object,
+                                                   bool allow_host_object_transfer) {
   napi_value keys = nullptr;
   if (napi_get_property_names(env, object, &keys) != napi_ok || keys == nullptr) return nullptr;
 
@@ -589,7 +936,7 @@ napi_value CloneObjectPropertiesForStructuredClone(napi_env env, napi_value obje
     if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) return nullptr;
     napi_value item = nullptr;
     if (napi_get_property(env, object, key, &item) != napi_ok) return nullptr;
-    napi_value cloned = PrepareTransferableDataForStructuredClone(env, item);
+    napi_value cloned = PrepareTransferableDataForStructuredClone(env, item, allow_host_object_transfer);
     if (cloned == nullptr) return nullptr;
     if (napi_set_property(env, out, key, cloned) != napi_ok) return nullptr;
   }
@@ -597,9 +944,14 @@ napi_value CloneObjectPropertiesForStructuredClone(napi_env env, napi_value obje
   return out;
 }
 
-napi_value PrepareTransferableDataForStructuredClone(napi_env env, napi_value value) {
+napi_value PrepareTransferableDataForStructuredClone(napi_env env,
+                                                     napi_value value,
+                                                     bool allow_host_object_transfer) {
   if (value == nullptr || IsNullOrUndefinedValue(env, value) || IsStructuredClonePassThroughValue(env, value)) {
     return value;
+  }
+  if (IsCloneableTransferableValue(env, value)) {
+    return CreateJSTransferableCloneMarker(env, value);
   }
   if (IsBlobHandleValue(env, value)) {
     return CreateBlobHandleCloneMarker(env, value);
@@ -610,13 +962,22 @@ napi_value PrepareTransferableDataForStructuredClone(napi_env env, napi_value va
   if (IsBlockListHandleValue(env, value)) {
     return CreateBlockListHandleCloneMarker(env, value);
   }
+  if (allow_host_object_transfer && IsFsFileHandleValue(env, value)) {
+    return CreateFileHandleCloneMarker(env, value);
+  }
+  if (IsCryptoKeyObjectValue(env, value)) {
+    return CreateCryptoKeyObjectCloneMarker(env, value);
+  }
   if (!IsObjectLike(env, value)) return value;
 
   bool is_array = false;
   if (napi_is_array(env, value, &is_array) == napi_ok && is_array) {
-    return CloneArrayEntriesForStructuredClone(env, value);
+    return CloneArrayEntriesForStructuredClone(env, value, allow_host_object_transfer);
   }
-  return CloneObjectPropertiesForStructuredClone(env, value);
+  if (!IsPlainObjectContainer(env, value)) {
+    return value;
+  }
+  return CloneObjectPropertiesForStructuredClone(env, value, allow_host_object_transfer);
 }
 
 napi_value CreateBlobHandleFromCloneData(napi_env env, napi_value blob_data) {
@@ -727,6 +1088,66 @@ napi_value CreateBlockListHandleFromCloneData(napi_env env, napi_value rules) {
   return ExtractHandleFromTransferableClone(env, blocklist);
 }
 
+napi_value CreateFileHandleFromCloneData(napi_env env, napi_value fd_value) {
+  napi_value ctor = GetFsBindingCtor(env, "FileHandle");
+  if (!IsFunction(env, ctor) || fd_value == nullptr) return nullptr;
+
+  napi_value handle = nullptr;
+  napi_value argv[1] = {fd_value};
+  if (napi_new_instance(env, ctor, 1, argv, &handle) != napi_ok || handle == nullptr) {
+    return nullptr;
+  }
+  return handle;
+}
+
+napi_value CreateCryptoKeyObjectFromCloneData(napi_env env, napi_value data) {
+  if (data == nullptr) return nullptr;
+
+  napi_value type_value = GetNamed(env, data, "type");
+  napi_value key_value = GetNamed(env, data, "data");
+  if (type_value == nullptr || key_value == nullptr) return nullptr;
+
+  const std::string key_type = ValueToUtf8(env, type_value);
+  napi_value crypto_module = GetCryptoModuleValue(env);
+  if (crypto_module == nullptr) return nullptr;
+
+  if (key_type == "secret") {
+    napi_value create_secret_key = GetNamed(env, crypto_module, "createSecretKey");
+    if (!IsFunction(env, create_secret_key)) return nullptr;
+    napi_value argv[1] = {key_value};
+    napi_value out = nullptr;
+    if (napi_call_function(env, crypto_module, create_secret_key, 1, argv, &out) != napi_ok || out == nullptr) {
+      return nullptr;
+    }
+    return out;
+  }
+
+  const char* method_name = key_type == "public" ? "createPublicKey" : "createPrivateKey";
+  const char* import_type = key_type == "public" ? "spki" : "pkcs8";
+  if (key_type != "public" && key_type != "private") return nullptr;
+
+  napi_value create_key = GetNamed(env, crypto_module, method_name);
+  napi_value options = nullptr;
+  napi_value format = nullptr;
+  napi_value type = nullptr;
+  if (!IsFunction(env, create_key) ||
+      napi_create_object(env, &options) != napi_ok || options == nullptr ||
+      napi_create_string_utf8(env, "der", NAPI_AUTO_LENGTH, &format) != napi_ok || format == nullptr ||
+      napi_create_string_utf8(env, import_type, NAPI_AUTO_LENGTH, &type) != napi_ok || type == nullptr ||
+      napi_set_named_property(env, options, "key", key_value) != napi_ok ||
+      napi_set_named_property(env, options, "format", format) != napi_ok ||
+      napi_set_named_property(env, options, "type", type) != napi_ok) {
+    return nullptr;
+  }
+
+  napi_value argv[1] = {options};
+  napi_value out = nullptr;
+  if (napi_call_function(env, crypto_module, create_key, 1, argv, &out) != napi_ok || out == nullptr) {
+    return nullptr;
+  }
+  return out;
+}
+
 napi_value RestoreTransferableDataAfterStructuredClone(napi_env env, napi_value value) {
   if (value == nullptr || IsNullOrUndefinedValue(env, value) || IsStructuredClonePassThroughValue(env, value)) {
     return value;
@@ -755,6 +1176,16 @@ napi_value RestoreTransferableDataAfterStructuredClone(napi_env env, napi_value 
     return CreateBlockListHandleFromCloneData(env, block_list_data);
   }
 
+  napi_value file_handle_data = nullptr;
+  if (IsFileHandleCloneMarker(env, value, &file_handle_data)) {
+    return CreateFileHandleFromCloneData(env, file_handle_data);
+  }
+
+  napi_value key_object_data = nullptr;
+  if (IsCryptoKeyObjectCloneMarker(env, value, &key_object_data)) {
+    return CreateCryptoKeyObjectFromCloneData(env, key_object_data);
+  }
+
   if (!IsObjectLike(env, value)) return value;
 
   bool is_array = false;
@@ -769,6 +1200,8 @@ napi_value RestoreTransferableDataAfterStructuredClone(napi_env env, napi_value 
     }
     return value;
   }
+
+  if (!IsPlainObjectContainer(env, value)) return value;
 
   napi_value keys = nullptr;
   if (napi_get_property_names(env, value, &keys) != napi_ok || keys == nullptr) return nullptr;
@@ -842,7 +1275,7 @@ bool PrepareJSTransferableCloneData(
   napi_value deserialize_info = GetNamed(env, clone_result, "deserializeInfo");
   if (clone_data == nullptr || deserialize_info == nullptr) return false;
 
-  napi_value prepared_data = PrepareTransferableDataForStructuredClone(env, clone_data);
+  napi_value prepared_data = PrepareTransferableDataForStructuredClone(env, clone_data, false);
   if (prepared_data == nullptr) return false;
 
   if (data_out != nullptr) *data_out = prepared_data;
@@ -963,7 +1396,7 @@ bool TransferRootJSTransferableValueForQueue(
       TransformTransferredPortsForQueue(env, transfer_data, transferred_ports, &seen_pairs);
   if (transformed_data == nullptr) return false;
 
-  napi_value prepared_data = PrepareTransferableDataForStructuredClone(env, transformed_data);
+  napi_value prepared_data = PrepareTransferableDataForStructuredClone(env, transformed_data, true);
   if (prepared_data == nullptr) return false;
 
   napi_value marker = nullptr;
@@ -1150,6 +1583,32 @@ bool TransferListContainsDuplicateMessagePort(napi_env env, napi_value transfer_
   return false;
 }
 
+bool TransferListContainsDuplicateArrayBuffer(napi_env env, napi_value transfer_list) {
+  if (transfer_list == nullptr) return false;
+  bool is_array = false;
+  if (napi_is_array(env, transfer_list, &is_array) != napi_ok || !is_array) return false;
+
+  uint32_t length = 0;
+  if (napi_get_array_length(env, transfer_list, &length) != napi_ok || length < 2) return false;
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_value first = nullptr;
+    bool first_is_arraybuffer = false;
+    if (napi_get_element(env, transfer_list, i, &first) != napi_ok || first == nullptr ||
+        napi_is_arraybuffer(env, first, &first_is_arraybuffer) != napi_ok || !first_is_arraybuffer) {
+      continue;
+    }
+    for (uint32_t j = i + 1; j < length; ++j) {
+      napi_value second = nullptr;
+      if (napi_get_element(env, transfer_list, j, &second) != napi_ok || second == nullptr) continue;
+      bool same = false;
+      if (napi_strict_equals(env, first, second, &same) == napi_ok && same) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool ValidateTransferListMessagePorts(napi_env env, napi_value transfer_list) {
   if (transfer_list == nullptr) return true;
   bool is_array = false;
@@ -1177,6 +1636,9 @@ bool ValidateTransferListMessagePorts(napi_env env, napi_value transfer_list) {
   return true;
 }
 
+bool VisitedSetHas(napi_env env, napi_value visited, napi_value value);
+void VisitedSetAdd(napi_env env, napi_value visited, napi_value value);
+
 napi_value CreateVisitedSet(napi_env env) {
   napi_value global = GetGlobal(env);
   napi_value set_ctor = GetNamed(env, global, "Set");
@@ -1184,6 +1646,104 @@ napi_value CreateVisitedSet(napi_env env) {
   napi_value set = nullptr;
   if (napi_new_instance(env, set_ctor, 0, nullptr, &set) != napi_ok || set == nullptr) return nullptr;
   return set;
+}
+
+bool IsMarkedUncloneableValue(napi_env env, napi_value value) {
+  if (!IsObjectLike(env, value)) return false;
+
+  bool is_arraybuffer = false;
+  if (napi_is_arraybuffer(env, value, &is_arraybuffer) == napi_ok && is_arraybuffer) {
+    return false;
+  }
+
+  napi_value transfer_mode_symbol = GetUtilPrivateSymbol(env, "transfer_mode_private_symbol");
+  if (transfer_mode_symbol == nullptr) return false;
+
+  bool has_mode = false;
+  if (napi_has_property(env, value, transfer_mode_symbol, &has_mode) != napi_ok || !has_mode) {
+    return false;
+  }
+
+  napi_value transfer_mode = nullptr;
+  if (napi_get_property(env, value, transfer_mode_symbol, &transfer_mode) != napi_ok || transfer_mode == nullptr) {
+    ClearPendingException(env);
+    return false;
+  }
+
+  uint32_t mode = 0;
+  if (napi_get_value_uint32(env, transfer_mode, &mode) != napi_ok) {
+    ClearPendingException(env);
+    return false;
+  }
+
+  return (mode & 2u) == 0;
+}
+
+bool ValueContainsMarkedUncloneable(napi_env env, napi_value value, napi_value visited) {
+  if (value == nullptr || IsNullOrUndefinedValue(env, value)) return false;
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok) return false;
+  if (type != napi_object && type != napi_function) return false;
+
+  if (VisitedSetHas(env, visited, value)) return false;
+  VisitedSetAdd(env, visited, value);
+
+  // Transferable-only host objects are valid as long as they are handled via
+  // the transfer-list checks below, like in Node's serializer.
+  if (IsTransferableValue(env, value)) return false;
+
+  if (IsMarkedUncloneableValue(env, value)) return true;
+
+  bool is_buffer = false;
+  if (napi_is_buffer(env, value, &is_buffer) == napi_ok && is_buffer) return false;
+
+  bool is_arraybuffer = false;
+  if (napi_is_arraybuffer(env, value, &is_arraybuffer) == napi_ok && is_arraybuffer) return false;
+
+  bool is_dataview = false;
+  if (napi_is_dataview(env, value, &is_dataview) == napi_ok && is_dataview) return false;
+
+  bool is_typedarray = false;
+  if (napi_is_typedarray(env, value, &is_typedarray) == napi_ok && is_typedarray) return false;
+
+  bool is_array = false;
+  if (napi_is_array(env, value, &is_array) == napi_ok && is_array) {
+    uint32_t length = 0;
+    if (napi_get_array_length(env, value, &length) != napi_ok) return false;
+    for (uint32_t i = 0; i < length; ++i) {
+      napi_value item = nullptr;
+      if (napi_get_element(env, value, i, &item) != napi_ok || item == nullptr) continue;
+      if (ValueContainsMarkedUncloneable(env, item, visited)) return true;
+    }
+    return false;
+  }
+
+  napi_value keys = nullptr;
+  if (unofficial_napi_get_own_non_index_properties(env, value, napi_key_all_properties, &keys) != napi_ok ||
+      keys == nullptr) {
+    return false;
+  }
+  uint32_t key_count = 0;
+  if (napi_get_array_length(env, keys, &key_count) != napi_ok) return false;
+  for (uint32_t i = 0; i < key_count; ++i) {
+    napi_value key = nullptr;
+    if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) continue;
+    napi_value child = nullptr;
+    if (napi_get_property(env, value, key, &child) != napi_ok || child == nullptr) continue;
+    if (ValueContainsMarkedUncloneable(env, child, visited)) return true;
+  }
+  return false;
+}
+
+bool EnsureNoMarkedUncloneableValue(napi_env env, napi_value value) {
+  napi_value visited = CreateVisitedSet(env);
+  if (visited == nullptr) return true;
+  if (!ValueContainsMarkedUncloneable(env, value, visited)) return true;
+
+  napi_value err = CreateDataCloneError(env, "The object could not be cloned.");
+  if (err != nullptr) napi_throw(env, err);
+  return false;
 }
 
 bool VisitedSetHas(napi_env env, napi_value visited, napi_value value) {
@@ -1220,7 +1780,7 @@ bool ValueRequiresMessagePortTransfer(napi_env env,
   if (VisitedSetHas(env, visited, value)) return false;
   VisitedSetAdd(env, visited, value);
 
-  if (IsMessagePortValue(env, value)) {
+  if (IsMessagePortValue(env, value) || IsTransferableValue(env, value)) {
     return !TransferListContainsMessagePort(env, transfer_list, value);
   }
 
@@ -1289,10 +1849,28 @@ napi_value GetOnInitSymbol(napi_env env) {
   return GetRefValue(env, it->second.oninit_symbol_ref);
 }
 
+void ThrowIllegalInvocation(napi_env env) {
+  napi_throw_type_error(env, nullptr, "Illegal invocation");
+}
+
 MessagePortWrap* UnwrapMessagePort(napi_env env, napi_value value) {
   MessagePortWrap* wrap = nullptr;
   if (value == nullptr) return nullptr;
+  bool is_message_port = false;
+  if (napi_check_object_type_tag(env, value, &kMessagePortTypeTag, &is_message_port) != napi_ok ||
+      !is_message_port) {
+    ClearPendingException(env);
+    return nullptr;
+  }
   if (napi_unwrap(env, value, reinterpret_cast<void**>(&wrap)) != napi_ok || wrap == nullptr) return nullptr;
+  return wrap;
+}
+
+MessagePortWrap* UnwrapMessagePortThisOrThrow(napi_env env, napi_value value) {
+  MessagePortWrap* wrap = UnwrapMessagePort(env, value);
+  if (wrap == nullptr) {
+    ThrowIllegalInvocation(env);
+  }
   return wrap;
 }
 
@@ -1627,23 +2205,39 @@ bool NormalizePostMessageTransferArg(napi_env env,
 }
 
 napi_value CloneMessageValue(napi_env env, napi_value value, napi_value transfer_arg) {
-  napi_value global = GetGlobal(env);
-  napi_value structured_clone = GetNamed(env, global, "structuredClone");
-  if (!IsFunction(env, structured_clone)) return value;
-
-  napi_value argv[2] = {value, nullptr};
-  size_t argc = 1;
-  napi_value options = CreateStructuredCloneOptions(env, transfer_arg);
-  if (options != nullptr) {
-    argv[1] = options;
-    argc = 2;
+  (void)transfer_arg;
+  napi_value clone_input = value;
+  if (IsProcessEnvValue(env, clone_input)) {
+    clone_input = CloneObjectPropertiesForStructuredClone(env, clone_input, false);
+    if (clone_input == nullptr) return nullptr;
   }
+  clone_input = PrepareTransferableDataForStructuredClone(env, clone_input, false);
+  if (clone_input == nullptr) return nullptr;
 
-  napi_value cloned = nullptr;
-  if (napi_call_function(env, global, structured_clone, argc, argv, &cloned) != napi_ok || cloned == nullptr) {
+  napi_value cloned = StructuredCloneJSTransferableValue(env, clone_input);
+  const napi_status clone_status =
+      cloned != nullptr ? napi_ok : unofficial_napi_structured_clone(env, clone_input, &cloned);
+  if (clone_status != napi_ok || cloned == nullptr) {
+    bool has_pending = false;
+    if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+      const std::string message = DescribeCloneFailureValue(env, clone_input);
+      if (!message.empty()) {
+        ClearPendingException(env);
+        napi_value err = CreateDataCloneError(env, message.c_str());
+        if (err != nullptr) napi_throw(env, err);
+      }
+      return nullptr;
+    }
+    std::string message = DescribeCloneFailureValue(env, clone_input);
+    if (message.empty() && transfer_arg == nullptr) {
+      message = TryGetStructuredCloneErrorMessage(env, clone_input);
+    }
+    napi_value err = CreateDataCloneError(
+        env, message.empty() ? "The object could not be cloned." : message.c_str());
+    if (err != nullptr) napi_throw(env, err);
     return nullptr;
   }
-  return cloned;
+  return RestoreTransferableDataAfterStructuredClone(env, cloned);
 }
 
 void EmitProcessWarning(napi_env env, const char* message) {
@@ -1695,6 +2289,15 @@ std::string GetObjectTag(napi_env env, napi_value value) {
   return ValueToUtf8(env, out);
 }
 
+std::string GetCtorNameForValue(napi_env env, napi_value value) {
+  if (!IsObjectLike(env, value)) return {};
+  napi_value ctor = GetNamed(env, value, "constructor");
+  if (!IsFunction(env, ctor)) return {};
+  napi_value name = GetNamed(env, ctor, "name");
+  if (name == nullptr) return {};
+  return ValueToUtf8(env, name);
+}
+
 bool IsInstanceOfGlobalCtor(napi_env env, napi_value value, const char* ctor_name) {
   if (value == nullptr || ctor_name == nullptr) return false;
   napi_valuetype type = napi_undefined;
@@ -1716,6 +2319,44 @@ bool IsMapValue(napi_env env, napi_value value) {
 bool IsSetValue(napi_env env, napi_value value) {
   const std::string tag = GetObjectTag(env, value);
   return tag == "[object Set]" || IsInstanceOfGlobalCtor(env, value, "Set");
+}
+
+bool IsArrayBufferLike(napi_env env, napi_value value) {
+  bool is_buffer = false;
+  if (napi_is_buffer(env, value, &is_buffer) == napi_ok && is_buffer) return true;
+  bool is_arraybuffer = false;
+  if (napi_is_arraybuffer(env, value, &is_arraybuffer) == napi_ok && is_arraybuffer) return true;
+  bool is_dataview = false;
+  if (napi_is_dataview(env, value, &is_dataview) == napi_ok && is_dataview) return true;
+  bool is_typedarray = false;
+  if (napi_is_typedarray(env, value, &is_typedarray) == napi_ok && is_typedarray) return true;
+  return false;
+}
+
+bool IsPlainObjectContainer(napi_env env, napi_value value) {
+  if (value == nullptr) return false;
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok || type != napi_object) {
+    return false;
+  }
+
+  napi_value prototype = nullptr;
+  if (napi_get_prototype(env, value, &prototype) != napi_ok) {
+    ClearPendingException(env);
+    return false;
+  }
+  if (prototype == nullptr || IsNullOrUndefinedValue(env, prototype)) {
+    return true;
+  }
+
+  napi_value global = GetGlobal(env);
+  napi_value object_ctor = GetNamed(env, global, "Object");
+  napi_value object_prototype = GetNamed(env, object_ctor, "prototype");
+  if (object_prototype == nullptr) return false;
+
+  bool same = false;
+  return napi_strict_equals(env, prototype, object_prototype, &same) == napi_ok && same;
 }
 
 napi_value CreateGlobalInstance(napi_env env, const char* ctor_name) {
@@ -1916,6 +2557,10 @@ napi_value TransformTransferredPortsForQueue(
       }
     }
     return out;
+  }
+
+  if (!IsPlainObjectContainer(env, value)) {
+    return value;
   }
 
   napi_value out = CreateCloneTargetObject(env, value);
@@ -2124,6 +2769,10 @@ napi_value RestoreTransferredPortsInValue(napi_env env,
     return value;
   }
 
+  if (!IsPlainObjectContainer(env, value)) {
+    return value;
+  }
+
   napi_value keys = nullptr;
   if (unofficial_napi_get_own_non_index_properties(env, value, napi_key_all_properties, &keys) != napi_ok ||
       keys == nullptr) {
@@ -2168,7 +2817,10 @@ void EnqueueMessageToPort(napi_env env,
   queued.close_source_wrap = close_source_wrap;
   queued.transferred_ports = std::move(transferred_ports);
   if (!is_close && payload != nullptr) {
-    if (unofficial_napi_serialize_value(env, payload, &queued.payload_data) != napi_ok || queued.payload_data == nullptr) {
+    napi_value serialized_payload = PrepareTransferableDataForStructuredClone(env, payload, false);
+    if (serialized_payload == nullptr ||
+        unofficial_napi_serialize_value(env, serialized_payload, &queued.payload_data) != napi_ok ||
+        queued.payload_data == nullptr) {
       for (auto& entry : queued.transferred_ports) {
         DeleteRefIfPresent(env, &entry.source_port_ref);
       }
@@ -2400,31 +3052,22 @@ void InvokePortSymbolHook(napi_env env, napi_value port, napi_value symbol) {
 void EmitMessageToPort(napi_env env, napi_value port, napi_value payload, const char* type, napi_value ports) {
   if (port == nullptr) return;
 
-  napi_value emit_message = ResolveEmitMessageValue(env);
-  if (IsFunction(env, emit_message)) {
-    napi_value type_value = nullptr;
-    if (ports == nullptr) napi_create_array_with_length(env, 0, &ports);
-    napi_create_string_utf8(env, type != nullptr ? type : "message", NAPI_AUTO_LENGTH, &type_value);
-    napi_value ignored = nullptr;
-    napi_value argv[3] = {payload != nullptr ? payload : Undefined(env),
-                          ports != nullptr ? ports : Undefined(env),
-                          type_value != nullptr ? type_value : Undefined(env)};
-    if (UbiMakeCallback(env, port, emit_message, 3, argv, &ignored) == napi_ok) {
-      return;
-    }
-    ClearPendingException(env);
+  if (TryHybridDispatchMessageToPort(env, port, payload, type, ports)) {
+    return;
   }
 
   napi_value event = nullptr;
-  if (napi_create_object(env, &event) != napi_ok || event == nullptr) return;
+  if (napi_create_object(env, &event) != napi_ok || event == nullptr) {
+    return;
+  }
+  if (ports == nullptr) napi_create_array_with_length(env, 0, &ports);
   napi_set_named_property(env, event, "data", payload != nullptr ? payload : Undefined(env));
-
-  napi_value dispatch_event = GetNamed(env, port, "dispatchEvent");
-  if (IsFunction(env, dispatch_event)) {
-    napi_value ignored = nullptr;
-    napi_value argv[1] = {event};
-    if (UbiMakeCallback(env, port, dispatch_event, 1, argv, &ignored) == napi_ok) return;
-    ClearPendingException(env);
+  napi_set_named_property(env, event, "target", port);
+  napi_set_named_property(env, event, "ports", ports != nullptr ? ports : Undefined(env));
+  napi_value type_value = nullptr;
+  if (napi_create_string_utf8(env, type != nullptr ? type : "message", NAPI_AUTO_LENGTH, &type_value) == napi_ok &&
+      type_value != nullptr) {
+    napi_set_named_property(env, event, "type", type_value);
   }
 
   const char* handler_name = (type != nullptr && strcmp(type, "messageerror") == 0)
@@ -2482,8 +3125,19 @@ bool EnsureMessagingSymbols(napi_env env, const ResolveOptions& options) {
 }
 
 napi_value MessagePortConstructorCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
   napi_value this_arg = nullptr;
-  if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) {
+    return nullptr;
+  }
+
+  if (!IsInternalMessagePortCtorCall(env, argc, argv)) {
+    ThrowTypeErrorWithCode(env, "ERR_CONSTRUCT_CALL_INVALID", "Illegal constructor");
+    return nullptr;
+  }
+
+  if (this_arg == nullptr) {
     return nullptr;
   }
 
@@ -2494,6 +3148,7 @@ napi_value MessagePortConstructorCallback(napi_env env, napi_callback_info info)
     delete wrap;
     return nullptr;
   }
+  (void)napi_type_tag_object(env, this_arg, &kMessagePortTypeTag);
 
   uv_loop_t* loop = UbiGetEnvLoop(env);
   const int rc = loop != nullptr ? uv_async_init(loop, &wrap->async, OnMessagePortAsync) : UV_EINVAL;
@@ -2526,6 +3181,8 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
   if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
   }
+  MessagePortWrap* wrap = UnwrapMessagePortThisOrThrow(env, this_arg);
+  if (wrap == nullptr) return nullptr;
 
   napi_value normalized_transfer_arg = nullptr;
   napi_value transfer_list = nullptr;
@@ -2538,6 +3195,11 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
     if (err != nullptr) {
       napi_throw(env, err);
     }
+    return nullptr;
+  }
+  if (TransferListContainsDuplicateArrayBuffer(env, transfer_list)) {
+    napi_value err = CreateDataCloneError(env, "Transfer list contains duplicate ArrayBuffer");
+    if (err != nullptr) napi_throw(env, err);
     return nullptr;
   }
   if (!ValidateTransferListMessagePorts(env, transfer_list)) {
@@ -2558,8 +3220,12 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
   if (!EnsureNoMissingTransferredMessagePorts(env, payload, normalized_transfer_arg)) {
     return nullptr;
   }
-
-  MessagePortWrap* wrap = UnwrapMessagePort(env, this_arg);
+  if (!EnsureNoMarkedUncloneableValue(env, payload)) {
+    return nullptr;
+  }
+  if (ThrowDirectCloneFailureIfDetected(env, payload)) {
+    return nullptr;
+  }
   std::vector<QueuedMessage::TransferredPortEntry> transferred_ports;
   napi_value cloned_payload = nullptr;
   if (transfer_list != nullptr &&
@@ -2584,12 +3250,8 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
       cloned_payload = CloneMessageValue(env, transformed_payload, normalized_transfer_arg);
     }
     if (cloned_payload == nullptr) {
-      bool pending = false;
-      if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-        DeleteTransferredPortRefs(env, &transferred_ports);
-        return nullptr;
-      }
-      cloned_payload = payload;
+      DeleteTransferredPortRefs(env, &transferred_ports);
+      return nullptr;
     }
   }
   if (normalized_transfer_arg != nullptr && !ApplyArrayBufferTransfers(env, normalized_transfer_arg)) {
@@ -2667,7 +3329,8 @@ napi_value MessagePortStartCallback(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
   }
-  MessagePortWrap* wrap = UnwrapMessagePort(env, this_arg);
+  MessagePortWrap* wrap = UnwrapMessagePortThisOrThrow(env, this_arg);
+  if (wrap == nullptr) return nullptr;
   if (wrap != nullptr && wrap->handle_wrap.state == kUbiHandleInitialized) {
     wrap->receiving_messages = true;
     TriggerPortAsync(wrap);
@@ -2680,8 +3343,8 @@ napi_value MessagePortCloseCallback(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
   }
-  MessagePortWrap* wrap = UnwrapMessagePort(env, this_arg);
-  if (wrap == nullptr) return Undefined(env);
+  MessagePortWrap* wrap = UnwrapMessagePortThisOrThrow(env, this_arg);
+  if (wrap == nullptr) return nullptr;
   BeginClosePort(env, wrap, true);
   return Undefined(env);
 }
@@ -2691,11 +3354,12 @@ napi_value MessagePortRefCallback(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
   }
-  MessagePortWrap* wrap = UnwrapMessagePort(env, this_arg);
+  MessagePortWrap* wrap = UnwrapMessagePortThisOrThrow(env, this_arg);
+  if (wrap == nullptr) return nullptr;
   if (wrap != nullptr && wrap->handle_wrap.state == kUbiHandleInitialized) {
     uv_ref(reinterpret_cast<uv_handle_t*>(&wrap->async));
   }
-  return this_arg;
+  return Undefined(env);
 }
 
 napi_value MessagePortUnrefCallback(napi_env env, napi_callback_info info) {
@@ -2703,11 +3367,12 @@ napi_value MessagePortUnrefCallback(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
   }
-  MessagePortWrap* wrap = UnwrapMessagePort(env, this_arg);
+  MessagePortWrap* wrap = UnwrapMessagePortThisOrThrow(env, this_arg);
+  if (wrap == nullptr) return nullptr;
   if (wrap != nullptr && wrap->handle_wrap.state == kUbiHandleInitialized) {
     uv_unref(reinterpret_cast<uv_handle_t*>(&wrap->async));
   }
-  return this_arg;
+  return Undefined(env);
 }
 
 napi_value MessagePortHasRefCallback(napi_env env, napi_callback_info info) {
@@ -2715,14 +3380,40 @@ napi_value MessagePortHasRefCallback(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
   }
-  MessagePortWrap* wrap = UnwrapMessagePort(env, this_arg);
+  MessagePortWrap* wrap = UnwrapMessagePortThisOrThrow(env, this_arg);
+  if (wrap == nullptr) return nullptr;
+  if (wrap->handle_wrap.state != kUbiHandleInitialized) {
+    return Undefined(env);
+  }
   napi_value out = nullptr;
-  const bool has_ref = wrap != nullptr && MessagePortHasRefActive(wrap);
+  const bool has_ref = MessagePortHasRefActive(wrap);
   napi_get_boolean(env, has_ref, &out);
   return out;
 }
 
+napi_value CreateInternalMessagePortInstance(napi_env env) {
+  auto it = g_messaging_states.find(env);
+  if (it == g_messaging_states.end()) return nullptr;
+
+  napi_value ctor = GetRefValue(env, it->second.message_port_ctor_ref);
+  napi_value token = GetRefValue(env, it->second.message_port_ctor_token_ref);
+  if (!IsFunction(env, ctor) || token == nullptr) return nullptr;
+
+  napi_value port = nullptr;
+  napi_value argv[1] = {token};
+  if (napi_new_instance(env, ctor, 1, argv, &port) != napi_ok || port == nullptr) {
+    return nullptr;
+  }
+  return port;
+}
+
 napi_value MessageChannelConstructorCallback(napi_env env, napi_callback_info info) {
+  napi_value new_target = nullptr;
+  if (napi_get_new_target(env, info, &new_target) == napi_ok && new_target == nullptr) {
+    ThrowTypeErrorWithCode(env, "ERR_CONSTRUCT_CALL_REQUIRED", "Class constructor MessageChannel cannot be invoked without 'new'");
+    return nullptr;
+  }
+
   napi_value this_arg = nullptr;
   if (napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
     return nullptr;
@@ -2730,17 +3421,10 @@ napi_value MessageChannelConstructorCallback(napi_env env, napi_callback_info in
 
   auto it = g_messaging_states.find(env);
   if (it == g_messaging_states.end()) return this_arg;
-  napi_value message_port_ctor = GetRefValue(env, it->second.message_port_ctor_ref);
-  if (!IsFunction(env, message_port_ctor)) return this_arg;
 
-  napi_value port1 = nullptr;
-  napi_value port2 = nullptr;
-  if (napi_new_instance(env, message_port_ctor, 0, nullptr, &port1) != napi_ok || port1 == nullptr) {
-    return this_arg;
-  }
-  if (napi_new_instance(env, message_port_ctor, 0, nullptr, &port2) != napi_ok || port2 == nullptr) {
-    return this_arg;
-  }
+  napi_value port1 = CreateInternalMessagePortInstance(env);
+  napi_value port2 = CreateInternalMessagePortInstance(env);
+  if (port1 == nullptr || port2 == nullptr) return this_arg;
 
   ConnectPorts(env, port1, port2);
   napi_set_named_property(env, this_arg, "port1", port1);
@@ -2824,20 +3508,41 @@ napi_value StructuredCloneCallback(napi_env env, napi_callback_info info) {
   if (!EnsureNoMissingTransferredMessagePorts(env, argv[0], argc >= 2 ? argv[1] : nullptr)) {
     return nullptr;
   }
+  if (!EnsureNoMarkedUncloneableValue(env, argv[0])) {
+    return nullptr;
+  }
+  if (ThrowDirectCloneFailureIfDetected(env, argv[0])) {
+    return nullptr;
+  }
 
   napi_value clone_input = argv[0];
   if (IsProcessEnvValue(env, clone_input)) {
-    clone_input = CloneObjectPropertiesForStructuredClone(env, clone_input);
+    clone_input = CloneObjectPropertiesForStructuredClone(env, clone_input, false);
     if (clone_input == nullptr) return nullptr;
   }
+  clone_input = PrepareTransferableDataForStructuredClone(env, clone_input, false);
+  if (clone_input == nullptr) return nullptr;
 
   napi_value out = StructuredCloneJSTransferableValue(env, clone_input);
   const napi_status clone_status =
       out != nullptr ? napi_ok : unofficial_napi_structured_clone(env, clone_input, &out);
   if (clone_status != napi_ok || out == nullptr) {
     bool has_pending = false;
-    if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) return nullptr;
-    napi_value err = CreateDataCloneError(env, "The object could not be cloned.");
+    if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+      const std::string message = DescribeCloneFailureValue(env, clone_input);
+      if (!message.empty()) {
+        ClearPendingException(env);
+        napi_value err = CreateDataCloneError(env, message.c_str());
+        if (err != nullptr) napi_throw(env, err);
+      }
+      return nullptr;
+    }
+    std::string message = DescribeCloneFailureValue(env, clone_input);
+    if (message.empty() && (argc < 2 || argv[1] == nullptr || IsUndefined(env, argv[1]))) {
+      message = TryGetStructuredCloneErrorMessage(env, clone_input);
+    }
+    napi_value err = CreateDataCloneError(
+        env, message.empty() ? "The object could not be cloned." : message.c_str());
     if (err != nullptr) napi_throw(env, err);
     return nullptr;
   }
@@ -2845,7 +3550,7 @@ napi_value StructuredCloneCallback(napi_env env, napi_callback_info info) {
   if (argc >= 2 && !ApplyArrayBufferTransfers(env, argv[1])) {
     return nullptr;
   }
-  return out;
+  return RestoreTransferableDataAfterStructuredClone(env, out);
 }
 
 napi_value BroadcastChannelCallback(napi_env env, napi_callback_info info) {
@@ -2856,13 +3561,9 @@ napi_value BroadcastChannelCallback(napi_env env, napi_callback_info info) {
   const std::string name = (argc >= 1 && argv[0] != nullptr) ? ValueToUtf8(env, argv[0]) : std::string();
   auto it = g_messaging_states.find(env);
   if (it == g_messaging_states.end()) return Undefined(env);
-  napi_value message_port_ctor = GetRefValue(env, it->second.message_port_ctor_ref);
-  if (!IsFunction(env, message_port_ctor)) return Undefined(env);
 
-  napi_value handle = nullptr;
-  if (napi_new_instance(env, message_port_ctor, 0, nullptr, &handle) != napi_ok || handle == nullptr) {
-    return Undefined(env);
-  }
+  napi_value handle = CreateInternalMessagePortInstance(env);
+  if (handle == nullptr) return Undefined(env);
 
   MessagePortWrap* wrap = UnwrapMessagePort(env, handle);
   if (wrap == nullptr || !wrap->data) return Undefined(env);
@@ -2879,6 +3580,505 @@ napi_value DrainMessagePortCallback(napi_env env, napi_callback_info info) {
   if (wrap == nullptr) return Undefined(env);
   ProcessQueuedMessages(wrap, true);
   return Undefined(env);
+}
+
+bool IsContextifiedObject(napi_env env, napi_value value) {
+  if (value == nullptr) return false;
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok || type != napi_object) {
+    return false;
+  }
+
+  napi_value private_symbols = UbiGetPrivateSymbols(env);
+  napi_value context_symbol =
+      private_symbols != nullptr ? GetNamed(env, private_symbols, "contextify_context_private_symbol") : nullptr;
+  if (context_symbol == nullptr) return false;
+
+  bool has_symbol = false;
+  if (napi_has_property(env, value, context_symbol, &has_symbol) != napi_ok || !has_symbol) {
+    ClearPendingException(env);
+    return false;
+  }
+
+  napi_value context_value = nullptr;
+  if (napi_get_property(env, value, context_symbol, &context_value) != napi_ok || context_value == nullptr) {
+    ClearPendingException(env);
+    return false;
+  }
+  return !IsUndefined(env, context_value);
+}
+
+void DeleteNamedPropertyIfPresent(napi_env env, napi_value target, const char* name) {
+  if (env == nullptr || target == nullptr || name == nullptr) return;
+  napi_value key = nullptr;
+  bool deleted = false;
+  if (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &key) != napi_ok || key == nullptr) return;
+  if (napi_delete_property(env, target, key, &deleted) != napi_ok) {
+    ClearPendingException(env);
+  }
+}
+
+napi_value PrepareMovedMessagePortOutgoingValue(
+    napi_env env,
+    napi_value value,
+    napi_value native_port_symbol,
+    napi_value contextify_context_symbol,
+    std::vector<ValueTransformPair>* seen_pairs) {
+  if (value == nullptr || IsNullOrUndefinedValue(env, value) || IsCloneByReferenceValue(env, value)) {
+    return value;
+  }
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok || (type != napi_object && type != napi_function)) {
+    return value;
+  }
+
+  if (native_port_symbol != nullptr) {
+    bool has_native_port = false;
+    if (napi_has_property(env, value, native_port_symbol, &has_native_port) == napi_ok && has_native_port) {
+      napi_value native_port = nullptr;
+      if (napi_get_property(env, value, native_port_symbol, &native_port) == napi_ok &&
+          native_port != nullptr &&
+          !IsUndefined(env, native_port)) {
+        return native_port;
+      }
+      ClearPendingException(env);
+    } else {
+      ClearPendingException(env);
+    }
+  }
+
+  if (contextify_context_symbol != nullptr) {
+    bool is_context_object = false;
+    if (napi_has_property(env, value, contextify_context_symbol, &is_context_object) == napi_ok &&
+        is_context_object) {
+      return value;
+    }
+    ClearPendingException(env);
+  }
+
+  if (seen_pairs != nullptr) {
+    napi_value existing = FindTransformedValue(env, value, *seen_pairs);
+    if (existing != nullptr) return existing;
+  }
+
+  const std::string tag = GetObjectTag(env, value);
+
+  if (tag == "[object Array]") {
+    uint32_t length = 0;
+    if (napi_get_array_length(env, value, &length) != napi_ok) return nullptr;
+    napi_value out = nullptr;
+    if (napi_create_array_with_length(env, length, &out) != napi_ok || out == nullptr) return nullptr;
+    if (seen_pairs != nullptr) seen_pairs->push_back({value, out});
+    for (uint32_t i = 0; i < length; ++i) {
+      napi_value item = nullptr;
+      if (napi_get_element(env, value, i, &item) != napi_ok) return nullptr;
+      napi_value prepared = PrepareMovedMessagePortOutgoingValue(
+          env, item, native_port_symbol, contextify_context_symbol, seen_pairs);
+      if (prepared == nullptr || napi_set_element(env, out, i, prepared) != napi_ok) return nullptr;
+    }
+    return out;
+  }
+
+  if (tag == "[object Object]") {
+    napi_value out = nullptr;
+    if (napi_create_object(env, &out) != napi_ok || out == nullptr) return nullptr;
+    if (seen_pairs != nullptr) seen_pairs->push_back({value, out});
+
+    napi_value keys = nullptr;
+    if (napi_get_property_names(env, value, &keys) != napi_ok || keys == nullptr) return nullptr;
+    uint32_t length = 0;
+    if (napi_get_array_length(env, keys, &length) != napi_ok) return nullptr;
+    for (uint32_t i = 0; i < length; ++i) {
+      napi_value key = nullptr;
+      if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) return nullptr;
+      napi_value item = nullptr;
+      if (napi_get_property(env, value, key, &item) != napi_ok) return nullptr;
+      napi_value prepared = PrepareMovedMessagePortOutgoingValue(
+          env, item, native_port_symbol, contextify_context_symbol, seen_pairs);
+      if (prepared == nullptr || napi_set_property(env, out, key, prepared) != napi_ok) return nullptr;
+    }
+    return out;
+  }
+
+  return value;
+}
+
+napi_value MoveMessagePortPostMessageBridgeCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
+  if (argc < 4 || argv[0] == nullptr || argv[1] == nullptr || argv[2] == nullptr) {
+    ThrowIllegalInvocation(env);
+    return nullptr;
+  }
+
+  napi_value native_port = argv[0];
+  napi_value native_port_symbol = argv[1];
+  napi_value contextify_context_symbol = argv[2];
+  napi_value message = argv[3];
+  napi_value transfer_list = argc >= 5 ? argv[4] : Undefined(env);
+
+  std::vector<ValueTransformPair> seen_pairs;
+  napi_value prepared_message = PrepareMovedMessagePortOutgoingValue(
+      env, message, native_port_symbol, contextify_context_symbol, &seen_pairs);
+  if (prepared_message == nullptr) return nullptr;
+
+  napi_value prepared_transfer_list = transfer_list;
+  if (transfer_list != nullptr && !IsUndefined(env, transfer_list)) {
+    seen_pairs.clear();
+    prepared_transfer_list = PrepareMovedMessagePortOutgoingValue(
+        env, transfer_list, native_port_symbol, contextify_context_symbol, &seen_pairs);
+    if (prepared_transfer_list == nullptr) return nullptr;
+  }
+
+  napi_value post_message = GetNamed(env, native_port, "postMessage");
+  if (!IsFunction(env, post_message)) {
+    ThrowIllegalInvocation(env);
+    return nullptr;
+  }
+
+  napi_value call_argv[2] = {prepared_message, prepared_transfer_list};
+  napi_value out = nullptr;
+  const size_t call_argc =
+      prepared_transfer_list == nullptr || IsUndefined(env, prepared_transfer_list) ? 1u : 2u;
+  if (napi_call_function(env, native_port, post_message, call_argc, call_argv, &out) != napi_ok) {
+    return nullptr;
+  }
+  return out != nullptr ? out : Undefined(env);
+}
+
+napi_value CreateMovedMessagePortWrapperInContext(napi_env env,
+                                                  napi_value contextified_object,
+                                                  napi_value native_port) {
+  if (env == nullptr || contextified_object == nullptr || native_port == nullptr) return nullptr;
+
+  auto& state = EnsureMessagingState(env);
+  napi_value native_move_fn = nullptr;
+  napi_value native_post_message_fn = nullptr;
+  if (napi_create_function(env,
+                           "moveMessagePortToContext",
+                           NAPI_AUTO_LENGTH,
+                           MoveMessagePortToContextCallback,
+                           nullptr,
+                           &native_move_fn) != napi_ok ||
+      native_move_fn == nullptr ||
+      napi_create_function(env,
+                           "moveMessagePortPostMessage",
+                           NAPI_AUTO_LENGTH,
+                           MoveMessagePortPostMessageBridgeCallback,
+                           nullptr,
+                           &native_post_message_fn) != napi_ok ||
+      native_post_message_fn == nullptr) {
+    return nullptr;
+  }
+
+  napi_value native_ctor = GetRefValue(env, state.message_port_ctor_ref);
+  napi_value native_key_object_ctor = GetCryptoModuleCtor(env, "KeyObject");
+  napi_value private_symbols = UbiGetPrivateSymbols(env);
+  napi_value transfer_mode_symbol =
+      private_symbols != nullptr ? GetNamed(env, private_symbols, "transfer_mode_private_symbol") : nullptr;
+  napi_value contextify_context_symbol =
+      private_symbols != nullptr ? GetNamed(env, private_symbols, "contextify_context_private_symbol") : nullptr;
+  if (native_ctor == nullptr || transfer_mode_symbol == nullptr || contextify_context_symbol == nullptr ||
+      native_key_object_ctor == nullptr) {
+    return nullptr;
+  }
+
+  constexpr const char* kTempNativePort = "__ubiMoveMessagePortNativePort__";
+  constexpr const char* kTempNativeMove = "__ubiMoveMessagePortNativeMove__";
+  constexpr const char* kTempNativePostMessage = "__ubiMoveMessagePortNativePostMessage__";
+  constexpr const char* kTempNativeCtor = "__ubiMoveMessagePortNativeCtor__";
+  constexpr const char* kTempNativeKeyObjectCtor = "__ubiMoveMessagePortNativeKeyObjectCtor__";
+  constexpr const char* kTempTransferMode = "__ubiMoveMessagePortTransferModeSymbol__";
+  constexpr const char* kTempContextifyContext = "__ubiMoveMessagePortContextifyContextSymbol__";
+
+  napi_set_named_property(env, contextified_object, kTempNativePort, native_port);
+  napi_set_named_property(env, contextified_object, kTempNativeMove, native_move_fn);
+  napi_set_named_property(env, contextified_object, kTempNativePostMessage, native_post_message_fn);
+  napi_set_named_property(env, contextified_object, kTempNativeCtor, native_ctor);
+  napi_set_named_property(env, contextified_object, kTempNativeKeyObjectCtor, native_key_object_ctor);
+  napi_set_named_property(env, contextified_object, kTempTransferMode, transfer_mode_symbol);
+  napi_set_named_property(env, contextified_object, kTempContextifyContext, contextify_context_symbol);
+
+  constexpr const char* kWrapperSource = R"JS(
+(() => {
+  const nativePort = globalThis.__ubiMoveMessagePortNativePort__;
+  const nativeMove = globalThis.__ubiMoveMessagePortNativeMove__;
+  const nativePostMessage = globalThis.__ubiMoveMessagePortNativePostMessage__;
+  const NativeMessagePort = globalThis.__ubiMoveMessagePortNativeCtor__;
+  const NativeKeyObject = globalThis.__ubiMoveMessagePortNativeKeyObjectCtor__;
+  const transferModeSymbol =
+    globalThis.__ubiMoveMessagePortTransferModeSymbol__;
+  const contextifyContextSymbol =
+    globalThis.__ubiMoveMessagePortContextifyContextSymbol__;
+  delete globalThis.__ubiMoveMessagePortNativePort__;
+  delete globalThis.__ubiMoveMessagePortNativeMove__;
+  delete globalThis.__ubiMoveMessagePortNativePostMessage__;
+  delete globalThis.__ubiMoveMessagePortNativeCtor__;
+  delete globalThis.__ubiMoveMessagePortNativeKeyObjectCtor__;
+  delete globalThis.__ubiMoveMessagePortTransferModeSymbol__;
+  delete globalThis.__ubiMoveMessagePortContextifyContextSymbol__;
+
+  const nativePortSymbol =
+    globalThis.__ubiMovedMessagePortNativeSymbol__ ||
+    (globalThis.__ubiMovedMessagePortNativeSymbol__ =
+      Symbol('nodejs.movedMessagePort.native'));
+  const portCache =
+    globalThis.__ubiMovedMessagePortCache__ ||
+    (globalThis.__ubiMovedMessagePortCache__ = new WeakMap());
+
+  if (portCache.has(nativePort))
+    return portCache.get(nativePort);
+
+  function makeContextUnavailableError() {
+    const err = new Error('ERR_MESSAGE_TARGET_CONTEXT_UNAVAILABLE');
+    err.code = 'ERR_MESSAGE_TARGET_CONTEXT_UNAVAILABLE';
+    return err;
+  }
+
+  function wrapThrownError(err) {
+    const DomExceptionCtor =
+      typeof DOMException === 'function'
+        ? DOMException
+        : class DOMException extends Error {};
+    if (err?.name === 'DataCloneError' ||
+        err?.constructor?.name === 'DOMException') {
+      const out = new DomExceptionCtor(String(err.message), String(err.name));
+      out.name = String(err.name);
+      if (err && 'code' in err) {
+        try {
+          Object.defineProperty(out, 'code', {
+            __proto__: null,
+            value: err.code,
+            configurable: true,
+          });
+        } catch {}
+      }
+      return out;
+    }
+    const out = new Error(err?.message == null ? String(err) : String(err.message));
+    if (err?.name)
+      out.name = err.name;
+    if (err && 'code' in err)
+      out.code = err.code;
+    return out;
+  }
+
+  function objectTag(value) {
+    return Object.prototype.toString.call(value);
+  }
+
+  function isRawNativePort(value) {
+    return value instanceof NativeMessagePort;
+  }
+
+  function isMovedWrapper(value) {
+    return value !== null &&
+      (typeof value === 'object' || typeof value === 'function') &&
+      value[nativePortSymbol] !== undefined;
+  }
+
+  function isUnsupportedTransferable(value) {
+    return value !== null &&
+      (typeof value === 'object' || typeof value === 'function') &&
+      ((transferModeSymbol !== undefined &&
+        value[transferModeSymbol] !== undefined) ||
+       (typeof NativeKeyObject === 'function' && value instanceof NativeKeyObject)) &&
+      !isRawNativePort(value);
+  }
+
+  function moveNativePort(value) {
+    if (portCache.has(value))
+      return portCache.get(value);
+    const moved = nativeMove(value, globalThis);
+    portCache.set(value, moved);
+    return moved;
+  }
+
+  function transformIncoming(value, seen = new WeakMap()) {
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function'))
+      return value;
+    if (isRawNativePort(value))
+      return moveNativePort(value);
+    if (isUnsupportedTransferable(value))
+      throw makeContextUnavailableError();
+    if (seen.has(value))
+      return seen.get(value);
+
+    const tag = objectTag(value);
+    if (tag === '[object Array]') {
+      const out = [];
+      seen.set(value, out);
+      for (let i = 0; i < value.length; i++)
+        out[i] = transformIncoming(value[i], seen);
+      return out;
+    }
+    if (tag === '[object Map]') {
+      const out = new Map();
+      seen.set(value, out);
+      for (const [key, entryValue] of value)
+        out.set(transformIncoming(key, seen), transformIncoming(entryValue, seen));
+      return out;
+    }
+    if (tag === '[object Set]') {
+      const out = new Set();
+      seen.set(value, out);
+      for (const entryValue of value)
+        out.add(transformIncoming(entryValue, seen));
+      return out;
+    }
+    if (tag === '[object Object]') {
+      const out = {};
+      seen.set(value, out);
+      for (const key of Reflect.ownKeys(value)) {
+        const desc = Object.getOwnPropertyDescriptor(value, key);
+        if (!desc)
+          continue;
+        if ('value' in desc)
+          desc.value = transformIncoming(desc.value, seen);
+        Object.defineProperty(out, key, desc);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  const proto = {
+    postMessage(message, transferList) {
+      try {
+        return nativePostMessage(
+          nativePort,
+          nativePortSymbol,
+          contextifyContextSymbol,
+          message,
+          transferList);
+      } catch (err) {
+        throw wrapThrownError(err);
+      }
+    },
+    start() {
+      return nativePort.start();
+    },
+    close(cb) {
+      return nativePort.close(cb);
+    },
+    ref() {
+      return nativePort.ref();
+    },
+    unref() {
+      return nativePort.unref();
+    },
+    hasRef() {
+      return nativePort.hasRef();
+    },
+  };
+
+  const wrapper = Object.create(proto);
+  Object.defineProperty(wrapper, nativePortSymbol, {
+    __proto__: null,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: nativePort,
+  });
+  wrapper.onmessage = undefined;
+  wrapper.onmessageerror = undefined;
+
+  portCache.set(nativePort, wrapper);
+
+  nativePort.onmessage = (event) => {
+    try {
+      const seen = new WeakMap();
+      const data = transformIncoming(event.data, seen);
+      const ports = transformIncoming(event.ports ?? [], seen);
+      if (typeof wrapper.onmessage === 'function') {
+        wrapper.onmessage({
+          __proto__: null,
+          data,
+          ports,
+          target: wrapper,
+          type: 'message',
+        });
+      }
+    } catch (err) {
+      if (typeof wrapper.onmessageerror === 'function') {
+        wrapper.onmessageerror({
+          __proto__: null,
+          data: err,
+          ports: [],
+          target: wrapper,
+          type: 'messageerror',
+        });
+      }
+    }
+  };
+
+  nativePort.onmessageerror = (event) => {
+    let data = event.data;
+    try {
+      data = transformIncoming(data, new WeakMap());
+    } catch (err) {
+      data = err;
+    }
+    if (typeof wrapper.onmessageerror === 'function') {
+      wrapper.onmessageerror({
+        __proto__: null,
+        data,
+        ports: [],
+        target: wrapper,
+        type: 'messageerror',
+      });
+    }
+  };
+
+  nativePort.unref();
+
+  return wrapper;
+})()
+)JS";
+
+  napi_value source = nullptr;
+  napi_value filename = nullptr;
+  napi_value undefined = Undefined(env);
+  if (napi_create_string_utf8(env, kWrapperSource, NAPI_AUTO_LENGTH, &source) != napi_ok || source == nullptr ||
+      napi_create_string_utf8(
+          env, "node:internal/worker/move_message_port_context", NAPI_AUTO_LENGTH, &filename) != napi_ok ||
+      filename == nullptr) {
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativePort);
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeMove);
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativePostMessage);
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeCtor);
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeKeyObjectCtor);
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempTransferMode);
+    DeleteNamedPropertyIfPresent(env, contextified_object, kTempContextifyContext);
+    return nullptr;
+  }
+
+  napi_value out = nullptr;
+  const napi_status status = unofficial_napi_contextify_run_script(env,
+                                                                   contextified_object,
+                                                                   source,
+                                                                   filename,
+                                                                   0,
+                                                                   0,
+                                                                   -1,
+                                                                   true,
+                                                                   false,
+                                                                   false,
+                                                                   undefined,
+                                                                   &out);
+
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativePort);
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeMove);
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativePostMessage);
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeCtor);
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeKeyObjectCtor);
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempTransferMode);
+  DeleteNamedPropertyIfPresent(env, contextified_object, kTempContextifyContext);
+
+  if (status != napi_ok) return nullptr;
+  return out;
 }
 
 napi_value MoveMessagePortToContextCallback(napi_env env, napi_callback_info info) {
@@ -2915,13 +4115,13 @@ napi_value MoveMessagePortToContextCallback(napi_env env, napi_callback_info inf
     ThrowTypeErrorWithCode(env, "ERR_INVALID_ARG_TYPE", "Invalid context argument");
     return nullptr;
   }
-  napi_valuetype context_type = napi_undefined;
-  if (napi_typeof(env, argv[1], &context_type) != napi_ok || context_type != napi_object) {
+  if (!IsContextifiedObject(env, argv[1])) {
     ThrowTypeErrorWithCode(env, "ERR_INVALID_ARG_TYPE", "Invalid context argument");
     return nullptr;
   }
 
-  return argv[0];
+  napi_value wrapper = CreateMovedMessagePortWrapperInContext(env, argv[1], argv[0]);
+  return wrapper != nullptr ? wrapper : nullptr;
 }
 
 napi_value ReceiveMessageOnPortCallback(napi_env env, napi_callback_info info) {
@@ -3142,13 +4342,9 @@ napi_value UbiCreateMessagePortForData(napi_env env, const UbiMessagePortDataPtr
   if (!data) return Undefined(env);
   auto it = g_messaging_states.find(env);
   if (it == g_messaging_states.end()) return Undefined(env);
-  napi_value ctor = GetRefValue(env, it->second.message_port_ctor_ref);
-  if (!IsFunction(env, ctor)) return Undefined(env);
 
-  napi_value port = nullptr;
-  if (napi_new_instance(env, ctor, 0, nullptr, &port) != napi_ok || port == nullptr) {
-    return Undefined(env);
-  }
+  napi_value port = CreateInternalMessagePortInstance(env);
+  if (port == nullptr) return Undefined(env);
 
   MessagePortWrap* wrap = UnwrapMessagePort(env, port);
   if (wrap == nullptr) return Undefined(env);
@@ -3184,6 +4380,11 @@ napi_value ResolveMessaging(napi_env env, const ResolveOptions& options) {
 
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
+
+  napi_value message_port_ctor_token = nullptr;
+  if (napi_create_object(env, &message_port_ctor_token) == napi_ok && message_port_ctor_token != nullptr) {
+    SetRefToValue(env, &state.message_port_ctor_token_ref, message_port_ctor_token);
+  }
 
   napi_value message_port_ctor = nullptr;
   if (napi_define_class(env,

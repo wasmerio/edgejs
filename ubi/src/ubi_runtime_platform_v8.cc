@@ -424,6 +424,20 @@ napi_status UbiRuntimePlatformInstallHooks(napi_env env) {
   return InstallForegroundEnqueueHook(env);
 }
 
+napi_status UbiRuntimePlatformEnqueueForegroundTask(napi_env env,
+                                                   UbiRuntimePlatformTaskCallback callback,
+                                                   void* data,
+                                                   UbiRuntimePlatformTaskCleanup cleanup,
+                                                   uint64_t delay_millis) {
+  if (env == nullptr || callback == nullptr) return napi_invalid_arg;
+  PlatformTaskState* state = GetState(env);
+  if (state == nullptr || state->cleanup_started.load(std::memory_order_acquire)) {
+    return napi_generic_failure;
+  }
+  return EnqueueForegroundTaskFromEngine(
+      state, callback, data, cleanup, delay_millis);
+}
+
 napi_status UbiRuntimePlatformEnqueueTask(napi_env env,
                                          UbiRuntimePlatformTaskCallback callback,
                                          void* data,

@@ -31,6 +31,12 @@ bool UbiRuntimePlatformHasRefedImmediateTasks(napi_env env);
 // Ubi owns queueing and drain policy; engine backends only post work into it.
 napi_status UbiRuntimePlatformInstallHooks(napi_env env);
 
+napi_status UbiRuntimePlatformEnqueueForegroundTask(napi_env env,
+                                                    UbiRuntimePlatformTaskCallback callback,
+                                                    void* data,
+                                                    UbiRuntimePlatformTaskCleanup cleanup,
+                                                    uint64_t delay_millis = 0);
+
 // Drain Ubi-owned foreground tasks that were posted by the engine adapter.
 napi_status UbiRuntimePlatformDrainTasks(napi_env env);
 

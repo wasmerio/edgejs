@@ -1542,6 +1542,7 @@ static bool LooksLikeCliOptionToken(const std::string& token) {
       "--tls-cipher-list",
       "--tls-keylog",
       "--trace-deprecation",
+      "--trace-exit",
       "--trace-require-module",
       "--trace-sigint",
       "--trace-tls",
