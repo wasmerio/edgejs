@@ -394,6 +394,12 @@ NAPI_EXTERN napi_status unofficial_napi_module_wrap_has_async_graph(
     void* handle,
     bool* result_out);
 
+NAPI_EXTERN napi_status unofficial_napi_module_wrap_check_unsettled_top_level_await(
+    napi_env env,
+    napi_value module_wrap,
+    bool warnings,
+    bool* settled_out);
+
 NAPI_EXTERN napi_status unofficial_napi_module_wrap_set_export(
     napi_env env,
     void* handle,

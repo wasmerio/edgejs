@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <vector>
 #include <uv.h>
+#include "ada.h"
 
 #include "internal_binding/helpers.h"
 #include "../ubi_env_loop.h"
@@ -3300,14 +3301,18 @@ napi_value FsLegacyMainResolve(napi_env env, napi_callback_info info) {
   std::string package_path;
   if (argc < 1 || !ValueToUtf8(env, argv[0], &package_path)) return Undefined(env);
 
-  if (argc >= 3 && argv[2] != nullptr) {
-    napi_valuetype t = napi_undefined;
-    if (napi_typeof(env, argv[2], &t) != napi_ok || (t != napi_string && t != napi_object)) {
-      napi_throw_type_error(env,
-                            "ERR_INVALID_ARG_TYPE",
-                            "The \"base\" argument must be of type string or an instance of URL.");
-      return nullptr;
-    }
+  if (argc < 3 || argv[2] == nullptr) {
+    napi_throw_type_error(env,
+                          "ERR_INVALID_ARG_TYPE",
+                          "The \"base\" argument must be of type string or an instance of URL.");
+    return nullptr;
+  }
+  napi_valuetype base_type = napi_undefined;
+  if (napi_typeof(env, argv[2], &base_type) != napi_ok || base_type != napi_string) {
+    napi_throw_type_error(env,
+                          "ERR_INVALID_ARG_TYPE",
+                          "The \"base\" argument must be of type string or an instance of URL.");
+    return nullptr;
   }
 
   static const char* ext[] = {"", ".js", ".json", ".node", "/index.js", "/index.json", "/index.node",
@@ -3345,7 +3350,19 @@ napi_value FsLegacyMainResolve(napi_env env, napi_callback_info info) {
     }
   }
 
-  napi_throw_error(env, "ERR_MODULE_NOT_FOUND", "Cannot find package main entry");
+  std::string base_string;
+  ValueToUtf8(env, argv[2], &base_string);
+  auto base_url = ada::parse<ada::url_aggregator>(base_string);
+  if (!base_url) {
+    napi_throw_error(env, "ERR_INVALID_URL", "Invalid URL");
+    return nullptr;
+  }
+
+  const std::string module_base = ubi_path::NormalizeFileURLOrPath(base_string);
+  const std::string missing = package_main.empty() ? fallback + ".js" : package_path + "/" + package_main;
+  napi_throw_error(env,
+                   "ERR_MODULE_NOT_FOUND",
+                   ("Cannot find package '" + missing + "' imported from " + module_base).c_str());
   return nullptr;
 }
 

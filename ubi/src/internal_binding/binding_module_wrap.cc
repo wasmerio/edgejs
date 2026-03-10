@@ -1,8 +1,5 @@
 #include "internal_binding/dispatch.h"
 
-#include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -30,18 +27,9 @@ constexpr int32_t kEvaluationPhase = 2;
 
 struct ModuleWrapInstance {
   napi_ref wrapper_ref = nullptr;
-  napi_ref namespace_ref = nullptr;
-  napi_ref source_object_ref = nullptr;
   napi_ref url_ref = nullptr;
-  napi_ref source_text_ref = nullptr;
-  napi_ref synthetic_eval_steps_ref = nullptr;
-  napi_ref linker_ref = nullptr;
-  napi_ref error_ref = nullptr;
   void* module_handle = nullptr;
-  int32_t status = kUninstantiated;
-  int32_t phase = kEvaluationPhase;
   bool has_top_level_await = false;
-  bool is_source_text_module = false;
 };
 
 struct ModuleWrapBindingState {
@@ -119,13 +107,7 @@ void ModuleWrapFinalize(napi_env env, void* data, void* /*hint*/) {
     instance->module_handle = nullptr;
   }
   ResetRef(env, &instance->wrapper_ref);
-  ResetRef(env, &instance->namespace_ref);
-  ResetRef(env, &instance->source_object_ref);
   ResetRef(env, &instance->url_ref);
-  ResetRef(env, &instance->source_text_ref);
-  ResetRef(env, &instance->synthetic_eval_steps_ref);
-  ResetRef(env, &instance->linker_ref);
-  ResetRef(env, &instance->error_ref);
   delete instance;
 }
 
@@ -224,482 +206,24 @@ std::string ValueToUtf8(napi_env env, napi_value value) {
   return out;
 }
 
-bool StartsWithNodeScheme(const std::string& specifier) {
-  return specifier.rfind("node:", 0) == 0;
-}
-
-std::string TrimAscii(std::string_view value) {
-  size_t start = 0;
-  size_t end = value.size();
-  while (start < end && (value[start] == ' ' || value[start] == '\t' || value[start] == '\r')) start++;
-  while (end > start &&
-         (value[end - 1] == ' ' || value[end - 1] == '\t' || value[end - 1] == '\r' || value[end - 1] == ';')) {
-    end--;
+bool ThrowCodeError(napi_env env, const char* code, const char* message) {
+  if (env == nullptr || code == nullptr || message == nullptr) return false;
+  napi_value message_value = nullptr;
+  napi_value error_value = nullptr;
+  if (napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &message_value) != napi_ok ||
+      message_value == nullptr ||
+      napi_create_error(env, nullptr, message_value, &error_value) != napi_ok ||
+      error_value == nullptr) {
+    return false;
   }
-  return std::string(value.substr(start, end - start));
-}
-
-bool ParseQuotedLiteral(const std::string& text, std::string* out) {
-  if (out == nullptr) return false;
-  if (text.size() < 2) return false;
-  const char quote = text.front();
-  if ((quote != '\'' && quote != '"') || text.back() != quote) return false;
-  *out = text.substr(1, text.size() - 2);
-  return true;
-}
-
-bool ParseImportSideEffect(const std::string& trimmed, std::string* specifier_out) {
-  // import 'specifier'
-  constexpr std::string_view kPrefix = "import ";
-  if (trimmed.rfind(kPrefix, 0) != 0) return false;
-  const std::string rest = TrimAscii(trimmed.substr(kPrefix.size()));
-  if (rest.empty() || rest[0] == '{' || rest.find(" from ") != std::string::npos) return false;
-  return ParseQuotedLiteral(rest, specifier_out);
-}
-
-bool ParseImportNamed(const std::string& trimmed, std::string* destructuring_out, std::string* specifier_out) {
-  // import { a, b as c } from 'specifier'
-  constexpr std::string_view kPrefix = "import ";
-  if (trimmed.rfind(kPrefix, 0) != 0) return false;
-  const std::string rest = TrimAscii(trimmed.substr(kPrefix.size()));
-  if (rest.empty() || rest.front() != '{') return false;
-  const size_t close_brace = rest.find('}');
-  if (close_brace == std::string::npos) return false;
-  const std::string bindings = rest.substr(1, close_brace - 1);
-  std::string after = TrimAscii(rest.substr(close_brace + 1));
-  constexpr std::string_view kFrom = "from ";
-  if (after.rfind(kFrom, 0) != 0) return false;
-  after = TrimAscii(after.substr(kFrom.size()));
-  std::string specifier;
-  if (!ParseQuotedLiteral(after, &specifier)) return false;
-
-  std::stringstream ss(bindings);
-  std::string item;
-  std::vector<std::string> parts;
-  while (std::getline(ss, item, ',')) {
-    item = TrimAscii(item);
-    if (item.empty()) continue;
-    const size_t as_pos = item.find(" as ");
-    if (as_pos == std::string::npos) {
-      parts.push_back(item);
-    } else {
-      const std::string imported = TrimAscii(item.substr(0, as_pos));
-      const std::string local = TrimAscii(item.substr(as_pos + 4));
-      if (imported.empty() || local.empty()) continue;
-      parts.push_back(imported + ": " + local);
-    }
-  }
-  if (parts.empty()) return false;
-
-  std::string destructuring;
-  for (size_t i = 0; i < parts.size(); ++i) {
-    if (i > 0) destructuring += ", ";
-    destructuring += parts[i];
-  }
-  if (destructuring_out != nullptr) *destructuring_out = destructuring;
-  if (specifier_out != nullptr) *specifier_out = specifier;
-  return true;
-}
-
-bool IsErrorCode(napi_env env, napi_value err, const char* code) {
-  if (env == nullptr || err == nullptr || code == nullptr) return false;
   napi_value code_value = nullptr;
-  if (napi_get_named_property(env, err, "code", &code_value) != napi_ok || code_value == nullptr) return false;
-  const std::string actual = ValueToUtf8(env, code_value);
-  return actual == code;
-}
-
-bool ReadTextFile(const std::string& path, std::string* out) {
-  if (out == nullptr) return false;
-  std::ifstream in(path, std::ios::in | std::ios::binary);
-  if (!in.is_open()) return false;
-  std::ostringstream ss;
-  ss << in.rdbuf();
-  *out = ss.str();
-  return true;
-}
-
-napi_value BuildNamespaceFromExports(napi_env env, napi_value exports_value) {
-  napi_value namespace_obj = nullptr;
-  if (napi_create_object(env, &namespace_obj) != napi_ok || namespace_obj == nullptr) return nullptr;
-  napi_set_named_property(env, namespace_obj, "default", exports_value);
-
-  napi_valuetype exports_type = napi_undefined;
-  if (napi_typeof(env, exports_value, &exports_type) != napi_ok ||
-      (exports_type != napi_object && exports_type != napi_function)) {
-    return namespace_obj;
-  }
-
-  napi_value keys = nullptr;
-  if (napi_get_property_names(env, exports_value, &keys) != napi_ok || keys == nullptr) return namespace_obj;
-  uint32_t key_count = 0;
-  if (napi_get_array_length(env, keys, &key_count) != napi_ok) return namespace_obj;
-  for (uint32_t i = 0; i < key_count; ++i) {
-    napi_value key = nullptr;
-    if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) continue;
-    const std::string key_utf8 = ValueToUtf8(env, key);
-    if (key_utf8.empty() || key_utf8 == "default") continue;
-    napi_value value = nullptr;
-    if (napi_get_property(env, exports_value, key, &value) != napi_ok || value == nullptr) continue;
-    napi_set_property(env, namespace_obj, key, value);
-  }
-  return namespace_obj;
-}
-
-napi_value CreateRequireForUrl(napi_env env, napi_value url_value) {
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return nullptr;
-
-  napi_value require_fn = UbiGetRequireFunction(env);
-  if (!IsFunctionValue(env, require_fn) &&
-      (napi_get_named_property(env, global, "require", &require_fn) != napi_ok || !IsFunctionValue(env, require_fn))) {
-    return nullptr;
-  }
-
-  napi_value module_name = nullptr;
-  if (napi_create_string_utf8(env, "module", NAPI_AUTO_LENGTH, &module_name) != napi_ok || module_name == nullptr) {
-    return require_fn;
-  }
-  napi_value module_exports = nullptr;
-  if (napi_call_function(env, global, require_fn, 1, &module_name, &module_exports) != napi_ok ||
-      module_exports == nullptr) {
-    bool pending = false;
-    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-      napi_value ignored = nullptr;
-      napi_get_and_clear_last_exception(env, &ignored);
-    }
-    return require_fn;
-  }
-
-  napi_value create_require = nullptr;
-  if (napi_get_named_property(env, module_exports, "createRequire", &create_require) != napi_ok ||
-      !IsFunctionValue(env, create_require)) {
-    return require_fn;
-  }
-
-  napi_value created = nullptr;
-  napi_value argv[1] = {url_value};
-  if (napi_call_function(env, module_exports, create_require, 1, argv, &created) != napi_ok ||
-      !IsFunctionValue(env, created)) {
-    bool pending = false;
-    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-      napi_value ignored = nullptr;
-      napi_get_and_clear_last_exception(env, &ignored);
-    }
-    return require_fn;
-  }
-  return created;
-}
-
-bool EvaluateSimpleEsmFallback(napi_env env,
-                               napi_value require_fn,
-                               const std::string& module_url,
-                               const std::string& source_text,
-                               size_t depth,
-                               napi_value* namespace_out);
-
-bool RunSideEffectImport(napi_env env, napi_value require_fn, const std::string& specifier, size_t depth) {
-  napi_value specifier_value = nullptr;
-  if (napi_create_string_utf8(env, specifier.c_str(), NAPI_AUTO_LENGTH, &specifier_value) != napi_ok ||
-      specifier_value == nullptr) {
+  if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_value) != napi_ok || code_value == nullptr) {
     return false;
   }
-
-  napi_value ignored_result = nullptr;
-  if (napi_call_function(env, require_fn, require_fn, 1, &specifier_value, &ignored_result) == napi_ok) {
-    return true;
-  }
-
-  bool has_pending = false;
-  if (napi_is_exception_pending(env, &has_pending) != napi_ok || !has_pending) return false;
-
-  napi_value err = nullptr;
-  if (napi_get_and_clear_last_exception(env, &err) != napi_ok || err == nullptr) return false;
-  if (!IsErrorCode(env, err, "ERR_REQUIRE_ESM")) {
-    napi_throw(env, err);
+  if (napi_set_named_property(env, error_value, "code", code_value) != napi_ok) {
     return false;
   }
-
-  napi_value resolve_fn = nullptr;
-  if (napi_get_named_property(env, require_fn, "resolve", &resolve_fn) != napi_ok || !IsFunctionValue(env, resolve_fn)) {
-    napi_throw(env, err);
-    return false;
-  }
-
-  napi_value resolved_value = nullptr;
-  if (napi_call_function(env, require_fn, resolve_fn, 1, &specifier_value, &resolved_value) != napi_ok ||
-      resolved_value == nullptr) {
-    napi_throw(env, err);
-    return false;
-  }
-  const std::string resolved_path = ValueToUtf8(env, resolved_value);
-  if (resolved_path.empty()) {
-    napi_throw(env, err);
-    return false;
-  }
-
-  std::string nested_source;
-  if (!ReadTextFile(resolved_path, &nested_source)) {
-    napi_throw(env, err);
-    return false;
-  }
-
-  napi_value resolved_url_value = nullptr;
-  if (napi_create_string_utf8(env, resolved_path.c_str(), NAPI_AUTO_LENGTH, &resolved_url_value) != napi_ok ||
-      resolved_url_value == nullptr) {
-    napi_throw(env, err);
-    return false;
-  }
-  napi_value nested_require = CreateRequireForUrl(env, resolved_url_value);
-  if (!IsFunctionValue(env, nested_require)) {
-    napi_throw(env, err);
-    return false;
-  }
-
-  napi_value nested_namespace = nullptr;
-  if (!EvaluateSimpleEsmFallback(
-          env, nested_require, resolved_path, nested_source, depth + 1, &nested_namespace)) {
-    return false;
-  }
-  return true;
-}
-
-bool EvaluateSimpleEsmFallback(napi_env env,
-                               napi_value require_fn,
-                               const std::string& module_url,
-                               const std::string& source_text,
-                               size_t depth,
-                               napi_value* namespace_out) {
-  if (namespace_out != nullptr) *namespace_out = nullptr;
-  constexpr size_t kMaxFallbackDepth = 64;
-  if (depth > kMaxFallbackDepth) {
-    napi_throw_error(env, nullptr, "ModuleWrap ESM fallback exceeded recursion depth");
-    return false;
-  }
-
-  std::vector<std::string> side_effect_imports;
-  std::string transformed_body;
-  bool unsupported = false;
-
-  std::stringstream input(source_text);
-  std::string line;
-  while (std::getline(input, line)) {
-    const std::string trimmed = TrimAscii(line);
-    if (trimmed.rfind("import ", 0) == 0) {
-      std::string side_effect_specifier;
-      if (ParseImportSideEffect(trimmed, &side_effect_specifier)) {
-        side_effect_imports.push_back(side_effect_specifier);
-        continue;
-      }
-
-      std::string destructuring;
-      std::string specifier;
-      if (ParseImportNamed(trimmed, &destructuring, &specifier)) {
-        transformed_body += "const { " + destructuring + " } = require(";
-        transformed_body += "'";
-        transformed_body += specifier;
-        transformed_body += "'";
-        transformed_body += ");\n";
-        continue;
-      }
-
-      unsupported = true;
-      break;
-    }
-
-    if (trimmed.rfind("export ", 0) == 0) {
-      unsupported = true;
-      break;
-    }
-
-    transformed_body += line;
-    transformed_body.push_back('\n');
-  }
-
-  if (unsupported) {
-    napi_value empty_exports = nullptr;
-    napi_create_object(env, &empty_exports);
-    napi_value ns = BuildNamespaceFromExports(env, empty_exports != nullptr ? empty_exports : Undefined(env));
-    if (namespace_out != nullptr) *namespace_out = ns;
-    return true;
-  }
-
-  for (const auto& side_effect_specifier : side_effect_imports) {
-    if (!RunSideEffectImport(env, require_fn, side_effect_specifier, depth)) return false;
-  }
-
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return false;
-  napi_value function_ctor = nullptr;
-  if (napi_get_named_property(env, global, "Function", &function_ctor) != napi_ok ||
-      !IsFunctionValue(env, function_ctor)) {
-    return false;
-  }
-
-  napi_value ctor_argv[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
-  napi_create_string_utf8(env, "exports", NAPI_AUTO_LENGTH, &ctor_argv[0]);
-  napi_create_string_utf8(env, "require", NAPI_AUTO_LENGTH, &ctor_argv[1]);
-  napi_create_string_utf8(env, "module", NAPI_AUTO_LENGTH, &ctor_argv[2]);
-  napi_create_string_utf8(env, "__filename", NAPI_AUTO_LENGTH, &ctor_argv[3]);
-  napi_create_string_utf8(env, "__dirname", NAPI_AUTO_LENGTH, &ctor_argv[4]);
-  std::string wrapped_body = "'use strict';\n" + transformed_body;
-  if (!module_url.empty()) {
-    wrapped_body += "\n//# sourceURL=" + module_url + "\n";
-  }
-  napi_create_string_utf8(env, wrapped_body.c_str(), wrapped_body.size(), &ctor_argv[5]);
-
-  napi_value compiled_fn = nullptr;
-  if (napi_new_instance(env, function_ctor, 6, ctor_argv, &compiled_fn) != napi_ok || compiled_fn == nullptr) {
-    return false;
-  }
-
-  napi_value module_obj = nullptr;
-  napi_value exports_obj = nullptr;
-  if (napi_create_object(env, &module_obj) != napi_ok || module_obj == nullptr ||
-      napi_create_object(env, &exports_obj) != napi_ok || exports_obj == nullptr) {
-    return false;
-  }
-  napi_set_named_property(env, module_obj, "exports", exports_obj);
-
-  std::string dirname = ".";
-  if (!module_url.empty()) {
-    std::error_code ec;
-    std::filesystem::path p(module_url);
-    auto parent = p.parent_path();
-    if (!parent.empty()) dirname = parent.string();
-    if (dirname.empty()) dirname = ".";
-  }
-
-  napi_value filename_value = nullptr;
-  napi_value dirname_value = nullptr;
-  napi_create_string_utf8(
-      env, module_url.empty() ? "<module>" : module_url.c_str(), NAPI_AUTO_LENGTH, &filename_value);
-  napi_create_string_utf8(env, dirname.c_str(), NAPI_AUTO_LENGTH, &dirname_value);
-
-  napi_value run_argv[5] = {exports_obj, require_fn, module_obj, filename_value, dirname_value};
-  napi_value ignored_result = nullptr;
-  if (napi_call_function(env, global, compiled_fn, 5, run_argv, &ignored_result) != napi_ok) {
-    return false;
-  }
-
-  napi_value final_exports = nullptr;
-  if (napi_get_named_property(env, module_obj, "exports", &final_exports) != napi_ok || final_exports == nullptr) {
-    final_exports = exports_obj;
-  }
-
-  napi_value ns = BuildNamespaceFromExports(env, final_exports);
-  if (namespace_out != nullptr) *namespace_out = ns;
-  return true;
-}
-
-napi_value EvaluateSourceTextModuleFallback(napi_env env, ModuleWrapInstance* instance) {
-  if (instance == nullptr || instance->source_text_ref == nullptr) return nullptr;
-  napi_value source_value = GetRefValue(env, instance->source_text_ref);
-  napi_value url_value = GetRefValue(env, instance->url_ref);
-  if (source_value == nullptr) return nullptr;
-
-  const std::string source_text = ValueToUtf8(env, source_value);
-  const std::string module_url = ValueToUtf8(env, url_value);
-  napi_value require_fn = CreateRequireForUrl(env, url_value != nullptr ? url_value : source_value);
-  if (!IsFunctionValue(env, require_fn)) return nullptr;
-
-  napi_value namespace_obj = nullptr;
-  if (!EvaluateSimpleEsmFallback(env, require_fn, module_url, source_text, 0, &namespace_obj)) {
-    return nullptr;
-  }
-
-  if (namespace_obj == nullptr) {
-    napi_value empty = nullptr;
-    napi_create_object(env, &empty);
-    namespace_obj = BuildNamespaceFromExports(env, empty != nullptr ? empty : Undefined(env));
-  }
-  return namespace_obj;
-}
-
-napi_value CreateCjsNamespaceFromRequire(napi_env env, const std::string& specifier) {
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return nullptr;
-
-  napi_value require_fn = UbiGetRequireFunction(env);
-  if (!IsFunctionValue(env, require_fn) &&
-      (napi_get_named_property(env, global, "require", &require_fn) != napi_ok || !IsFunctionValue(env, require_fn))) {
-    return nullptr;
-  }
-
-  napi_value specifier_value = nullptr;
-  if (napi_create_string_utf8(env, specifier.c_str(), NAPI_AUTO_LENGTH, &specifier_value) != napi_ok ||
-      specifier_value == nullptr) {
-    return nullptr;
-  }
-
-  napi_value exports_value = nullptr;
-  if (napi_call_function(env, global, require_fn, 1, &specifier_value, &exports_value) != napi_ok ||
-      exports_value == nullptr) {
-    return nullptr;
-  }
-
-  napi_value namespace_obj = nullptr;
-  if (napi_create_object(env, &namespace_obj) != napi_ok || namespace_obj == nullptr) {
-    return nullptr;
-  }
-  napi_set_named_property(env, namespace_obj, "default", exports_value);
-
-  napi_valuetype exports_type = napi_undefined;
-  if (napi_typeof(env, exports_value, &exports_type) != napi_ok ||
-      (exports_type != napi_object && exports_type != napi_function)) {
-    return namespace_obj;
-  }
-
-  napi_value keys = nullptr;
-  if (napi_get_property_names(env, exports_value, &keys) != napi_ok || keys == nullptr) {
-    return namespace_obj;
-  }
-  uint32_t key_count = 0;
-  if (napi_get_array_length(env, keys, &key_count) != napi_ok) {
-    return namespace_obj;
-  }
-  for (uint32_t i = 0; i < key_count; ++i) {
-    napi_value key = nullptr;
-    if (napi_get_element(env, keys, i, &key) != napi_ok || key == nullptr) continue;
-    const std::string key_utf8 = ValueToUtf8(env, key);
-    if (key_utf8.empty() || key_utf8 == "default") continue;
-    napi_value value = nullptr;
-    if (napi_get_property(env, exports_value, key, &value) != napi_ok || value == nullptr) continue;
-    napi_set_property(env, namespace_obj, key, value);
-  }
-  return namespace_obj;
-}
-
-napi_value GetVmDynamicImportDefaultInternalSymbol(napi_env env) {
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return Undefined(env);
-
-  napi_value internal_binding = UbiGetInternalBinding(env);
-  if (!IsFunctionValue(env, internal_binding) &&
-      (napi_get_named_property(env, global, "internalBinding", &internal_binding) != napi_ok ||
-       !IsFunctionValue(env, internal_binding))) {
-    return Undefined(env);
-  }
-
-  napi_value symbols_name = nullptr;
-  if (napi_create_string_utf8(env, "symbols", NAPI_AUTO_LENGTH, &symbols_name) != napi_ok ||
-      symbols_name == nullptr) {
-    return Undefined(env);
-  }
-
-  napi_value symbols_binding = nullptr;
-  if (napi_call_function(env, global, internal_binding, 1, &symbols_name, &symbols_binding) != napi_ok ||
-      symbols_binding == nullptr) {
-    return Undefined(env);
-  }
-
-  napi_value symbol_value = nullptr;
-  if (napi_get_named_property(
-          env, symbols_binding, "vm_dynamic_import_default_internal", &symbol_value) != napi_ok ||
-      symbol_value == nullptr) {
-    return Undefined(env);
-  }
-  return symbol_value;
+  return napi_throw(env, error_value) == napi_ok;
 }
 
 napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
@@ -711,11 +235,6 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
   }
 
   auto* instance = new ModuleWrapInstance();
-
-  napi_value namespace_obj = nullptr;
-  if (napi_create_object(env, &namespace_obj) == napi_ok && namespace_obj != nullptr) {
-    napi_create_reference(env, namespace_obj, 1, &instance->namespace_ref);
-  }
 
   if (argc >= 1 && argv[0] != nullptr) {
     napi_valuetype url_type = napi_undefined;
@@ -730,34 +249,22 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
   if (has_exports_array && napi_is_array(env, argv[2], &is_array) == napi_ok && is_array) {
     SetNamedBool(env, this_arg, "synthetic", true);
     if (argc >= 4 && argv[3] != nullptr) {
-      napi_valuetype t = napi_undefined;
-      if (napi_typeof(env, argv[3], &t) == napi_ok && t == napi_function) {
-        napi_create_reference(env, argv[3], 1, &instance->synthetic_eval_steps_ref);
+      if (unofficial_napi_module_wrap_create_synthetic(env,
+                                                       this_arg,
+                                                       argc >= 1 ? argv[0] : nullptr,
+                                                       argc >= 2 ? argv[1] : nullptr,
+                                                       argv[2],
+                                                       argv[3],
+                                                       &instance->module_handle) != napi_ok ||
+          instance->module_handle == nullptr) {
+        delete instance;
+        return nullptr;
       }
-    }
-    if (argc >= 4 && argv[3] != nullptr) {
-      (void)unofficial_napi_module_wrap_create_synthetic(env,
-                                                         this_arg,
-                                                         argc >= 1 ? argv[0] : nullptr,
-                                                         argc >= 2 ? argv[1] : nullptr,
-                                                         argv[2],
-                                                         argv[3],
-                                                         &instance->module_handle);
-    }
-    uint32_t exports_len = 0;
-    napi_get_array_length(env, argv[2], &exports_len);
-    for (uint32_t i = 0; i < exports_len; ++i) {
-      napi_value export_name = nullptr;
-      if (napi_get_element(env, argv[2], i, &export_name) != napi_ok || export_name == nullptr) continue;
-      napi_value undefined = Undefined(env);
-      napi_set_property(env, namespace_obj, export_name, undefined);
     }
   } else if (has_exports_array) {
     SetNamedBool(env, this_arg, "synthetic", false);
     napi_valuetype source_type = napi_undefined;
     if (napi_typeof(env, argv[2], &source_type) == napi_ok && source_type == napi_string) {
-      instance->is_source_text_module = true;
-      napi_create_reference(env, argv[2], 1, &instance->source_text_ref);
       int32_t line_offset = 0;
       int32_t column_offset = 0;
       if (argc >= 4 && argv[3] != nullptr) (void)napi_get_value_int32(env, argv[3], &line_offset);
@@ -806,33 +313,28 @@ napi_value ModuleWrapLink(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
   if (instance == nullptr) return Undefined(env);
+  if (instance->module_handle == nullptr) return Undefined(env);
 
-  if (instance->module_handle != nullptr) {
-    bool is_array = false;
-    if (argc < 1 || argv[0] == nullptr || napi_is_array(env, argv[0], &is_array) != napi_ok || !is_array) {
-      napi_throw_error(env, "ERR_INVALID_ARG_TYPE", "link() expects an array");
-      return nullptr;
-    }
-    uint32_t length = 0;
-    napi_get_array_length(env, argv[0], &length);
-    std::vector<void*> linked_handles(length, nullptr);
-    for (uint32_t i = 0; i < length; ++i) {
-      napi_value module_value = nullptr;
-      if (napi_get_element(env, argv[0], i, &module_value) != napi_ok || module_value == nullptr) {
-        napi_throw_error(env, "ERR_VM_MODULE_LINK_FAILURE", "linked module missing");
-        return nullptr;
-      }
-      ModuleWrapInstance* linked = UnwrapModuleWrap(env, module_value);
-      linked_handles[i] = linked != nullptr ? linked->module_handle : nullptr;
-    }
-    if (unofficial_napi_module_wrap_link(env, instance->module_handle, length, linked_handles.data()) != napi_ok) {
-      return nullptr;
-    }
-    return Undefined(env);
+  bool is_array = false;
+  if (argc < 1 || argv[0] == nullptr || napi_is_array(env, argv[0], &is_array) != napi_ok || !is_array) {
+    napi_throw_error(env, "ERR_INVALID_ARG_TYPE", "link() expects an array");
+    return nullptr;
   }
-
-  if (argc >= 1) SetRef(env, &instance->linker_ref, argv[0], napi_function);
-  instance->status = kInstantiating;
+  uint32_t length = 0;
+  napi_get_array_length(env, argv[0], &length);
+  std::vector<void*> linked_handles(length, nullptr);
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_value module_value = nullptr;
+    if (napi_get_element(env, argv[0], i, &module_value) != napi_ok || module_value == nullptr) {
+      napi_throw_error(env, "ERR_VM_MODULE_LINK_FAILURE", "linked module missing");
+      return nullptr;
+    }
+    ModuleWrapInstance* linked = UnwrapModuleWrap(env, module_value);
+    linked_handles[i] = linked != nullptr ? linked->module_handle : nullptr;
+  }
+  if (unofficial_napi_module_wrap_link(env, instance->module_handle, length, linked_handles.data()) != napi_ok) {
+    return nullptr;
+  }
   return Undefined(env);
 }
 
@@ -859,16 +361,10 @@ napi_value ModuleWrapInstantiate(napi_env env, napi_callback_info info) {
   size_t argc = 0;
   napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
-  if (instance != nullptr && instance->module_handle != nullptr) {
-    if (unofficial_napi_module_wrap_instantiate(env, instance->module_handle) != napi_ok) {
-      return nullptr;
-    }
-    int32_t status = kInstantiated;
-    (void)unofficial_napi_module_wrap_get_status(env, instance->module_handle, &status);
-    instance->status = status;
-    return Undefined(env);
+  if (instance == nullptr || instance->module_handle == nullptr) return Undefined(env);
+  if (unofficial_napi_module_wrap_instantiate(env, instance->module_handle) != napi_ok) {
+    return nullptr;
   }
-  if (instance != nullptr && instance->status <= kInstantiating) instance->status = kInstantiated;
   return Undefined(env);
 }
 
@@ -882,63 +378,13 @@ napi_value ModuleWrapEvaluateSync(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
   if (instance == nullptr) return Undefined(env);
+  if (instance->module_handle == nullptr) return Undefined(env);
 
-  if (instance->module_handle != nullptr) {
-    napi_value out = nullptr;
-    if (unofficial_napi_module_wrap_evaluate_sync(env, instance->module_handle, &out) != napi_ok) {
-      return nullptr;
-    }
-    int32_t status = kEvaluated;
-    (void)unofficial_napi_module_wrap_get_status(env, instance->module_handle, &status);
-    instance->status = status;
-    return out != nullptr ? out : Undefined(env);
+  napi_value out = nullptr;
+  if (unofficial_napi_module_wrap_evaluate_sync(env, instance->module_handle, &out) != napi_ok) {
+    return nullptr;
   }
-
-  if (instance->is_source_text_module) {
-    instance->status = kEvaluating;
-    napi_value ns = EvaluateSourceTextModuleFallback(env, instance);
-    if (ns == nullptr) {
-      bool has_pending = false;
-      if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
-        napi_value err = nullptr;
-        if (napi_get_and_clear_last_exception(env, &err) == napi_ok && err != nullptr) {
-          ResetRef(env, &instance->error_ref);
-          napi_create_reference(env, err, 1, &instance->error_ref);
-          instance->status = kErrored;
-          napi_throw(env, err);
-          return nullptr;
-        }
-      }
-      instance->status = kErrored;
-      return nullptr;
-    }
-    ResetRef(env, &instance->namespace_ref);
-    napi_create_reference(env, ns, 1, &instance->namespace_ref);
-    instance->status = kEvaluated;
-    return ns;
-  }
-
-  instance->status = kEvaluating;
-  if (instance->synthetic_eval_steps_ref != nullptr) {
-    napi_value fn = GetRefValue(env, instance->synthetic_eval_steps_ref);
-    if (fn != nullptr) {
-      napi_value ignored = nullptr;
-      if (napi_call_function(env, this_arg, fn, 0, nullptr, &ignored) != napi_ok) {
-        bool pending = false;
-        if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-          napi_value err = nullptr;
-          napi_get_and_clear_last_exception(env, &err);
-          ResetRef(env, &instance->error_ref);
-          if (err != nullptr) napi_create_reference(env, err, 1, &instance->error_ref);
-          instance->status = kErrored;
-          napi_throw(env, err);
-          return nullptr;
-        }
-      }
-    }
-  }
-  instance->status = kEvaluated;
-  return Undefined(env);
+  return out != nullptr ? out : Undefined(env);
 }
 
 napi_value ModuleWrapEvaluate(napi_env env, napi_callback_info info) {
@@ -948,84 +394,17 @@ napi_value ModuleWrapEvaluate(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
   if (instance == nullptr) return Undefined(env);
+  if (instance->module_handle == nullptr) return Undefined(env);
 
-  if (instance->module_handle != nullptr) {
-    int64_t timeout = -1;
-    bool break_on_sigint = false;
-    if (argc >= 1 && argv[0] != nullptr) (void)napi_get_value_int64(env, argv[0], &timeout);
-    if (argc >= 2 && argv[1] != nullptr) (void)napi_get_value_bool(env, argv[1], &break_on_sigint);
-    napi_value out = nullptr;
-    if (unofficial_napi_module_wrap_evaluate(env, instance->module_handle, timeout, break_on_sigint, &out) != napi_ok) {
-      return nullptr;
-    }
-    int32_t status = kEvaluated;
-    (void)unofficial_napi_module_wrap_get_status(env, instance->module_handle, &status);
-    instance->status = status;
-    return out != nullptr ? out : Undefined(env);
+  int64_t timeout = -1;
+  bool break_on_sigint = false;
+  if (argc >= 1 && argv[0] != nullptr) (void)napi_get_value_int64(env, argv[0], &timeout);
+  if (argc >= 2 && argv[1] != nullptr) (void)napi_get_value_bool(env, argv[1], &break_on_sigint);
+  napi_value out = nullptr;
+  if (unofficial_napi_module_wrap_evaluate(env, instance->module_handle, timeout, break_on_sigint, &out) != napi_ok) {
+    return nullptr;
   }
-
-  if (instance->is_source_text_module) {
-    napi_deferred deferred = nullptr;
-    napi_value promise = nullptr;
-    if (napi_create_promise(env, &deferred, &promise) != napi_ok || promise == nullptr) return Undefined(env);
-
-    instance->status = kEvaluating;
-    napi_value ns = EvaluateSourceTextModuleFallback(env, instance);
-    if (ns == nullptr) {
-      bool has_pending = false;
-      napi_value err = nullptr;
-      if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
-        napi_get_and_clear_last_exception(env, &err);
-      }
-      if (err == nullptr) err = Undefined(env);
-      ResetRef(env, &instance->error_ref);
-      if (err != nullptr && !IsUndefined(env, err)) {
-        napi_create_reference(env, err, 1, &instance->error_ref);
-      }
-      instance->status = kErrored;
-      napi_reject_deferred(env, deferred, err);
-      return promise;
-    }
-
-    ResetRef(env, &instance->namespace_ref);
-    napi_create_reference(env, ns, 1, &instance->namespace_ref);
-    instance->status = kEvaluated;
-    napi_resolve_deferred(env, deferred, Undefined(env));
-    return promise;
-  }
-
-  napi_deferred deferred = nullptr;
-  napi_value promise = nullptr;
-  if (napi_create_promise(env, &deferred, &promise) != napi_ok || promise == nullptr) return Undefined(env);
-
-  instance->status = kEvaluating;
-  bool failed = false;
-  napi_value err = nullptr;
-  if (instance->synthetic_eval_steps_ref != nullptr) {
-    napi_value fn = GetRefValue(env, instance->synthetic_eval_steps_ref);
-    if (fn != nullptr) {
-      napi_value ignored = nullptr;
-      if (napi_call_function(env, this_arg, fn, 0, nullptr, &ignored) != napi_ok) {
-        bool pending = false;
-        if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-          napi_get_and_clear_last_exception(env, &err);
-          failed = true;
-        }
-      }
-    }
-  }
-
-  if (failed) {
-    ResetRef(env, &instance->error_ref);
-    if (err != nullptr) napi_create_reference(env, err, 1, &instance->error_ref);
-    instance->status = kErrored;
-    napi_reject_deferred(env, deferred, err != nullptr ? err : Undefined(env));
-    return promise;
-  }
-
-  instance->status = kEvaluated;
-  napi_resolve_deferred(env, deferred, Undefined(env));
-  return promise;
+  return out != nullptr ? out : Undefined(env);
 }
 
 napi_value ModuleWrapSetExport(napi_env env, napi_callback_info info) {
@@ -1035,17 +414,11 @@ napi_value ModuleWrapSetExport(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
   if (instance == nullptr || argc < 1 || argv[0] == nullptr) return Undefined(env);
-  if (instance->module_handle != nullptr) {
-    if (unofficial_napi_module_wrap_set_export(
-            env, instance->module_handle, argv[0], argc >= 2 ? argv[1] : Undefined(env)) != napi_ok) {
-      return nullptr;
-    }
-    return Undefined(env);
+  if (instance->module_handle == nullptr) return Undefined(env);
+  if (unofficial_napi_module_wrap_set_export(
+          env, instance->module_handle, argv[0], argc >= 2 ? argv[1] : Undefined(env)) != napi_ok) {
+    return nullptr;
   }
-  napi_value namespace_obj = GetRefValue(env, instance->namespace_ref);
-  if (namespace_obj == nullptr) return Undefined(env);
-  napi_value value = argc >= 2 && argv[1] != nullptr ? argv[1] : Undefined(env);
-  napi_set_property(env, namespace_obj, argv[0], value);
   return Undefined(env);
 }
 
@@ -1055,16 +428,11 @@ napi_value ModuleWrapSetModuleSourceObject(napi_env env, napi_callback_info info
   napi_value argv[1] = {nullptr};
   napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
-  if (instance == nullptr) return Undefined(env);
-  if (instance->module_handle != nullptr) {
-    if (unofficial_napi_module_wrap_set_module_source_object(
-            env, instance->module_handle, argc >= 1 ? argv[0] : nullptr) != napi_ok) {
-      return nullptr;
-    }
+  if (instance == nullptr || instance->module_handle == nullptr) return Undefined(env);
+  if (unofficial_napi_module_wrap_set_module_source_object(
+          env, instance->module_handle, argc >= 1 ? argv[0] : nullptr) != napi_ok) {
+    return nullptr;
   }
-  ResetRef(env, &instance->source_object_ref);
-  if (argc >= 1 && argv[0] != nullptr) napi_create_reference(env, argv[0], 1, &instance->source_object_ref);
-  instance->phase = kSourcePhase;
   return Undefined(env);
 }
 
@@ -1073,16 +441,14 @@ napi_value ModuleWrapGetModuleSourceObject(napi_env env, napi_callback_info info
   size_t argc = 0;
   napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
-  if (instance == nullptr) return Undefined(env);
-  if (instance->module_handle != nullptr) {
-    napi_value out = nullptr;
-    if (unofficial_napi_module_wrap_get_module_source_object(env, instance->module_handle, &out) == napi_ok &&
-        out != nullptr) {
-      return out;
-    }
+  if (instance == nullptr || instance->module_handle == nullptr) return Undefined(env);
+  napi_value out = nullptr;
+  if (unofficial_napi_module_wrap_get_module_source_object(env, instance->module_handle, &out) == napi_ok &&
+      out != nullptr) {
+    return out;
   }
-  napi_value out = GetRefValue(env, instance->source_object_ref);
-  return out != nullptr ? out : Undefined(env);
+  ThrowCodeError(env, "ERR_SOURCE_PHASE_NOT_DEFINED", "Source phase object is not defined");
+  return nullptr;
 }
 
 napi_value ModuleWrapCreateCachedData(napi_env env, napi_callback_info info) {
@@ -1122,8 +488,7 @@ napi_value ModuleWrapGetNamespace(napi_env env, napi_callback_info info) {
       return out;
     }
   }
-  napi_value out = GetRefValue(env, instance->namespace_ref);
-  return out != nullptr ? out : Undefined(env);
+  return Undefined(env);
 }
 
 napi_value ModuleWrapGetNamespaceSync(napi_env env, napi_callback_info info) {
@@ -1135,15 +500,12 @@ napi_value ModuleWrapGetStatus(napi_env env, napi_callback_info info) {
   size_t argc = 0;
   napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   ModuleWrapInstance* instance = UnwrapModuleWrap(env, this_arg);
-  if (instance == nullptr) return Undefined(env);
-  if (instance->module_handle != nullptr) {
-    int32_t status = kUninstantiated;
-    if (unofficial_napi_module_wrap_get_status(env, instance->module_handle, &status) == napi_ok) {
-      instance->status = status;
-    }
+  int32_t status = kUninstantiated;
+  if (instance != nullptr && instance->module_handle != nullptr) {
+    (void)unofficial_napi_module_wrap_get_status(env, instance->module_handle, &status);
   }
   napi_value out = nullptr;
-  napi_create_int32(env, instance->status, &out);
+  napi_create_int32(env, status, &out);
   return out != nullptr ? out : Undefined(env);
 }
 
@@ -1159,8 +521,7 @@ napi_value ModuleWrapGetError(napi_env env, napi_callback_info info) {
       return out;
     }
   }
-  napi_value out = GetRefValue(env, instance->error_ref);
-  return out != nullptr ? out : Undefined(env);
+  return Undefined(env);
 }
 
 napi_value ModuleWrapHasTopLevelAwait(napi_env env, napi_callback_info info) {
@@ -1241,7 +602,24 @@ napi_value ModuleWrapCreateRequiredModuleFacade(napi_env env, napi_callback_info
   return out != nullptr ? out : Undefined(env);
 }
 
-napi_value ModuleWrapThrowIfPromiseRejected(napi_env env, napi_callback_info /*info*/) {
+napi_value ModuleWrapThrowIfPromiseRejected(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1 || argv[0] == nullptr) {
+    return Undefined(env);
+  }
+
+  int32_t state = 0;
+  napi_value result = nullptr;
+  bool has_result = false;
+  if (unofficial_napi_get_promise_details(env, argv[0], &state, &result, &has_result) != napi_ok) {
+    return nullptr;
+  }
+  // Mirror Node's native helper: only rejected promises are rethrown.
+  if (state == 2 && has_result && result != nullptr) {
+    napi_throw(env, result);
+    return nullptr;
+  }
   return Undefined(env);
 }
 

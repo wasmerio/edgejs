@@ -228,6 +228,7 @@ bool IsBooleanOptionForNegation(const std::string& option) {
       "--experimental-quic",
       "--experimental-require-module",
       "--experimental-report",
+      "--experimental-strip-types",
       "--experimental-sqlite",
       "--experimental-test-coverage",
       "--experimental-test-module-mocks",
@@ -388,6 +389,7 @@ bool IsRecognizedCliOptionToken(const std::string& token) {
            key == "--input-type";
   }
   if (OptionConsumesNextToken(token)) return true;
+  if (token == "--experimental-strip-types") return true;
   if (IsBooleanOptionForNegation(token)) return true;
   if (token.rfind("--no-", 0) == 0) return true;
   if (token.rfind("--env-file=", 0) == 0 ||

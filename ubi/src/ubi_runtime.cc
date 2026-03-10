@@ -77,6 +77,7 @@ const auto g_process_start_time = std::chrono::steady_clock::now();
 std::once_flag g_process_stdio_init_once;
 constexpr int kExitCodeInvalidFatalExceptionMonkeyPatching = 6;
 constexpr int kExitCodeExceptionInFatalExceptionHandler = 7;
+constexpr int kExitCodeUnsettledTopLevelAwait = 13;
 
 struct DomainCallbackCache {
   napi_ref helper_ref = nullptr;
@@ -1058,6 +1059,47 @@ napi_value GetEntryPointPromiseFromUtilSymbol(napi_env env, napi_value global) {
   return promise;
 }
 
+napi_value GetEntryPointModuleFromUtilSymbol(napi_env env, napi_value global) {
+  if (env == nullptr) return nullptr;
+  if (global == nullptr && (napi_get_global(env, &global) != napi_ok || global == nullptr)) {
+    return nullptr;
+  }
+
+  napi_value internal_binding = GetRuntimeInternalBinding(env, global);
+  if (!IsFunctionValue(env, internal_binding)) return nullptr;
+
+  napi_value util_name = nullptr;
+  if (napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &util_name) != napi_ok || util_name == nullptr) {
+    return nullptr;
+  }
+  napi_value util_binding = nullptr;
+  napi_value argv[1] = {util_name};
+  if (napi_call_function(env, global, internal_binding, 1, argv, &util_binding) != napi_ok || util_binding == nullptr) {
+    return nullptr;
+  }
+
+  napi_value private_symbols = nullptr;
+  if (napi_get_named_property(env, util_binding, "privateSymbols", &private_symbols) != napi_ok ||
+      private_symbols == nullptr) {
+    return nullptr;
+  }
+
+  napi_value entry_point_symbol = nullptr;
+  if (napi_get_named_property(env,
+                              private_symbols,
+                              "entry_point_module_private_symbol",
+                              &entry_point_symbol) != napi_ok ||
+      entry_point_symbol == nullptr) {
+    return nullptr;
+  }
+
+  napi_value module = nullptr;
+  if (napi_get_property(env, global, entry_point_symbol, &module) != napi_ok || module == nullptr) {
+    return nullptr;
+  }
+  return module;
+}
+
 napi_value GetEntryPointPromiseBySymbolScan(napi_env env, napi_value global) {
   if (env == nullptr) return nullptr;
   if (global == nullptr && (napi_get_global(env, &global) != napi_ok || global == nullptr)) {
@@ -1120,11 +1162,65 @@ bool HasPendingEntryPointPromise(napi_env env) {
   return IsPromisePending(env, promise);
 }
 
+bool AreProcessWarningsEnabled() {
+  const char* value = std::getenv("NODE_NO_WARNINGS");
+  if (value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0) {
+    return false;
+  }
+
+  const std::vector<std::string>& exec_argv =
+      !g_ubi_effective_exec_argv.empty() ? g_ubi_effective_exec_argv : g_ubi_cli_exec_argv;
+  bool warnings = true;
+  for (const auto& token : exec_argv) {
+    if (token == "--no-warnings") {
+      warnings = false;
+      continue;
+    }
+    if (token == "--warnings") {
+      warnings = true;
+      continue;
+    }
+    if (token == "--warnings=false" || token == "--warnings=0") {
+      warnings = false;
+      continue;
+    }
+    if (token == "--warnings=true" || token == "--warnings=1") {
+      warnings = true;
+      continue;
+    }
+  }
+  return warnings;
+}
+
+bool ApplyUnsettledTopLevelAwaitExitCodeIfNeeded(napi_env env) {
+  if (env == nullptr) return false;
+
+  bool has_exit_code = false;
+  (void)GetProcessExitCode(env, &has_exit_code);
+  if (has_exit_code) return false;
+
+  napi_value promise = GetEntryPointPromiseValue(env);
+  if (!IsPromisePending(env, promise)) return false;
+
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
+  napi_value module = GetEntryPointModuleFromUtilSymbol(env, global);
+  if (module == nullptr) return false;
+
+  bool settled = true;
+  if (unofficial_napi_module_wrap_check_unsettled_top_level_await(
+          env, module, AreProcessWarningsEnabled(), &settled) != napi_ok) {
+    return false;
+  }
+  if (settled) return false;
+
+  return SetProcessExitCodeIfNeeded(env, kExitCodeUnsettledTopLevelAwait, true);
+}
+
 int WaitForTopLevelPromiseToSettle(napi_env env, napi_value value, std::string* error_out) {
   if (!IsPromisePending(env, value)) return -1;
 
   uv_loop_t* loop = UbiGetEnvLoop(env);
-  const auto start = std::chrono::steady_clock::now();
   while (IsPromisePending(env, value)) {
     if (loop != nullptr) {
       (void)uv_run(loop, UV_RUN_NOWAIT);
@@ -1134,15 +1230,6 @@ int WaitForTopLevelPromiseToSettle(napi_env env, napi_value value, std::string* 
     const int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
     if (async_status >= 0) {
       return async_status;
-    }
-
-    const auto elapsed_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-    if (elapsed_ms > 10000) {
-      if (error_out != nullptr) {
-        *error_out = "Top-level ESM import did not settle";
-      }
-      return 1;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -1365,17 +1452,7 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
       break;
     }
 
-    const bool pending_entry_point_promise = HasPendingEntryPointPromise(env);
-    bool more = (uv_loop_alive(loop) != 0) || pending_entry_point_promise;
-    if (more && uv_loop_alive(loop) == 0 && pending_entry_point_promise) {
-      (void)UbiRuntimePlatformDrainTasks(env);
-      async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
-      if (async_status >= 0) {
-        return async_status;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      continue;
-    }
+    bool more = uv_loop_alive(loop) != 0;
     if (more) {
       idle_drain_turns = 0;
       continue;
@@ -1390,7 +1467,7 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
       if (async_status >= 0) {
         return async_status;
       }
-      if (uv_loop_alive(loop) != 0 || HasPendingEntryPointPromise(env)) {
+      if (uv_loop_alive(loop) != 0) {
         idle_drain_turns = 0;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -1414,6 +1491,7 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
   }
 
   if (!IsProcessExiting(env)) {
+    (void)ApplyUnsettledTopLevelAwaitExitCodeIfNeeded(env);
     EmitProcessLifecycleEvent(env, "exit", GetProcessExitCodeOrZero(env), true);
   }
   const int async_status = HandlePendingExceptionAfterLoopStep(env, error_out);
@@ -2642,9 +2720,11 @@ int RunScriptWithGlobals(napi_env env,
       }
     }
 
-    const int promise_status = WaitForTopLevelPromiseToSettle(env, wait_target, error_out);
-    if (promise_status >= 0) {
-      return promise_status;
+    if (!keep_event_loop_alive) {
+      const int promise_status = WaitForTopLevelPromiseToSettle(env, wait_target, error_out);
+      if (promise_status >= 0) {
+        return promise_status;
+      }
     }
 
     // Node semantics: flush the task queues once after top-level script eval.
@@ -2988,26 +3068,10 @@ int UbiRunScriptFileWithLoop(napi_env env,
   if (error_out != nullptr) {
     error_out->clear();
   }
-  const bool check_syntax_mode =
-      ExecArgvHasFlagIn(g_ubi_cli_exec_argv, "--check") ||
-      ExecArgvHasFlagIn(g_ubi_cli_exec_argv, "-c");
   const std::string normalized_script_path =
       script_path != nullptr ? ubi_path::NormalizeFileURLOrPath(script_path) : std::string();
   const char* fs_script_path = normalized_script_path.empty() ? script_path : normalized_script_path.c_str();
   std::string source = ";";
-  if (!check_syntax_mode) {
-    if (!ReadTextFile(fs_script_path, &source)) {
-      if (error_out != nullptr) {
-        std::string details = "Failed to read script file";
-        if (script_path != nullptr && script_path[0] != '\0') {
-          details += ": ";
-          details += script_path;
-        }
-        *error_out = std::move(details);
-      }
-      return 1;
-    }
-  }
   g_ubi_current_script_path = script_path;
   std::string restore_cwd;
 #if !defined(_WIN32)

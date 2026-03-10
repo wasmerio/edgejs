@@ -1498,6 +1498,7 @@ static bool LooksLikeCliOptionToken(const std::string& token) {
       "--experimental-import-meta-resolve",
       "--experimental-loader",
       "--experimental-report",
+      "--experimental-strip-types",
       "--experimental-transform-types",
       "--experimental-wasm-modules",
       "--experimental-worker",
@@ -1582,7 +1583,6 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
       "--entry-url",
       "--experimental-addon-modules",
       "--experimental-default-config-file",
-      "--experimental-detect-module",
       "--experimental-eventsource",
       "--experimental-fetch",
       "--experimental-global-customevent",
@@ -1593,8 +1593,8 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
       "--experimental-print-required-tla",
       "--experimental-quic",
       "--no-experimental-quic",
-      "--experimental-require-module",
       "--experimental-report",
+      "--experimental-strip-types",
       "--experimental-sqlite",
       "--no-experimental-sqlite",
       "--experimental-test-coverage",
@@ -1653,6 +1653,8 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
   };
   const std::vector<const char*> bool_true = {
       "--async-context-frame",
+      "--experimental-detect-module",
+      "--experimental-require-module",
       "--network-family-autoselection",
       "--warnings",
   };
@@ -1796,6 +1798,8 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
 
     if (key == "-r") key = "--require";
     if (key == "--loader") key = "--experimental-loader";
+    if (key == "--experimental-strip-types") key = "--strip-types";
+    if (key == "--no-experimental-strip-types") key = "--no-strip-types";
 
     if (eq == std::string::npos && key.rfind("--no-", 0) == 0) {
       if (bool_option_set.find(key) != bool_option_set.end()) {
@@ -1913,6 +1917,7 @@ static napi_value OptionsGetCLIOptionsInfoCallback(napi_env env, napi_callback_i
       "--experimental-global-customevent",
       "--experimental-global-webcrypto",
       "--experimental-report",
+      "--experimental-strip-types",
       "--experimental-worker",
       "--node-snapshot",
       "--no-node-snapshot",
@@ -2320,8 +2325,8 @@ static napi_value ModulesSetLazyPathHelpersCallback(napi_env env, napi_callback_
     return UndefinedValue(env);
   }
 
-  napi_set_named_property(env, argv[0], "filename", filename_value);
   napi_set_named_property(env, argv[0], "dirname", dirname_value);
+  napi_set_named_property(env, argv[0], "filename", filename_value);
 
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
