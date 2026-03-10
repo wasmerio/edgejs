@@ -251,6 +251,34 @@ void DefineValueProperty(napi_env env,
   napi_define_properties(env, object, 1, &desc);
 }
 
+// Mirror Node's LibuvStreamWrap::DoTryWrite() contract by slicing consumed
+// buffers in place and returning 0 for EAGAIN/ENOSYS.
+int UbiLibuvStreamDoTryWrite(uv_stream_t* stream, uv_buf_t** bufs, size_t* count) {
+  if (stream == nullptr || bufs == nullptr || count == nullptr || *bufs == nullptr) return UV_EINVAL;
+
+  int err = uv_try_write(stream, *bufs, *count);
+  if (err == UV_ENOSYS || err == UV_EAGAIN) return 0;
+  if (err < 0) return err;
+
+  size_t written = static_cast<size_t>(err);
+  uv_buf_t* vbufs = *bufs;
+  size_t vcount = *count;
+
+  for (; vcount > 0; vbufs++, vcount--) {
+    if (vbufs[0].len > written) {
+      vbufs[0].base += written;
+      vbufs[0].len -= written;
+      written = 0;
+      break;
+    }
+    written -= vbufs[0].len;
+  }
+
+  *bufs = vbufs;
+  *count = vcount;
+  return 0;
+}
+
 std::string ValueToUtf8(napi_env env, napi_value value) {
   if (env == nullptr || value == nullptr) return {};
   napi_value string_value = nullptr;
@@ -560,7 +588,7 @@ void UbiStreamBaseSetWrapperRef(UbiStreamBase* base, napi_ref wrapper_ref) {
   if (base->env == nullptr || wrapper_ref == nullptr) return;
   napi_value owner = UbiStreamBaseGetWrapper(base);
   if (owner == nullptr) return;
-  if (base->active_handle_token == nullptr) {
+  if (base->active_handle_token == nullptr && base->provider_type != kUbiProviderJsStream) {
     base->active_handle_token = UbiRegisterActiveHandle(base->env,
                                                         owner,
                                                         ActiveResourceNameForProvider(base->provider_type),
@@ -1104,33 +1132,27 @@ napi_value UbiLibuvStreamWriteBuffer(UbiStreamBase* base,
 
   uv_stream_t* stream = base->ops->get_stream(base);
   base->bytes_written += len;
-  size_t sync_written = 0;
+  uv_buf_t write_buf{};
+  uv_buf_t* write_bufs = &write_buf;
+  size_t write_count = 1;
 
   if (send_handle == nullptr && len > 0 && data != nullptr) {
-    uv_buf_t try_buf =
+    write_buf =
         uv_buf_init(const_cast<char*>(reinterpret_cast<const char*>(data)), static_cast<unsigned int>(len));
-    const int try_rc = uv_try_write(stream, &try_buf, 1);
-    if (try_rc == static_cast<int>(len)) {
+    const int try_rc = UbiLibuvStreamDoTryWrite(stream, &write_bufs, &write_count);
+    if (try_rc != 0 || write_count == 0) {
       SetStreamState(base->env, kUbiBytesWritten, static_cast<int32_t>(len));
       SetStreamState(base->env, kUbiLastWriteWasAsync, 0);
-      return UbiStreamBaseMakeInt32(base->env, 0);
-    }
-    if (try_rc > 0) {
-      sync_written = static_cast<size_t>(try_rc);
-    } else if (try_rc < 0 && try_rc != UV_EAGAIN && try_rc != UV_ENOSYS) {
-      SetStreamState(base->env, kUbiBytesWritten, static_cast<int32_t>(len));
-      SetStreamState(base->env, kUbiLastWriteWasAsync, 0);
-      UbiStreamBaseSetReqError(base->env, req_obj, try_rc);
+      if (try_rc != 0) UbiStreamBaseSetReqError(base->env, req_obj, try_rc);
       return UbiStreamBaseMakeInt32(base->env, try_rc);
     }
   }
 
-  const size_t remaining = len >= sync_written ? (len - sync_written) : 0;
-  if (remaining == 0) {
-    SetStreamState(base->env, kUbiBytesWritten, static_cast<int32_t>(len));
-    SetStreamState(base->env, kUbiLastWriteWasAsync, 0);
-    return UbiStreamBaseMakeInt32(base->env, 0);
-  }
+  const char* remaining_base =
+      (send_handle == nullptr && len > 0 && data != nullptr) ? write_bufs[0].base
+                                                              : const_cast<char*>(reinterpret_cast<const char*>(data));
+  const size_t remaining =
+      (send_handle == nullptr && len > 0 && data != nullptr) ? write_bufs[0].len : len;
 
   UbiStreamReqActivate(base->env, req_obj, kUbiProviderWriteWrap, base->async_id);
 
@@ -1145,12 +1167,10 @@ napi_value UbiLibuvStreamWriteBuffer(UbiStreamBase* base,
   wr->bufs_allocs = new char*[1]();
   wr->bufs = wr->bufs_storage;
 
-  if (refable && payload != nullptr && data != nullptr &&
+  if (refable && payload != nullptr && remaining_base != nullptr &&
       napi_create_reference(base->env, payload, 1, &wr->bufs_refs[0]) == napi_ok &&
       wr->bufs_refs[0] != nullptr) {
-    wr->bufs_storage[0] =
-        uv_buf_init(const_cast<char*>(reinterpret_cast<const char*>(data + sync_written)),
-                    static_cast<unsigned int>(remaining));
+    wr->bufs_storage[0] = uv_buf_init(const_cast<char*>(remaining_base), static_cast<unsigned int>(remaining));
   } else {
     char* copy = static_cast<char*>(malloc(remaining));
     if (copy == nullptr && remaining > 0) {
@@ -1160,8 +1180,8 @@ napi_value UbiLibuvStreamWriteBuffer(UbiStreamBase* base,
       FreeWriteReq(wr);
       return UbiStreamBaseMakeInt32(base->env, UV_ENOMEM);
     }
-    if (remaining > 0 && copy != nullptr && data != nullptr) {
-      memcpy(copy, data + sync_written, remaining);
+    if (remaining > 0 && copy != nullptr && remaining_base != nullptr) {
+      memcpy(copy, remaining_base, remaining);
     }
     wr->bufs_allocs[0] = copy;
     wr->bufs_storage[0] = uv_buf_init(copy, static_cast<unsigned int>(remaining));
@@ -1291,35 +1311,18 @@ napi_value UbiLibuvStreamWriteV(UbiStreamBase* base,
   base->bytes_written += total;
   uv_stream_t* stream = base->ops->get_stream(base);
   if (send_handle == nullptr && total > 0) {
-    const int try_rc = uv_try_write(stream, wr->bufs, wr->nbufs);
-    if (try_rc == static_cast<int>(total)) {
+    uv_buf_t* try_bufs = wr->bufs;
+    size_t try_count = wr->nbufs;
+    const int try_rc = UbiLibuvStreamDoTryWrite(stream, &try_bufs, &try_count);
+    if (try_rc != 0 || try_count == 0) {
       SetStreamState(base->env, kUbiBytesWritten, static_cast<int32_t>(total));
       SetStreamState(base->env, kUbiLastWriteWasAsync, 0);
-      FreeWriteReq(wr);
-      return UbiStreamBaseMakeInt32(base->env, 0);
-    }
-    if (try_rc > 0) {
-      size_t written = static_cast<size_t>(try_rc);
-      uv_buf_t* vbufs = wr->bufs;
-      uint32_t vcount = wr->nbufs;
-      for (; vcount > 0; vbufs++, vcount--) {
-        if (vbufs[0].len > written) {
-          vbufs[0].base += written;
-          vbufs[0].len -= written;
-          written = 0;
-          break;
-        }
-        written -= vbufs[0].len;
-      }
-      wr->bufs = vbufs;
-      wr->nbufs = vcount;
-    } else if (try_rc < 0 && try_rc != UV_EAGAIN && try_rc != UV_ENOSYS) {
-      SetStreamState(base->env, kUbiBytesWritten, static_cast<int32_t>(total));
-      SetStreamState(base->env, kUbiLastWriteWasAsync, 0);
-      UbiStreamBaseSetReqError(base->env, req_obj, try_rc);
+      if (try_rc != 0) UbiStreamBaseSetReqError(base->env, req_obj, try_rc);
       FreeWriteReq(wr);
       return UbiStreamBaseMakeInt32(base->env, try_rc);
     }
+    wr->bufs = try_bufs;
+    wr->nbufs = static_cast<uint32_t>(try_count);
   }
 
   if (wr->nbufs == 0) {

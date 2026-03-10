@@ -1,9 +1,15 @@
 #include "crypto/ubi_crypto_binding.h"
 #include "crypto/ubi_secure_context_bridge.h"
+#include "ubi_option_helpers.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -14,6 +20,7 @@
 #include <openssl/dsa.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 #include <openssl/ecdsa.h>
 #include <openssl/params.h>
 #include <openssl/pem.h>
@@ -21,10 +28,126 @@
 #include <openssl/rsa.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509err.h>
 #include <openssl/x509v3.h>
+#include <uv.h>
 
 namespace ubi::crypto {
 namespace {
+
+static const char* const kBundledRootCerts[] = {
+#ifndef NODE_WANT_INTERNALS
+#define NODE_WANT_INTERNALS 1
+#define UBI_UNDEF_NODE_WANT_INTERNALS 1
+#endif
+#include "../../../node/src/node_root_certs.h"
+#ifdef UBI_UNDEF_NODE_WANT_INTERNALS
+#undef UBI_UNDEF_NODE_WANT_INTERNALS
+#undef NODE_WANT_INTERNALS
+#endif
+};
+
+struct X509Less {
+  bool operator()(const X509* lhs, const X509* rhs) const noexcept {
+    return X509_cmp(const_cast<X509*>(lhs), const_cast<X509*>(rhs)) < 0;
+  }
+};
+
+using X509Set = std::set<X509*, X509Less>;
+
+std::once_flag g_bundled_root_certs_once;
+std::once_flag g_extra_root_certs_once;
+std::once_flag g_system_root_certs_once;
+std::vector<X509*> g_bundled_root_certs;
+std::vector<X509*> g_extra_root_certs;
+std::vector<X509*> g_system_root_certs;
+std::mutex g_user_root_certs_mutex;
+std::unique_ptr<X509Set> g_user_root_certs;
+
+std::atomic<bool> g_tried_cert_loading_off_thread{false};
+std::atomic<bool> g_cert_loading_thread_started{false};
+std::atomic<bool> g_cert_loading_cleanup_hook_installed{false};
+std::mutex g_cert_loading_thread_mutex;
+uv_thread_t g_cert_loading_thread;
+
+struct RootCertLoadPlan {
+  bool load_bundled = false;
+  bool load_extra = false;
+  bool load_system = false;
+};
+
+RootCertLoadPlan g_root_cert_load_plan;
+
+bool AddCertificateToStore(X509_STORE* store, X509* cert);
+EVP_PKEY* ParsePrivateKeyWithPassphrase(const uint8_t* data,
+                                        size_t len,
+                                        const std::string& passphrase,
+                                        bool has_passphrase);
+
+bool EnsureTicketKeys(SecureContextHolder* holder) {
+  if (holder == nullptr) return false;
+  if (holder->ticket_keys.size() == 48) return true;
+  holder->ticket_keys.resize(48);
+  if (RAND_bytes(holder->ticket_keys.data(), static_cast<int>(holder->ticket_keys.size())) != 1) {
+    holder->ticket_keys.clear();
+    return false;
+  }
+  return true;
+}
+
+int TicketCompatibilityCallback(SSL* ssl,
+                                unsigned char* name,
+                                unsigned char* iv,
+                                EVP_CIPHER_CTX* ectx,
+                                HMAC_CTX* hctx,
+                                int enc) {
+  auto* holder = static_cast<SecureContextHolder*>(SSL_CTX_get_app_data(SSL_get_SSL_CTX(ssl)));
+  if (holder == nullptr || !EnsureTicketKeys(holder)) {
+    return -1;
+  }
+
+  const unsigned char* key_name = holder->ticket_keys.data();
+  const unsigned char* hmac_key = holder->ticket_keys.data() + 16;
+  const unsigned char* aes_key = holder->ticket_keys.data() + 32;
+
+  if (enc) {
+    std::memcpy(name, key_name, 16);
+    if (RAND_bytes(iv, 16) != 1 ||
+        EVP_EncryptInit_ex(ectx, EVP_aes_128_cbc(), nullptr, aes_key, iv) <= 0 ||
+        HMAC_Init_ex(hctx, hmac_key, 16, EVP_sha256(), nullptr) <= 0) {
+      return -1;
+    }
+    return 1;
+  }
+
+  if (std::memcmp(name, key_name, 16) != 0) {
+    return 0;
+  }
+
+  if (EVP_DecryptInit_ex(ectx, EVP_aes_128_cbc(), nullptr, aes_key, iv) <= 0 ||
+      HMAC_Init_ex(hctx, hmac_key, 16, EVP_sha256(), nullptr) <= 0) {
+    return -1;
+  }
+
+  return 1;
+}
+
+void EnsureTicketCallback(SecureContextHolder* holder) {
+  if (holder == nullptr || holder->ctx == nullptr || holder->ticket_callback_installed) return;
+  if (!EnsureTicketKeys(holder)) return;
+  SSL_CTX_set_app_data(holder->ctx, holder);
+  SSL_CTX_set_tlsext_ticket_key_cb(holder->ctx, TicketCompatibilityCallback);
+  holder->ticket_callback_installed = true;
+}
+bool AppendUniquePemString(std::vector<std::string>* out, const std::string& pem);
+bool GetByteStringArray(napi_env env, napi_value value, std::vector<std::string>* out);
+bool GetEffectiveCaOptions(napi_env env, bool* use_openssl_ca, bool* use_system_ca);
+std::vector<X509*>& GetBundledRootCertificatesParsed();
+std::vector<X509*>& GetExtraRootCertificatesParsed();
+std::vector<X509*>& GetSystemRootCertificatesParsed();
+void EnsureRootCertThreadCleanupHook(napi_env env);
+void CleanupRootCertLoading(void* data);
+
 
 std::string ValueToUtf8(napi_env env, napi_value value) {
   size_t len = 0;
@@ -193,6 +316,316 @@ size_t TypedArrayBytesPerElement(napi_typedarray_type type) {
   }
 }
 
+std::vector<std::string> GetStringArrayProperty(napi_env env, napi_value obj, const char* name) {
+  std::vector<std::string> out;
+  if (obj == nullptr || name == nullptr) return out;
+
+  napi_value array_value = nullptr;
+  if (napi_get_named_property(env, obj, name, &array_value) != napi_ok || array_value == nullptr) return out;
+
+  bool is_array = false;
+  if (napi_is_array(env, array_value, &is_array) != napi_ok || !is_array) return out;
+
+  uint32_t length = 0;
+  if (napi_get_array_length(env, array_value, &length) != napi_ok) return out;
+  out.reserve(length);
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_value entry = nullptr;
+    if (napi_get_element(env, array_value, i, &entry) != napi_ok || entry == nullptr) {
+      out.emplace_back();
+      continue;
+    }
+    out.push_back(ValueToUtf8(env, entry));
+  }
+  return out;
+}
+
+bool IsCryptoDebugEnabled() {
+  const char* value = std::getenv("NODE_DEBUG_NATIVE");
+  if (value == nullptr) return false;
+  return std::strstr(value, "crypto") != nullptr || std::strstr(value, "CRYPTO") != nullptr;
+}
+
+void DebugCryptoLog(const char* message) {
+  if (message == nullptr || !IsCryptoDebugEnabled()) return;
+  std::fputs(message, stderr);
+}
+
+bool AppendUniquePemString(std::vector<std::string>* out, const std::string& pem) {
+  if (out == nullptr) return false;
+  if (std::find(out->begin(), out->end(), pem) != out->end()) return false;
+  out->push_back(pem);
+  return true;
+}
+
+bool LooksLikePemCertificateText(const std::string& text) {
+  return text.find("-----BEGIN CERTIFICATE-----") != std::string::npos;
+}
+
+bool IsPlainTextBlob(const std::string& text) {
+  for (unsigned char ch : text) {
+    if (ch == '\n' || ch == '\r' || ch == '\t') continue;
+    if (ch < 0x20 || ch > 0x7e) return false;
+  }
+  return true;
+}
+
+bool GetByteStringArray(napi_env env, napi_value value, std::vector<std::string>* out) {
+  if (out == nullptr) return false;
+  bool is_array = false;
+  if (napi_is_array(env, value, &is_array) != napi_ok || !is_array) return false;
+
+  uint32_t length = 0;
+  if (napi_get_array_length(env, value, &length) != napi_ok) return false;
+  out->clear();
+  out->reserve(length);
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_value entry = nullptr;
+    if (napi_get_element(env, value, i, &entry) != napi_ok || entry == nullptr) return false;
+
+    std::vector<uint8_t> owned;
+    uint8_t* bytes = nullptr;
+    size_t byte_len = 0;
+    if (!GetBufferOrStringBytes(env, entry, &owned, &bytes, &byte_len)) return false;
+    out->emplace_back(reinterpret_cast<const char*>(bytes), byte_len);
+  }
+  return true;
+}
+
+unsigned long LoadCertsFromBio(std::vector<X509*>* certs, BIO* bio) {
+  if (certs == nullptr || bio == nullptr) return 0;
+  ERR_set_mark();
+  while (X509* x509 = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) {
+    certs->push_back(x509);
+  }
+  const unsigned long err = ERR_peek_last_error();
+  if (err != 0 &&
+      !(ERR_GET_LIB(err) == ERR_LIB_PEM &&
+        ERR_GET_REASON(err) == PEM_R_NO_START_LINE)) {
+    ERR_pop_to_mark();
+    return err;
+  }
+  ERR_clear_error();
+  ERR_pop_to_mark();
+  return 0;
+}
+
+unsigned long LoadCertsFromFile(std::vector<X509*>* certs, const char* path) {
+  if (certs == nullptr || path == nullptr || path[0] == '\0') return 0;
+  BIO* bio = BIO_new_file(path, "r");
+  if (bio == nullptr) return ERR_get_error();
+  const unsigned long err = LoadCertsFromBio(certs, bio);
+  BIO_free(bio);
+  return err;
+}
+
+std::string X509ToPemString(X509* cert) {
+  if (cert == nullptr) return "";
+  BIO* bio = BIO_new(BIO_s_mem());
+  if (bio == nullptr) return "";
+  std::string out;
+  if (PEM_write_bio_X509(bio, cert) == 1) {
+    char* data = nullptr;
+    const long size = BIO_get_mem_data(bio, &data);
+    if (size > 0 && data != nullptr) out.assign(data, static_cast<size_t>(size));
+  }
+  BIO_free(bio);
+  return out;
+}
+
+bool AddCertificateToStore(X509_STORE* store, X509* cert) {
+  if (store == nullptr || cert == nullptr) return false;
+  if (X509_STORE_add_cert(store, cert) == 1) return true;
+  const unsigned long err = ERR_peek_last_error();
+  if (err != 0 &&
+      ERR_GET_LIB(err) == ERR_LIB_X509 &&
+      ERR_GET_REASON(err) == X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+    ERR_clear_error();
+    return true;
+  }
+  return false;
+}
+
+void FreeCertificates(std::vector<X509*>* certs) {
+  if (certs == nullptr) return;
+  for (X509* cert : *certs) {
+    X509_free(cert);
+  }
+  certs->clear();
+}
+
+std::vector<X509*>& GetBundledRootCertificatesParsed() {
+  std::call_once(g_bundled_root_certs_once, []() {
+    g_bundled_root_certs.reserve(sizeof(kBundledRootCerts) / sizeof(kBundledRootCerts[0]));
+    for (const char* pem : kBundledRootCerts) {
+      BIO* bio = BIO_new_mem_buf(pem, -1);
+      if (bio == nullptr) continue;
+      X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+      BIO_free(bio);
+      if (cert != nullptr) g_bundled_root_certs.push_back(cert);
+    }
+  });
+  return g_bundled_root_certs;
+}
+
+std::vector<X509*>& GetExtraRootCertificatesParsed() {
+  std::call_once(g_extra_root_certs_once, []() {
+    const char* extra_root_certs_file = std::getenv("NODE_EXTRA_CA_CERTS");
+    if (extra_root_certs_file == nullptr || extra_root_certs_file[0] == '\0') return;
+
+    const unsigned long err = LoadCertsFromFile(&g_extra_root_certs, extra_root_certs_file);
+    if (err != 0) {
+      char buf[256];
+      ERR_error_string_n(err, buf, sizeof(buf));
+      std::fprintf(stderr,
+                   "Warning: Ignoring extra certs from `%s`, load failed: %s\n",
+                   extra_root_certs_file,
+                   buf);
+      FreeCertificates(&g_extra_root_certs);
+    }
+  });
+  return g_extra_root_certs;
+}
+
+std::vector<X509*>& GetSystemRootCertificatesParsed() {
+  std::call_once(g_system_root_certs_once, []() {
+    // Ubi does not yet load platform trust stores natively.
+  });
+  return g_system_root_certs;
+}
+
+napi_value CreateStringArray(napi_env env, const std::vector<std::string>& values) {
+  napi_value out = nullptr;
+  if (napi_create_array_with_length(env, values.size(), &out) != napi_ok || out == nullptr) return nullptr;
+  for (size_t i = 0; i < values.size(); ++i) {
+    napi_value entry = nullptr;
+    if (napi_create_string_utf8(env, values[i].c_str(), values[i].size(), &entry) == napi_ok && entry != nullptr) {
+      napi_set_element(env, out, static_cast<uint32_t>(i), entry);
+    }
+  }
+  return out;
+}
+
+napi_value CreatePemArrayFromX509Vector(napi_env env, const std::vector<X509*>& certs) {
+  std::vector<std::string> pems;
+  pems.reserve(certs.size());
+  for (X509* cert : certs) {
+    if (cert == nullptr) continue;
+    AppendUniquePemString(&pems, X509ToPemString(cert));
+  }
+  return CreateStringArray(env, pems);
+}
+
+bool GetEffectiveCaOptions(napi_env env, bool* use_openssl_ca, bool* use_system_ca) {
+  if (use_openssl_ca == nullptr || use_system_ca == nullptr) return false;
+  *use_openssl_ca = false;
+  *use_system_ca = false;
+
+  napi_value global = nullptr;
+  napi_value process = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "process", &process) != napi_ok || process == nullptr) {
+    return false;
+  }
+
+  std::vector<std::string> raw_exec_argv = GetStringArrayProperty(env, process, "execArgv");
+  const ubi_options::EffectiveCliState state = ubi_options::BuildEffectiveCliState(raw_exec_argv);
+  const std::vector<std::string>& tokens = state.ok ? state.effective_tokens : raw_exec_argv;
+
+  const char* env_use_system_ca = std::getenv("NODE_USE_SYSTEM_CA");
+  *use_system_ca = env_use_system_ca != nullptr && std::strcmp(env_use_system_ca, "1") == 0;
+
+  for (const auto& token : tokens) {
+    if (token == "--use-openssl-ca") {
+      *use_openssl_ca = true;
+      continue;
+    }
+    if (token == "--use-bundled-ca") {
+      *use_openssl_ca = false;
+      continue;
+    }
+    if (token == "--use-system-ca") {
+      *use_system_ca = true;
+      continue;
+    }
+    if (token == "--no-use-system-ca") {
+      *use_system_ca = false;
+      continue;
+    }
+  }
+  return true;
+}
+
+bool AddRootCertsToContextStore(napi_env env, SSL_CTX* ctx) {
+  if (ctx == nullptr) return false;
+  X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+  if (store == nullptr) return false;
+
+  std::lock_guard<std::mutex> lock(g_user_root_certs_mutex);
+  if (g_user_root_certs != nullptr) {
+    for (X509* cert : *g_user_root_certs) {
+      if (!AddCertificateToStore(store, cert)) return false;
+    }
+    return true;
+  }
+
+  bool use_openssl_ca = false;
+  bool use_system_ca = false;
+  (void)GetEffectiveCaOptions(env, &use_openssl_ca, &use_system_ca);
+
+  if (use_openssl_ca) {
+    if (X509_STORE_set_default_paths(store) != 1) return false;
+  } else {
+    for (X509* cert : GetBundledRootCertificatesParsed()) {
+      if (!AddCertificateToStore(store, cert)) return false;
+    }
+    if (use_system_ca) {
+      for (X509* cert : GetSystemRootCertificatesParsed()) {
+        if (!AddCertificateToStore(store, cert)) return false;
+      }
+    }
+  }
+
+  for (X509* cert : GetExtraRootCertificatesParsed()) {
+    if (!AddCertificateToStore(store, cert)) return false;
+  }
+  return true;
+}
+
+void LoadCACertificatesThread(void* data) {
+  const RootCertLoadPlan plan = *static_cast<RootCertLoadPlan*>(data);
+  if (plan.load_bundled) {
+    DebugCryptoLog("Started loading bundled root certificates off-thread\n");
+    (void)GetBundledRootCertificatesParsed();
+  }
+  if (plan.load_extra) {
+    DebugCryptoLog("Started loading extra root certificates off-thread\n");
+    (void)GetExtraRootCertificatesParsed();
+  }
+  if (plan.load_system) {
+    DebugCryptoLog("Started loading system root certificates off-thread\n");
+    (void)GetSystemRootCertificatesParsed();
+  }
+}
+
+void CleanupRootCertLoading(void* data) {
+  (void)data;
+  std::lock_guard<std::mutex> lock(g_cert_loading_thread_mutex);
+  if (g_cert_loading_thread_started.exchange(false)) {
+    uv_thread_join(&g_cert_loading_thread);
+  }
+}
+
+void EnsureRootCertThreadCleanupHook(napi_env env) {
+  if (env == nullptr) return;
+  bool expected = false;
+  if (g_cert_loading_cleanup_hook_installed.compare_exchange_strong(expected, true)) {
+    if (napi_add_env_cleanup_hook(env, CleanupRootCertLoading, nullptr) != napi_ok) {
+      g_cert_loading_cleanup_hook_installed.store(false);
+    }
+  }
+}
+
 bool GetBufferSourceBytes(napi_env env, napi_value value, uint8_t** data, size_t* len) {
   static uint8_t kEmptyBufferSentinel = 0;
   if (GetBufferBytes(env, value, data, len)) return true;
@@ -266,7 +699,9 @@ napi_value MakeError(napi_env env, const char* code, const char* message) {
   napi_value code_v = nullptr;
   napi_value msg_v = nullptr;
   napi_value err_v = nullptr;
-  napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_v);
+  if (code != nullptr) {
+    napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_v);
+  }
   napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &msg_v);
   switch (classify(code)) {
     case ErrorCtorKind::kTypeError:
@@ -323,6 +758,18 @@ void ThrowOpenSslError(napi_env env, const char* code, unsigned long err, const 
 
   const char* effective_code = code;
   const char* reason = ERR_reason_error_string(err);
+  if (effective_code == nullptr) {
+    if (ERR_GET_LIB(err) == ERR_LIB_PEM && reason != nullptr) {
+      if (std::strstr(reason, "ASN1 lib") != nullptr) {
+        effective_code = "ERR_OSSL_PEM_ASN1_LIB";
+      } else if (std::strstr(reason, "no start line") != nullptr) {
+        effective_code = "ERR_OSSL_PEM_NO_START_LINE";
+      }
+    }
+    if (effective_code == nullptr) {
+      effective_code = "ERR_CRYPTO_OPERATION_FAILED";
+    }
+  }
   if (effective_code != nullptr &&
       std::strcmp(effective_code, "ERR_CRYPTO_OPERATION_FAILED") == 0 &&
       reason != nullptr &&
@@ -1251,7 +1698,21 @@ napi_value CryptoSecureContextCreate(napi_env env, napi_callback_info info) {
     ThrowLastOpenSslError(env, "ERR_TLS_INVALID_CONTEXT", "Failed to create secure context");
     return nullptr;
   }
+  SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2);
+  SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3);
+#if OPENSSL_VERSION_MAJOR >= 3
+  SSL_CTX_set_options(ctx, SSL_OP_ALLOW_CLIENT_RENEGOTIATION);
+#endif
+  SSL_CTX_clear_mode(ctx, SSL_MODE_NO_AUTO_CHAIN);
+#ifdef SSL_SESS_CACHE_NO_INTERNAL
+  SSL_CTX_set_session_cache_mode(
+      ctx,
+      SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL | SSL_SESS_CACHE_NO_AUTO_CLEAR);
+#else
+  SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_AUTO_CLEAR);
+#endif
   auto* holder = new SecureContextHolder(ctx);
+  EnsureTicketCallback(holder);
   napi_value out = nullptr;
   if (napi_create_external(env, holder, SecureContextFinalizer, nullptr, &out) != napi_ok || out == nullptr) {
     delete holder;
@@ -1261,8 +1722,8 @@ napi_value CryptoSecureContextCreate(napi_env env, napi_callback_info info) {
 }
 
 napi_value CryptoSecureContextInit(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
   SecureContextHolder* holder = nullptr;
   if (!GetSecureContextHolder(env, argv[0], &holder) || holder == nullptr || holder->ctx == nullptr) {
@@ -1271,8 +1732,46 @@ napi_value CryptoSecureContextInit(napi_env env, napi_callback_info info) {
   }
   int32_t min_version = 0;
   int32_t max_version = 0;
-  if (argc >= 2 && argv[1] != nullptr) napi_get_value_int32(env, argv[1], &min_version);
-  if (argc >= 3 && argv[2] != nullptr) napi_get_value_int32(env, argv[2], &max_version);
+  if (argc >= 3 && argv[2] != nullptr) napi_get_value_int32(env, argv[2], &min_version);
+  if (argc >= 4 && argv[3] != nullptr) napi_get_value_int32(env, argv[3], &max_version);
+  if (max_version == 0) max_version = TLS1_3_VERSION;
+
+  napi_valuetype protocol_type = napi_undefined;
+  if (argc >= 2 && napi_typeof(env, argv[1], &protocol_type) == napi_ok && protocol_type == napi_string) {
+    const std::string ssl_method = ValueToUtf8(env, argv[1]);
+    if (ssl_method == "SSLv2_method" || ssl_method == "SSLv2_server_method" ||
+        ssl_method == "SSLv2_client_method") {
+      ThrowError(env, "ERR_TLS_INVALID_PROTOCOL_METHOD", "SSLv2 methods disabled");
+      return nullptr;
+    } else if (ssl_method == "SSLv3_method" || ssl_method == "SSLv3_server_method" ||
+               ssl_method == "SSLv3_client_method") {
+      ThrowError(env, "ERR_TLS_INVALID_PROTOCOL_METHOD", "SSLv3 methods disabled");
+      return nullptr;
+    } else if (ssl_method == "SSLv23_method" || ssl_method == "SSLv23_server_method" ||
+               ssl_method == "SSLv23_client_method") {
+      max_version = TLS1_2_VERSION;
+    } else if (ssl_method == "TLS_method" || ssl_method == "TLS_server_method" ||
+               ssl_method == "TLS_client_method") {
+      min_version = 0;
+      max_version = TLS1_3_VERSION;
+    } else if (ssl_method == "TLSv1_method" || ssl_method == "TLSv1_server_method" ||
+               ssl_method == "TLSv1_client_method") {
+      min_version = TLS1_VERSION;
+      max_version = TLS1_VERSION;
+    } else if (ssl_method == "TLSv1_1_method" || ssl_method == "TLSv1_1_server_method" ||
+               ssl_method == "TLSv1_1_client_method") {
+      min_version = TLS1_1_VERSION;
+      max_version = TLS1_1_VERSION;
+    } else if (ssl_method == "TLSv1_2_method" || ssl_method == "TLSv1_2_server_method" ||
+               ssl_method == "TLSv1_2_client_method") {
+      min_version = TLS1_2_VERSION;
+      max_version = TLS1_2_VERSION;
+    } else {
+      const std::string message = std::string("Unknown method: ") + ssl_method;
+      ThrowError(env, "ERR_TLS_INVALID_PROTOCOL_METHOD", message.c_str());
+      return nullptr;
+    }
+  }
   if (min_version > 0 && SSL_CTX_set_min_proto_version(holder->ctx, min_version) != 1) {
     ThrowLastOpenSslError(env, "ERR_TLS_INVALID_PROTOCOL_VERSION", "Failed to set min protocol version");
     return nullptr;
@@ -1467,20 +1966,9 @@ napi_value CryptoSecureContextSetKey(napi_env env, napi_callback_info info) {
     ThrowError(env, "ERR_INVALID_ARG_TYPE", "passphrase must be a string or Buffer");
     return nullptr;
   }
-  BIO* bio = BIO_new_mem_buf(key_bytes, static_cast<int>(key_len));
-  if (bio == nullptr) return nullptr;
-  EVP_PKEY* pkey = PEM_read_bio_PrivateKey(
-      bio,
-      nullptr,
-      nullptr,
-      has_passphrase ? const_cast<char*>(passphrase.c_str()) : nullptr);
+  EVP_PKEY* pkey = ParsePrivateKeyWithPassphrase(key_bytes, key_len, passphrase, has_passphrase);
   if (pkey == nullptr) {
-    (void)BIO_reset(bio);
-    pkey = d2i_PrivateKey_bio(bio, nullptr);
-  }
-  BIO_free(bio);
-  if (pkey == nullptr) {
-    ThrowLastOpenSslError(env, "ERR_OSSL_PEM_NO_START_LINE", "Failed to parse private key");
+    ThrowLastOpenSslError(env, "ERR_CRYPTO_OPERATION_FAILED", "Failed to parse private key");
     return nullptr;
   }
   const int ok = SSL_CTX_use_PrivateKey(holder->ctx, pkey);
@@ -1510,20 +1998,42 @@ napi_value CryptoSecureContextAddCACert(napi_env env, napi_callback_info info) {
     ThrowError(env, "ERR_INVALID_ARG_TYPE", "ca must be a string or Buffer");
     return nullptr;
   }
-  X509* cert = ParseX509(cert_bytes, cert_len);
-  if (cert == nullptr) {
+  BIO* bio = BIO_new_mem_buf(cert_bytes, static_cast<int>(cert_len));
+  if (bio == nullptr) {
     ThrowLastOpenSslError(env, "ERR_OSSL_PEM_NO_START_LINE", "Failed to parse CA certificate");
     return nullptr;
   }
+
   X509_STORE* store = SSL_CTX_get_cert_store(holder->ctx);
-  if (store == nullptr || X509_STORE_add_cert(store, cert) != 1) {
-    X509_free(cert);
-    ThrowLastOpenSslError(env, "ERR_TLS_CERT", "Failed to add CA certificate");
+  if (store == nullptr) {
+    BIO_free(bio);
+    ThrowError(env, "ERR_TLS_CERT", "Failed to add CA certificate");
     return nullptr;
   }
-  (void)SSL_CTX_add_client_CA(holder->ctx, cert);
+
+  bool added_any = false;
+  while (X509* cert = PEM_read_bio_X509_AUX(bio, nullptr, nullptr, nullptr)) {
+    added_any = true;
+    if (!AddCertificateToStore(store, cert) || SSL_CTX_add_client_CA(holder->ctx, cert) != 1) {
+      X509_free(cert);
+      BIO_free(bio);
+      ThrowLastOpenSslError(env, "ERR_TLS_CERT", "Failed to add CA certificate");
+      return nullptr;
+    }
+    X509_free(cert);
+  }
+
+  BIO_free(bio);
+  const unsigned long err = ERR_peek_last_error();
+  if (!added_any ||
+      (err != 0 &&
+       !(ERR_GET_LIB(err) == ERR_LIB_PEM &&
+         ERR_GET_REASON(err) == PEM_R_NO_START_LINE))) {
+    ThrowLastOpenSslError(env, "ERR_OSSL_PEM_NO_START_LINE", "Failed to parse CA certificate");
+    return nullptr;
+  }
   UpdateIssuerFromStore(holder);
-  X509_free(cert);
+  ERR_clear_error();
   napi_value true_v = nullptr;
   napi_get_boolean(env, true, &true_v);
   return true_v;
@@ -1572,7 +2082,7 @@ napi_value CryptoSecureContextAddRootCerts(napi_env env, napi_callback_info info
     ThrowError(env, "ERR_INVALID_ARG_TYPE", "context must be a secure context handle");
     return nullptr;
   }
-  if (SSL_CTX_set_default_verify_paths(holder->ctx) != 1) {
+  if (!AddRootCertsToContextStore(env, holder->ctx)) {
     ThrowLastOpenSslError(env, "ERR_TLS_CERT", "Failed to load default CA certificates");
     return nullptr;
   }
@@ -1657,6 +2167,159 @@ napi_value CryptoSecureContextSetTicketKeys(napi_env env, napi_callback_info inf
     return nullptr;
   }
   holder->ticket_keys.assign(data, data + len);
+  EnsureTicketCallback(holder);
+  napi_value true_v = nullptr;
+  napi_get_boolean(env, true, &true_v);
+  return true_v;
+}
+
+napi_value CryptoSecureContextGetTicketKeys(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
+  SecureContextHolder* holder = nullptr;
+  if (!GetSecureContextHolder(env, argv[0], &holder) || holder == nullptr || holder->ctx == nullptr) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "context must be a secure context handle");
+    return nullptr;
+  }
+  if (!EnsureTicketKeys(holder)) {
+    ThrowLastOpenSslError(env, "ERR_TLS_INVALID_CONTEXT", "Error generating ticket keys");
+    return nullptr;
+  }
+  EnsureTicketCallback(holder);
+  return CreateBufferCopy(env, holder->ticket_keys.data(), holder->ticket_keys.size());
+}
+
+napi_value CryptoSecureContextLoadPKCS12(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 2) return nullptr;
+  SecureContextHolder* holder = nullptr;
+  if (!GetSecureContextHolder(env, argv[0], &holder) || holder == nullptr || holder->ctx == nullptr) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "context must be a secure context handle");
+    return nullptr;
+  }
+
+  uint8_t* pfx = nullptr;
+  size_t pfx_len = 0;
+  if (!GetBufferBytes(env, argv[1], &pfx, &pfx_len)) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "pfx must be a string or Buffer");
+    return nullptr;
+  }
+
+  std::string passphrase;
+  bool has_passphrase = false;
+  if (argc >= 3 && !ReadPassphrase(env, argv[2], &passphrase, &has_passphrase)) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "passphrase must be a string or Buffer");
+    return nullptr;
+  }
+
+  BIO* bio = BIO_new_mem_buf(pfx, static_cast<int>(pfx_len));
+  if (bio == nullptr) {
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load PFX certificate");
+    return nullptr;
+  }
+
+  ERR_clear_error();
+
+  PKCS12* pkcs12 = nullptr;
+  if (!d2i_PKCS12_bio(bio, &pkcs12)) {
+    BIO_free(bio);
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load PFX certificate");
+    return nullptr;
+  }
+  BIO_free(bio);
+
+  EVP_PKEY* pkey = nullptr;
+  X509* cert = nullptr;
+  STACK_OF(X509)* extra = nullptr;
+  const int ok = PKCS12_parse(pkcs12,
+                              has_passphrase ? passphrase.c_str() : nullptr,
+                              &pkey,
+                              &cert,
+                              &extra);
+  PKCS12_free(pkcs12);
+
+  if (ok != 1) {
+#if OPENSSL_VERSION_MAJOR >= 3
+    const unsigned long err = ERR_peek_last_error();
+    if (ERR_GET_REASON(err) == ERR_R_UNSUPPORTED) {
+      ThrowError(env, "ERR_CRYPTO_UNSUPPORTED_OPERATION", "Unsupported PKCS12 PFX data");
+      return nullptr;
+    }
+#endif
+    ThrowLastOpenSslError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load PFX certificate");
+    return nullptr;
+  }
+
+  if (pkey == nullptr) {
+    if (cert != nullptr) X509_free(cert);
+    if (extra != nullptr) sk_X509_pop_free(extra, X509_free);
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load private key from PFX data");
+    return nullptr;
+  }
+
+  if (cert == nullptr) {
+    EVP_PKEY_free(pkey);
+    if (extra != nullptr) sk_X509_pop_free(extra, X509_free);
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load certificate from PFX data");
+    return nullptr;
+  }
+
+  int use_ok = SSL_CTX_use_certificate(holder->ctx, cert);
+  if (use_ok == 1) {
+    SSL_CTX_clear_extra_chain_certs(holder->ctx);
+    const int count = extra != nullptr ? sk_X509_num(extra) : 0;
+    for (int i = 0; i < count; ++i) {
+      X509* ca = sk_X509_value(extra, i);
+      if (ca == nullptr) continue;
+      if (SSL_CTX_add1_chain_cert(holder->ctx, ca) != 1) {
+        use_ok = 0;
+        break;
+      }
+    }
+  }
+  if (use_ok != 1 || SSL_CTX_use_PrivateKey(holder->ctx, pkey) != 1) {
+    EVP_PKEY_free(pkey);
+    X509_free(cert);
+    if (extra != nullptr) sk_X509_pop_free(extra, X509_free);
+    ThrowLastOpenSslError(env, "ERR_CRYPTO_OPERATION_FAILED", "Unable to load PFX certificate");
+    return nullptr;
+  }
+
+  ResetStoredCertificate(&holder->cert, cert);
+  ResetStoredCertificate(&holder->issuer, nullptr);
+
+  X509* issuer = nullptr;
+  const int count = extra != nullptr ? sk_X509_num(extra) : 0;
+  X509_STORE* store = SSL_CTX_get_cert_store(holder->ctx);
+  for (int i = 0; i < count; ++i) {
+    X509* ca = sk_X509_value(extra, i);
+    if (ca == nullptr) continue;
+    if (store != nullptr) {
+      if (!AddCertificateToStore(store, ca) || SSL_CTX_add_client_CA(holder->ctx, ca) != 1) {
+        EVP_PKEY_free(pkey);
+        X509_free(cert);
+        if (extra != nullptr) sk_X509_pop_free(extra, X509_free);
+        ThrowLastOpenSslError(env, "ERR_TLS_CERT", "Failed to add CA certificate");
+        return nullptr;
+      }
+    }
+    if (issuer == nullptr && X509_check_issued(ca, cert) == X509_V_OK) {
+      issuer = ca;
+    }
+  }
+
+  if (issuer != nullptr) {
+    ResetStoredCertificate(&holder->issuer, issuer);
+  } else {
+    UpdateIssuerFromStore(holder);
+  }
+
+  EVP_PKEY_free(pkey);
+  X509_free(cert);
+  if (extra != nullptr) sk_X509_pop_free(extra, X509_free);
+
   napi_value true_v = nullptr;
   napi_get_boolean(env, true, &true_v);
   return true_v;
@@ -1705,6 +2368,76 @@ napi_value CryptoSecureContextSetECDHCurve(napi_env env, napi_callback_info info
   return true_v;
 }
 
+napi_value CryptoSecureContextSetDHParam(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 2) return nullptr;
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  SecureContextHolder* holder = nullptr;
+  if (!GetSecureContextHolder(env, argv[0], &holder) || holder == nullptr || holder->ctx == nullptr) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "context must be a secure context handle");
+    return nullptr;
+  }
+
+  bool is_auto = false;
+  if (napi_get_value_bool(env, argv[1], &is_auto) == napi_ok && is_auto) {
+    if (SSL_CTX_set_dh_auto(holder->ctx, true) != 1) {
+      ThrowLastOpenSslError(env, "ERR_TLS_INVALID_CONTEXT", "Failed to enable automatic DH parameters");
+      return nullptr;
+    }
+    return undefined;
+  }
+
+  std::vector<uint8_t> dh_owned;
+  uint8_t* dh_bytes = nullptr;
+  size_t dh_len = 0;
+  if (!GetBufferOrStringBytes(env, argv[1], &dh_owned, &dh_bytes, &dh_len)) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "DH parameters must be a string or Buffer");
+    return nullptr;
+  }
+
+  BIO* bio = BIO_new_mem_buf(dh_bytes, static_cast<int>(dh_len));
+  if (bio == nullptr) {
+    ThrowLastOpenSslError(env, "ERR_TLS_INVALID_CONTEXT", "Failed to load DH parameters");
+    return nullptr;
+  }
+
+  DH* dh = PEM_read_bio_DHparams(bio, nullptr, nullptr, nullptr);
+  BIO_free(bio);
+  if (dh == nullptr) {
+    return undefined;
+  }
+
+  const BIGNUM* p = nullptr;
+  DH_get0_pqg(dh, &p, nullptr, nullptr);
+  const int size = p != nullptr ? BN_num_bits(p) : 0;
+  if (size < 1024) {
+    DH_free(dh);
+    ThrowError(env, "ERR_INVALID_ARG_VALUE", "DH parameter is less than 1024 bits");
+    return nullptr;
+  }
+
+  napi_value warning = undefined;
+  if (size < 2048) {
+    if (napi_create_string_utf8(env,
+                                "DH parameter is less than 2048 bits",
+                                NAPI_AUTO_LENGTH,
+                                &warning) != napi_ok ||
+        warning == nullptr) {
+      warning = undefined;
+    }
+  }
+
+  if (SSL_CTX_set_tmp_dh(holder->ctx, dh) != 1) {
+    DH_free(dh);
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Error setting temp DH parameter");
+    return nullptr;
+  }
+  DH_free(dh);
+  return warning;
+}
+
 napi_value CryptoSecureContextGetCertificate(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -1748,7 +2481,7 @@ EVP_PKEY* ParsePrivateKeyWithPassphrase(const uint8_t* data,
   };
   auto password_callback = [](char* buf, int size, int /*rwflag*/, void* userdata) -> int {
     auto* cb_data = static_cast<PasswordCallbackData*>(userdata);
-    if (cb_data == nullptr || !cb_data->provided) return -1;
+    if (cb_data == nullptr || !cb_data->provided) return 0;
     if (size <= 0) return 0;
     const size_t max_copy = static_cast<size_t>(size);
     const size_t copy_len = cb_data->len < max_copy ? cb_data->len : max_copy;
@@ -3176,6 +3909,176 @@ void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback fn)
 
 }  // namespace
 
+napi_value CryptoGetBundledRootCertificates(napi_env env, napi_callback_info /*info*/) {
+  std::vector<std::string> certs;
+  certs.reserve(sizeof(kBundledRootCerts) / sizeof(kBundledRootCerts[0]));
+  for (const char* pem : kBundledRootCerts) {
+    if (pem != nullptr) certs.emplace_back(pem);
+  }
+  return CreateStringArray(env, certs);
+}
+
+napi_value CryptoGetExtraCACertificates(napi_env env, napi_callback_info /*info*/) {
+  return CreatePemArrayFromX509Vector(env, GetExtraRootCertificatesParsed());
+}
+
+napi_value CryptoGetSystemCACertificates(napi_env env, napi_callback_info /*info*/) {
+  return CreatePemArrayFromX509Vector(env, GetSystemRootCertificatesParsed());
+}
+
+napi_value CryptoGetUserRootCertificates(napi_env env, napi_callback_info /*info*/) {
+  std::lock_guard<std::mutex> lock(g_user_root_certs_mutex);
+  if (g_user_root_certs == nullptr) {
+    napi_value out = nullptr;
+    napi_create_array(env, &out);
+    return out;
+  }
+
+  std::vector<X509*> certs;
+  certs.reserve(g_user_root_certs->size());
+  for (X509* cert : *g_user_root_certs) {
+    certs.push_back(cert);
+  }
+  return CreatePemArrayFromX509Vector(env, certs);
+}
+
+napi_value CryptoResetRootCertStore(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1 || argv[0] == nullptr) {
+    return nullptr;
+  }
+
+  std::vector<std::string> cert_texts;
+  if (!GetByteStringArray(env, argv[0], &cert_texts)) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "certs must be an Array");
+    return nullptr;
+  }
+
+  auto next_user_root_certs = std::make_unique<X509Set>();
+  std::vector<X509*> parsed_certs;
+  parsed_certs.reserve(cert_texts.size());
+  bool saw_no_valid_cert = false;
+
+  for (const auto& cert_text : cert_texts) {
+    if (IsPlainTextBlob(cert_text) && !LooksLikePemCertificateText(cert_text)) {
+      saw_no_valid_cert = true;
+      continue;
+    }
+
+    BIO* bio = BIO_new_mem_buf(cert_text.data(), static_cast<int>(cert_text.size()));
+    if (bio == nullptr) {
+      FreeCertificates(&parsed_certs);
+      ThrowLastOpenSslError(env, "ERR_TLS_CERT", "Failed to parse certificate");
+      return nullptr;
+    }
+
+    std::vector<X509*> certs_from_bio;
+    const unsigned long err = LoadCertsFromBio(&certs_from_bio, bio);
+    BIO_free(bio);
+    if (err != 0) {
+      const char* reason = ERR_reason_error_string(err);
+      if ((ERR_GET_LIB(err) == ERR_LIB_PEM &&
+           ERR_GET_REASON(err) == PEM_R_NO_START_LINE) ||
+          (reason != nullptr && std::strstr(reason, "no start line") != nullptr)) {
+        ERR_clear_error();
+        FreeCertificates(&certs_from_bio);
+        saw_no_valid_cert = true;
+        continue;
+      }
+      FreeCertificates(&certs_from_bio);
+      FreeCertificates(&parsed_certs);
+      ThrowOpenSslError(env, nullptr, err, "Failed to parse certificate");
+      return nullptr;
+    }
+    if (certs_from_bio.empty()) {
+      ERR_clear_error();
+      X509* cert = ParseX509(reinterpret_cast<const uint8_t*>(cert_text.data()), cert_text.size());
+      if (cert == nullptr) {
+        const unsigned long parse_err = ERR_peek_last_error();
+        const char* parse_reason = parse_err != 0 ? ERR_reason_error_string(parse_err) : nullptr;
+        if (parse_err != 0 &&
+            !((ERR_GET_LIB(parse_err) == ERR_LIB_PEM &&
+               ERR_GET_REASON(parse_err) == PEM_R_NO_START_LINE) ||
+              (parse_reason != nullptr && std::strstr(parse_reason, "no start line") != nullptr))) {
+          FreeCertificates(&parsed_certs);
+          ERR_clear_error();
+          ThrowOpenSslError(env, nullptr, parse_err, "Failed to parse certificate");
+          return nullptr;
+        }
+        ERR_clear_error();
+      } else {
+        X509_free(cert);
+      }
+      FreeCertificates(&certs_from_bio);
+      saw_no_valid_cert = true;
+      continue;
+    }
+
+    for (X509* cert : certs_from_bio) {
+      auto [it, inserted] = next_user_root_certs->insert(cert);
+      if (!inserted) {
+        X509_free(cert);
+      } else {
+        parsed_certs.push_back(cert);
+      }
+    }
+  }
+
+  if (parsed_certs.empty() && saw_no_valid_cert) {
+    ERR_clear_error();
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "No valid certificates found in the provided array");
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lock(g_user_root_certs_mutex);
+  if (g_user_root_certs != nullptr) {
+    for (X509* cert : *g_user_root_certs) {
+      X509_free(cert);
+    }
+  }
+  g_user_root_certs = std::move(next_user_root_certs);
+
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value CryptoStartLoadingCertificatesOffThread(napi_env env, napi_callback_info /*info*/) {
+  bool use_openssl_ca = false;
+  bool use_system_ca = false;
+  (void)GetEffectiveCaOptions(env, &use_openssl_ca, &use_system_ca);
+  if (use_openssl_ca) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+
+  bool expected = false;
+  if (!g_tried_cert_loading_off_thread.compare_exchange_strong(expected, true)) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
+
+  RootCertLoadPlan plan;
+  plan.load_bundled = true;
+  plan.load_extra = std::getenv("NODE_EXTRA_CA_CERTS") != nullptr;
+  plan.load_system = use_system_ca;
+
+  {
+    std::lock_guard<std::mutex> lock(g_cert_loading_thread_mutex);
+    g_root_cert_load_plan = plan;
+    const int rc = uv_thread_create(&g_cert_loading_thread, LoadCACertificatesThread, &g_root_cert_load_plan);
+    g_cert_loading_thread_started.store(rc == 0);
+    if (rc == 0) EnsureRootCertThreadCleanupHook(env);
+  }
+
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
 napi_value InstallCryptoBinding(napi_env env) {
   napi_value binding = nullptr;
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
@@ -3212,8 +4115,11 @@ napi_value InstallCryptoBinding(napi_env env) {
   SetMethod(env, binding, "secureContextSetSessionIdContext", CryptoSecureContextSetSessionIdContext);
   SetMethod(env, binding, "secureContextSetSessionTimeout", CryptoSecureContextSetSessionTimeout);
   SetMethod(env, binding, "secureContextSetTicketKeys", CryptoSecureContextSetTicketKeys);
+  SetMethod(env, binding, "secureContextGetTicketKeys", CryptoSecureContextGetTicketKeys);
+  SetMethod(env, binding, "secureContextLoadPKCS12", CryptoSecureContextLoadPKCS12);
   SetMethod(env, binding, "secureContextSetSigalgs", CryptoSecureContextSetSigalgs);
   SetMethod(env, binding, "secureContextSetECDHCurve", CryptoSecureContextSetECDHCurve);
+  SetMethod(env, binding, "secureContextSetDHParam", CryptoSecureContextSetDHParam);
   SetMethod(env, binding, "secureContextGetCertificate", CryptoSecureContextGetCertificate);
   SetMethod(env, binding, "secureContextGetIssuer", CryptoSecureContextGetIssuer);
   SetMethod(env, binding, "signOneShot", CryptoSignOneShot);

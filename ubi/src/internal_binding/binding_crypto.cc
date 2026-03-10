@@ -33,6 +33,7 @@
 #include <openssl/x509.h>
 
 #include "ncrypto.h"
+#include "crypto/ubi_crypto_binding.h"
 #include "internal_binding/helpers.h"
 #include "crypto/ubi_secure_context_bridge.h"
 #include "ubi_async_wrap.h"
@@ -722,6 +723,41 @@ napi_value CreateOpenSslError(napi_env env,
   SetErrorStringProperty(env, error, "function", ERR_func_error_string(err));
 #endif
   SetErrorStringProperty(env, error, "reason", ERR_reason_error_string(err));
+  return error;
+}
+
+napi_value CreateOpenSslErrorStackException(napi_env env, const ncrypto::CryptoErrorList& errors) {
+  if (errors.empty()) {
+    return CreateErrorWithCode(env, nullptr, "Ok");
+  }
+
+  const std::string& message = errors.peek_back();
+  napi_value message_value = nullptr;
+  napi_value error = nullptr;
+  if (napi_create_string_utf8(env, message.c_str(), message.size(), &message_value) != napi_ok ||
+      message_value == nullptr ||
+      napi_create_error(env, nullptr, message_value, &error) != napi_ok ||
+      error == nullptr) {
+    return CreateErrorWithCode(env, nullptr, message.c_str());
+  }
+
+  if (errors.size() > 1) {
+    napi_value stack = nullptr;
+    if (napi_create_array_with_length(env, errors.size() - 1, &stack) == napi_ok && stack != nullptr) {
+      uint32_t index = 0;
+      auto current = errors.begin();
+      auto last = errors.end();
+      --last;
+      for (; current != last; ++current, ++index) {
+        napi_value entry = nullptr;
+        if (napi_create_string_utf8(env, current->c_str(), current->size(), &entry) == napi_ok && entry != nullptr) {
+          napi_set_element(env, stack, index, entry);
+        }
+      }
+      napi_set_named_property(env, error, "opensslErrorStack", stack);
+    }
+  }
+
   return error;
 }
 
@@ -4070,6 +4106,8 @@ struct SecureContextWrap {
   int32_t max_proto = 0;
 };
 
+ubi::crypto::SecureContextHolder* GetSecureContextHolderFromWrap(napi_env env, SecureContextWrap* wrap);
+
 void SecureContextFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<SecureContextWrap*>(data);
   if (wrap == nullptr) return;
@@ -4090,6 +4128,61 @@ SecureContextWrap* RequireSecureContext(napi_env env, napi_value this_arg) {
   if (wrap != nullptr) return wrap;
   napi_throw_type_error(env, nullptr, "Illegal invocation");
   return nullptr;
+}
+
+napi_value SecureContextExternalGetter(napi_env env, napi_callback_info info) {
+  napi_value this_arg = nullptr;
+  size_t argc = 0;
+  if (napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr) != napi_ok) return nullptr;
+  SecureContextWrap* wrap = RequireSecureContext(env, this_arg);
+  if (wrap == nullptr) return nullptr;
+
+  ubi::crypto::SecureContextHolder* holder = GetSecureContextHolderFromWrap(env, wrap);
+  if (holder == nullptr || holder->ctx == nullptr) return Undefined(env);
+
+  napi_value external = nullptr;
+  if (napi_create_external(env, holder->ctx, nullptr, nullptr, &external) != napi_ok) return nullptr;
+  return external;
+}
+
+napi_value SecureContextSetClientCertEngine(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) return nullptr;
+  SecureContextWrap* wrap = RequireSecureContext(env, this_arg);
+  if (wrap == nullptr) return nullptr;
+
+#ifndef OPENSSL_NO_ENGINE
+  if (argc < 1 || argv[0] == nullptr) return Undefined(env);
+  std::string engine_id = GetStringValue(env, argv[0]);
+
+  ncrypto::EnginePointer::initEnginesOnce();
+  ncrypto::CryptoErrorList errors(ncrypto::CryptoErrorList::Option::NONE);
+  auto engine = ncrypto::EnginePointer::getEngineByName(engine_id.c_str(), &errors);
+  if (!engine) {
+    napi_throw(env, CreateOpenSslErrorStackException(env, errors));
+    return nullptr;
+  }
+
+  ubi::crypto::SecureContextHolder* holder = GetSecureContextHolderFromWrap(env, wrap);
+  if (holder == nullptr || holder->ctx == nullptr) {
+    napi_throw_error(env, "ERR_INVALID_ARG_TYPE", "context must be a secure context handle");
+    return nullptr;
+  }
+
+  if (!SSL_CTX_set_client_cert_engine(holder->ctx, engine.get())) {
+    errors.capture();
+    napi_throw(env, CreateOpenSslErrorStackException(env, errors));
+    return nullptr;
+  }
+  return Undefined(env);
+#else
+  napi_throw(env, CreateErrorWithCode(env,
+                                      "ERR_CRYPTO_CUSTOM_ENGINE_NOT_SUPPORTED",
+                                      "Custom engines not supported by this OpenSSL"));
+  return nullptr;
+#endif
 }
 
 void SecureContextCallBindingMethod(napi_env env,
@@ -4166,9 +4259,14 @@ napi_value SecureContextInit(napi_env env, napi_callback_info info) {
     if (CallBindingMethod(env, binding, "secureContextCreate", 0, nullptr, &handle)) {
       ResetRef(env, &wrap->handle_ref);
       napi_create_reference(env, handle, 1, &wrap->handle_ref);
-      napi_value init_argv[3] = {handle, argc >= 2 ? argv[1] : Undefined(env), argc >= 3 ? argv[2] : Undefined(env)};
+      napi_value init_argv[4] = {
+          handle,
+          argc >= 1 ? argv[0] : Undefined(env),
+          argc >= 2 ? argv[1] : Undefined(env),
+          argc >= 3 ? argv[2] : Undefined(env),
+      };
       napi_value ignored = nullptr;
-      CallBindingMethod(env, binding, "secureContextInit", 3, init_argv, &ignored);
+      CallBindingMethod(env, binding, "secureContextInit", 4, init_argv, &ignored);
     }
   }
   return Undefined(env);
@@ -4280,6 +4378,18 @@ napi_value SecureContextSetECDHCurve(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+napi_value SecureContextSetDHParam(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value this_arg = nullptr;
+  napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
+  SecureContextWrap* wrap = RequireSecureContext(env, this_arg);
+  if (wrap == nullptr) return Undefined(env);
+  napi_value call_argv[1] = {argc >= 1 ? argv[0] : Undefined(env)};
+  napi_value out = CallSecureContextBindingMethodReturningValue(env, wrap, "secureContextSetDHParam", 1, call_argv);
+  return out != nullptr ? out : Undefined(env);
+}
+
 napi_value SecureContextSetSigalgs(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -4326,6 +4436,16 @@ napi_value SecureContextSetTicketKeys(napi_env env, napi_callback_info info) {
   napi_value call_argv[1] = {argc >= 1 ? argv[0] : Undefined(env)};
   SecureContextCallBindingMethod(env, wrap, "secureContextSetTicketKeys", 1, call_argv);
   return Undefined(env);
+}
+
+napi_value SecureContextGetTicketKeys(napi_env env, napi_callback_info info) {
+  napi_value this_arg = nullptr;
+  size_t argc = 0;
+  napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
+  SecureContextWrap* wrap = RequireSecureContext(env, this_arg);
+  if (wrap == nullptr) return Undefined(env);
+  napi_value out = CallSecureContextBindingMethodReturningValue(env, wrap, "secureContextGetTicketKeys", 0, nullptr);
+  return out != nullptr ? out : Undefined(env);
 }
 
 napi_value SecureContextSetAllowPartialTrustChain(napi_env env, napi_callback_info info) {
@@ -4411,10 +4531,8 @@ napi_value SecureContextLoadPKCS12(napi_env env, napi_callback_info info) {
   SecureContextWrap* wrap = RequireSecureContext(env, this_arg);
   if (wrap == nullptr) return Undefined(env);
 
-  napi_value binding = GetBinding(env);
-  if (binding == nullptr) return Undefined(env);
-  napi_value ignored = nullptr;
-  if (!CallBindingMethod(env, binding, "parsePfx", argc, argv, &ignored)) return nullptr;
+  napi_value call_argv[2] = {argc >= 1 ? argv[0] : Undefined(env), argc >= 2 ? argv[1] : Undefined(env)};
+  SecureContextCallBindingMethod(env, wrap, "secureContextLoadPKCS12", argc, call_argv);
   return Undefined(env);
 }
 
@@ -8680,12 +8798,12 @@ napi_value ResolveCrypto(napi_env env, const ResolveOptions& options) {
   EnsurePropertyMethod(env, out, "setFipsCrypto", CryptoSetFips);
   EnsurePropertyMethod(env, out, "testFipsCrypto", CryptoTestFips);
   EnsurePropertyMethod(env, out, "getOpenSSLSecLevelCrypto", CryptoGetOpenSSLSecLevel);
-  EnsurePropertyMethod(env, out, "getBundledRootCertificates", CryptoGetEmptyArray);
-  EnsurePropertyMethod(env, out, "getExtraCACertificates", CryptoGetEmptyArray);
-  EnsurePropertyMethod(env, out, "getSystemCACertificates", CryptoGetEmptyArray);
-  EnsurePropertyMethod(env, out, "getUserRootCertificates", CryptoGetEmptyArray);
-  EnsurePropertyMethod(env, out, "resetRootCertStore", CryptoNoop);
-  EnsurePropertyMethod(env, out, "startLoadingCertificatesOffThread", CryptoNoop);
+  EnsurePropertyMethod(env, out, "getBundledRootCertificates", ubi::crypto::CryptoGetBundledRootCertificates);
+  EnsurePropertyMethod(env, out, "getExtraCACertificates", ubi::crypto::CryptoGetExtraCACertificates);
+  EnsurePropertyMethod(env, out, "getSystemCACertificates", ubi::crypto::CryptoGetSystemCACertificates);
+  EnsurePropertyMethod(env, out, "getUserRootCertificates", ubi::crypto::CryptoGetUserRootCertificates);
+  EnsurePropertyMethod(env, out, "resetRootCertStore", ubi::crypto::CryptoResetRootCertStore);
+  EnsurePropertyMethod(env, out, "startLoadingCertificatesOffThread", ubi::crypto::CryptoStartLoadingCertificatesOffThread);
   EnsurePropertyMethod(env, out, "createNativeKeyObjectClass", CryptoCreateNativeKeyObjectClass);
   EnsurePropertyMethod(env, out, "ECDHConvertKey", EcdhConvertKey);
   EnsureStubMethod(env, out, "setEngine");
@@ -8770,16 +8888,18 @@ napi_value ResolveCrypto(napi_env env, const ResolveOptions& options) {
                    nullptr},
                   {"setECDHCurve", nullptr, SecureContextSetECDHCurve, nullptr, nullptr, nullptr, napi_default,
                    nullptr},
-                  {"setDHParam", nullptr, SecureContextNoop, nullptr, nullptr, nullptr, napi_default, nullptr},
+                  {"setDHParam", nullptr, SecureContextSetDHParam, nullptr, nullptr, nullptr, napi_default, nullptr},
                   {"setSigalgs", nullptr, SecureContextSetSigalgs, nullptr, nullptr, nullptr, napi_default, nullptr},
                   {"setEngineKey", nullptr, SecureContextNoop, nullptr, nullptr, nullptr, napi_default, nullptr},
-                  {"setClientCertEngine", nullptr, SecureContextNoop, nullptr, nullptr, nullptr, napi_default,
-                   nullptr},
+                  {"setClientCertEngine", nullptr, SecureContextSetClientCertEngine, nullptr, nullptr, nullptr,
+                   napi_default, nullptr},
                   {"setSessionIdContext", nullptr, SecureContextSetSessionIdContext, nullptr, nullptr, nullptr,
                    napi_default, nullptr},
                   {"setSessionTimeout", nullptr, SecureContextSetSessionTimeout, nullptr, nullptr, nullptr,
                    napi_default, nullptr},
                   {"setTicketKeys", nullptr, SecureContextSetTicketKeys, nullptr, nullptr, nullptr, napi_default,
+                   nullptr},
+                  {"getTicketKeys", nullptr, SecureContextGetTicketKeys, nullptr, nullptr, nullptr, napi_default,
                    nullptr},
                   {"setAllowPartialTrustChain", nullptr, SecureContextSetAllowPartialTrustChain, nullptr, nullptr,
                    nullptr, napi_default, nullptr},
@@ -8793,6 +8913,25 @@ napi_value ResolveCrypto(napi_env env, const ResolveOptions& options) {
                   {"getMaxProto", nullptr, SecureContextGetMaxProto, nullptr, nullptr, nullptr, napi_default, nullptr},
                   {"close", nullptr, SecureContextClose, nullptr, nullptr, nullptr, napi_default, nullptr},
               });
+  napi_value secure_context_ctor = nullptr;
+  if (napi_get_named_property(env, out, "SecureContext", &secure_context_ctor) == napi_ok &&
+      secure_context_ctor != nullptr) {
+    napi_value secure_context_proto = nullptr;
+    if (napi_get_named_property(env, secure_context_ctor, "prototype", &secure_context_proto) == napi_ok &&
+        secure_context_proto != nullptr) {
+      const napi_property_descriptor external_desc = {
+          "_external",
+          nullptr,
+          nullptr,
+          SecureContextExternalGetter,
+          nullptr,
+          nullptr,
+          napi_default,
+          nullptr,
+      };
+      (void)napi_define_properties(env, secure_context_proto, 1, &external_desc);
+    }
+  }
 
   EnsureClass(env,
               out,

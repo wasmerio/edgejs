@@ -450,7 +450,12 @@ void RunTimersCallback(uv_timer_t* handle) {
 
 void ScheduleFromNextExpiry(TimersHostState* st, double next_expiry, double now) {
   if (st == nullptr || !st->timer_initialized) return;
-  if (next_expiry == 0 || !std::isfinite(next_expiry)) return;
+  if (next_expiry == 0 || !std::isfinite(next_expiry)) {
+    uv_timer_stop(&st->timer_handle);
+    ApplyTimerRefState(st, false);
+    DebugLog("scheduleFromNextExpiry(next=%.3f, now=%.3f) => stop", next_expiry, now);
+    return;
+  }
 
   const bool ref = next_expiry > 0;
   const double abs_expiry = std::abs(next_expiry);
@@ -504,6 +509,7 @@ napi_value ScheduleTimer(napi_env env, napi_callback_info info) {
       st->timer_rescheduled_in_callback = true;
     }
     uv_timer_start(&st->timer_handle, RunTimersCallback, static_cast<uint64_t>(duration), 0);
+    ApplyTimerRefState(st, ActiveTimeoutCount(st) > 0);
   }
 
   napi_value undefined = nullptr;

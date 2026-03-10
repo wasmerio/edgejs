@@ -2420,13 +2420,28 @@ napi_status UbiMakeCallbackWithFlags(napi_env env,
   callback_scope_depth++;
   napi_status status = UbiCallCallbackWithDomain(env, recv, callback, argc, argv, result);
 
-  bool has_pending = false;
   const bool skip_task_queues = (flags & kUbiMakeCallbackSkipTaskQueues) != 0;
-  if (status == napi_ok &&
-      callback_scope_depth == 1 &&
-      !skip_task_queues &&
-      napi_is_exception_pending(env, &has_pending) == napi_ok &&
-      !has_pending) {
+  bool has_pending = false;
+  if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+    std::string fatal_error;
+    const int fatal_status = HandlePendingExceptionAfterLoopStep(env, &fatal_error);
+    if (fatal_status >= 0) {
+      if (!fatal_error.empty()) {
+        if (fatal_error.back() != '\n') fatal_error.push_back('\n');
+        WriteTextToFd(2, fatal_error);
+      }
+      if (UbiWorkerEnvIsMainThread(env) && !UbiWorkerEnvIsInternalThread(env)) {
+        std::_Exit(fatal_status);
+      }
+      UbiWorkerEnvRequestStop(env);
+      if (uv_loop_t* loop = UbiGetEnvLoop(env); loop != nullptr) {
+        uv_stop(loop);
+      }
+      status = napi_pending_exception;
+    } else if (status == napi_pending_exception) {
+      status = napi_ok;
+    }
+  } else if (status == napi_ok && callback_scope_depth == 1 && !skip_task_queues) {
     status = UbiRunCallbackScopeCheckpoint(env);
   }
 

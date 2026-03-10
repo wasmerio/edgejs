@@ -23,6 +23,27 @@ namespace internal_binding {
 
 namespace {
 
+#if defined(NODE_OPENSSL_DEFAULT_CIPHER_LIST)
+#define UBI_DEFAULT_CIPHER_LIST_CORE NODE_OPENSSL_DEFAULT_CIPHER_LIST
+#else
+#define UBI_DEFAULT_CIPHER_LIST_CORE                                           \
+  "TLS_AES_256_GCM_SHA384:"                                                    \
+  "TLS_CHACHA20_POLY1305_SHA256:"                                              \
+  "TLS_AES_128_GCM_SHA256:"                                                    \
+  "ECDHE-RSA-AES128-GCM-SHA256:"                                               \
+  "ECDHE-ECDSA-AES128-GCM-SHA256:"                                             \
+  "ECDHE-RSA-AES256-GCM-SHA384:"                                               \
+  "ECDHE-ECDSA-AES256-GCM-SHA384:"                                             \
+  "DHE-RSA-AES128-GCM-SHA256:"                                                 \
+  "ECDHE-RSA-AES128-SHA256:"                                                   \
+  "DHE-RSA-AES128-SHA256:"                                                     \
+  "ECDHE-RSA-AES256-SHA384:"                                                   \
+  "DHE-RSA-AES256-SHA384:"                                                     \
+  "ECDHE-RSA-AES256-SHA256:"                                                   \
+  "DHE-RSA-AES256-SHA256:"                                                     \
+  "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA"
+#endif
+
 std::unordered_map<napi_env, napi_ref> g_constants_refs;
 std::unordered_set<napi_env> g_constants_cleanup_hook_registered;
 
@@ -163,6 +184,16 @@ void EnsureInt64Default(napi_env env, napi_value target, const char* key, int64_
   if (napi_has_named_property(env, target, key, &has_key) != napi_ok || has_key) return;
   napi_value out = nullptr;
   if (napi_create_int64(env, value, &out) == napi_ok && out != nullptr) {
+    napi_set_named_property(env, target, key, out);
+  }
+}
+
+void EnsureStringDefault(napi_env env, napi_value target, const char* key, const char* value) {
+  if (!IsObjectLike(env, target) || key == nullptr || value == nullptr) return;
+  bool has_key = false;
+  if (napi_has_named_property(env, target, key, &has_key) != napi_ok || has_key) return;
+  napi_value out = nullptr;
+  if (napi_create_string_utf8(env, value, NAPI_AUTO_LENGTH, &out) == napi_ok && out != nullptr) {
     napi_set_named_property(env, target, key, out);
   }
 }
@@ -698,6 +729,13 @@ void NormalizeConstantsShape(napi_env env, napi_value constants) {
                      "SSL_OP_CIPHER_SERVER_PREFERENCE",
                      static_cast<int64_t>(SSL_OP_CIPHER_SERVER_PREFERENCE));
 #endif
+#ifdef SSL_OP_NO_TICKET
+  EnsureInt64Default(env,
+                     crypto_obj,
+                     "SSL_OP_NO_TICKET",
+                     static_cast<int64_t>(SSL_OP_NO_TICKET));
+#endif
+  EnsureStringDefault(env, crypto_obj, "defaultCoreCipherList", UBI_DEFAULT_CIPHER_LIST_CORE);
   EnsureInt32Default(env, crypto_obj, "POINT_CONVERSION_COMPRESSED", POINT_CONVERSION_COMPRESSED);
   EnsureInt32Default(env, crypto_obj, "POINT_CONVERSION_UNCOMPRESSED", POINT_CONVERSION_UNCOMPRESSED);
   EnsureInt32Default(env, crypto_obj, "POINT_CONVERSION_HYBRID", POINT_CONVERSION_HYBRID);

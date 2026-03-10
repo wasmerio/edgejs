@@ -34,6 +34,7 @@ struct SecureContextHolder {
   X509* cert = nullptr;
   X509* issuer = nullptr;
   std::vector<unsigned char> ticket_keys;
+  bool ticket_callback_installed = false;
 };
 
 inline bool GetSecureContextHolder(napi_env env, napi_value value, SecureContextHolder** out) {
