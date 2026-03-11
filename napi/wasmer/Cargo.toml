@@ -9,13 +9,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-wasmer = { version = "=7.0.1", features = ["llvm"] }
-wasmer-compiler-llvm = "=7.0.1"
-wasmer-types = "=7.0.1"
-wasmer-wasix = "0.700.1"
-virtual-fs = "0.700.1"
-virtual-mio = "0.700.1"
-wasmer-cache = "7.0.1"
+wasmer = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/api", features = ["llvm"] }
+wasmer-compiler-llvm = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/compiler-llvm" }
+wasmer-types = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/types" }
+wasmer-wasix = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/wasix" }
+virtual-fs = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/virtual-fs" }
+virtual-mio = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/virtual-io" }
+wasmer-cache = { path = "/home/theduke/dev/github.com/wasmerio/wasmer/lib/cache" }
 
 [build-dependencies]
 cc = "1"

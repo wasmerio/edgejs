@@ -5,18 +5,23 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use virtual_fs::{AsyncReadExt, FileSystem, RootFileSystemBuilder, TmpFileSystem};
+use virtual_fs::{AsyncReadExt, FileSystem};
 use wasmer::Table;
 use wasmer::{
+    ExternType,
     imports,
     sys::{EngineBuilder, Features},
-    FunctionEnv, Instance, Memory, Module, Store, TypedFunction,
+    FunctionEnv, Imports, Instance, Memory, Module, Store, TypedFunction, Value,
 };
 use wasmer_cache::{Cache, FileSystemCache, Hash as CacheHash};
 use wasmer_compiler_llvm::{LLVMOptLevel, LLVM};
-use wasmer_wasix::{Pipe, WasiEnv, WasiError};
+use wasmer_types::ModuleHash;
+use wasmer_wasix::{
+    Pipe, PluggableRuntime, WasiError,
+    runners::wasi::{RuntimeOrEngine, WasiRunner},
+    runtime::task_manager::tokio::TokioTaskManager,
+};
 
-use crate::guest::callback::with_top_level_callback_state;
 use crate::guest::napi::register_env_imports;
 use crate::guest::napi::register_napi_imports;
 
@@ -86,17 +91,6 @@ fn spawn_pipe_drain_thread(
         }
         String::from_utf8(captured).context("WASIX stdio was not valid UTF-8")
     })
-}
-
-fn ensure_guest_dir(root_fs: &TmpFileSystem, dir: &Path) {
-    let mut current = PathBuf::new();
-    for component in dir.components() {
-        current.push(component.as_os_str());
-        if current == Path::new("/") {
-            continue;
-        }
-        let _ = root_fs.create_dir(&current);
-    }
 }
 
 // ============================================================
@@ -215,28 +209,37 @@ pub fn run_wasix_main_capture_stdio(
     let exit_code = {
         let wasm_bytes = std::fs::read(wasm_path)
             .with_context(|| format!("failed to read wasm file at {}", wasm_path.display()))?;
-        let mut store = make_store();
+        let store = make_store();
+        let engine = store.engine().clone();
         let module = load_or_compile_module(&store, &wasm_bytes)?;
-        let mut builder = WasiEnv::builder("guest-test")
-            .engine(store.engine().clone())
-            .stdout(Box::new(stdout_tx))
-            .stderr(Box::new(stderr_tx));
-        if !args.is_empty() {
-            builder = builder.args(args.iter().map(|s| s.as_str()));
-        }
-        let repo_root = resolve_repo_root(&[wasm_path]);
-        if repo_root.is_some() || !extra_mounts.is_empty() {
-            let mut mapped_dirs = Vec::new();
-            if repo_root.is_some() {
-                mapped_dirs.push("/node-lib");
-                mapped_dirs.push("/node/deps");
-            }
-            for mount in extra_mounts {
-                if let Some(path) = mount.guest_path.to_str() {
-                    mapped_dirs.push(path);
+        let module_hash = ModuleHash::sha256(&wasm_bytes);
+
+        let imported_memory_type = module.imports().find_map(|import| {
+            if import.module() == "env" && import.name() == "memory" {
+                if let ExternType::Memory(ty) = import.ty() {
+                    return Some(*ty);
                 }
             }
-            let root_fs = RootFileSystemBuilder::default().build_ext(&mapped_dirs);
+            None
+        });
+
+        let imported_table_type = module.imports().find_map(|import| {
+            if import.module() == "env" && import.name() == "__indirect_function_table" {
+                if let ExternType::Table(ty) = import.ty() {
+                    return Some(*ty);
+                }
+            }
+            None
+        });
+
+        let mut runner = WasiRunner::new();
+        runner
+            .with_stdout(Box::new(stdout_tx))
+            .with_stderr(Box::new(stderr_tx))
+            .with_args(args.iter().cloned());
+
+        let repo_root = resolve_repo_root(&[wasm_path]);
+        if repo_root.is_some() || !extra_mounts.is_empty() {
             let host_handle = tokio::runtime::Handle::current();
             if let Some(repo_root) = repo_root {
                 let node_lib_dir = repo_root.join("node-lib");
@@ -246,14 +249,10 @@ pub fn run_wasix_main_capture_stdio(
                             format!("failed to create host fs for {}", node_lib_dir.display())
                         })?,
                 );
-                TmpFileSystem::mount(&root_fs, "/node-lib".into(), &node_lib_fs, "/".into())
-                    .with_context(|| {
-                        format!("failed to mount {} at /node-lib", node_lib_dir.display())
-                    })?;
+                runner.with_mount("/node-lib".to_string(), node_lib_fs);
 
                 let node_deps_dir = repo_root.join("node/deps");
                 if node_deps_dir.is_dir() {
-                    let _ = root_fs.create_dir(Path::new("/node"));
                     let node_deps_fs: Arc<dyn FileSystem + Send + Sync> = Arc::new(
                         virtual_fs::host_fs::FileSystem::new(
                             host_handle.clone(),
@@ -263,19 +262,11 @@ pub fn run_wasix_main_capture_stdio(
                             format!("failed to create host fs for {}", node_deps_dir.display())
                         })?,
                     );
-                    TmpFileSystem::mount(&root_fs, "/node/deps".into(), &node_deps_fs, "/".into())
-                        .with_context(|| {
-                            format!("failed to mount {} at /node/deps", node_deps_dir.display())
-                        })?;
+                    runner.with_mount("/node/deps".to_string(), node_deps_fs);
                 }
             }
 
             for mount in extra_mounts {
-                let guest_path = mount.guest_path.clone();
-                let guest_parent = guest_path.parent().unwrap_or_else(|| Path::new("/"));
-                if guest_parent != Path::new("/") {
-                    ensure_guest_dir(&root_fs, guest_parent);
-                }
                 let host_fs: Arc<dyn FileSystem + Send + Sync> = Arc::new(
                     virtual_fs::host_fs::FileSystem::new(
                         host_handle.clone(),
@@ -285,126 +276,56 @@ pub fn run_wasix_main_capture_stdio(
                         format!("failed to create host fs for {}", mount.host_path.display())
                     })?,
                 );
-                TmpFileSystem::mount(&root_fs, guest_path.clone(), &host_fs, "/".into())
-                    .with_context(|| {
-                        format!(
-                            "failed to mount {} at {}",
-                            mount.host_path.display(),
-                            guest_path.display()
-                        )
-                    })?;
+                runner.with_mount(mount.guest_path.display().to_string(), host_fs);
             }
-            builder = builder.sandbox_fs(root_fs);
-            builder.add_preopen_dir("/")?;
         }
 
-        let mut wasi_env = builder
-            .finalize(&mut store)
-            .context("failed to finalize WASIX environment")?;
-        let mut import_object = wasi_env
-            .import_object_for_all_wasi_versions(&mut store, &module)
-            .context("failed to generate WASIX imports")?;
+        let task_manager = Arc::new(TokioTaskManager::new(tokio::runtime::Handle::current()));
+        let mut runtime = PluggableRuntime::new(task_manager);
+        runtime.set_engine(engine);
+        runtime.with_additional_imports(move |store| {
+            let mut import_object = Imports::new();
+            register_env_imports(store, &mut import_object);
 
-        let imported_memory_type = module
-            .imports()
-            .find_map(|import| {
-                if import.module() == "env" && import.name() == "memory" {
-                    if let wasmer::ExternType::Memory(ty) = import.ty() {
-                        return Some(*ty);
-                    }
-                }
-                None
-            })
-            .context("WASIX module does not import env.memory")?;
-        let memory = Memory::new(&mut store, imported_memory_type)
-            .context("failed to create imported WASIX memory")?;
-        import_object.define("env", "memory", memory.clone());
-        register_env_imports(&mut store, &mut import_object);
-
-        let func_env = FunctionEnv::new(
-            &mut store,
-            RuntimeEnv {
-                memory: Some(memory.clone()),
+            let runtime_env = RuntimeEnv {
+                memory: None,
                 malloc_fn: None,
                 table: None,
                 guest_data_ptrs: std::collections::HashMap::new(),
-            },
-        );
-        register_napi_imports(&mut store, &func_env, &mut import_object);
+            };
+            let func_env = FunctionEnv::new(store, runtime_env);
+            register_napi_imports(store, &func_env, &mut import_object);
 
-        let instance = Instance::new(&mut store, &module, &import_object)
-            .context("failed to instantiate WASIX wasm module")?;
+            if let Some(memory_type) = imported_memory_type {
+                let memory = Memory::new(store, memory_type)?;
+                import_object.define("env", "memory", memory.clone());
+                func_env.as_mut(store).memory = Some(memory);
+            }
 
-        // Store guest allocator for guest-memory-backed ArrayBuffers.
-        for export_name in ["ubi_guest_malloc", "malloc"] {
-            if let Ok(malloc) = instance
-                .exports
-                .get_typed_function::<i32, i32>(&store, export_name)
-            {
-                func_env.as_mut(&mut store).malloc_fn = Some(malloc);
-                break;
+            if let Some(table_type) = imported_table_type {
+                let table = Table::new(store, table_type, Value::FuncRef(None))?;
+                import_object.define("env", "__indirect_function_table", table.clone());
+                func_env.as_mut(store).table = Some(table);
+            }
+
+            Ok(import_object)
+        });
+
+        match runner.run_wasm(
+            RuntimeOrEngine::Runtime(Arc::new(runtime)),
+            "guest-test",
+            module,
+            module_hash,
+        ) {
+            Ok(()) => 0,
+            Err(err) => {
+                if let Some(WasiError::Exit(code)) = err.downcast_ref::<WasiError>() {
+                    i32::from(*code)
+                } else {
+                    return Err(err).context("failed to run WASIX module through WasiRunner");
+                }
             }
         }
-
-        func_env.as_mut(&mut store).table = instance
-            .exports
-            .get_table("__indirect_function_table")
-            .ok()
-            .cloned();
-
-        let wasi_handles = wasmer_wasix::WasiModuleTreeHandles::Static(
-            wasmer_wasix::WasiModuleInstanceHandles::new(
-                memory.clone(),
-                &store,
-                instance.clone(),
-                func_env.as_ref(&store).table.clone(),
-            ),
-        );
-        wasi_env
-            .initialize_handles_and_layout(&mut store, instance.clone(), wasi_handles, None, true)
-            .context("failed to initialize WASIX environment")?;
-
-        let callback_table = func_env.as_ref(&store).table.clone();
-        let exit = if let Ok(main) = instance
-            .exports
-            .get_typed_function::<(i32, i32), i32>(&mut store, "main")
-        {
-            with_top_level_callback_state(&mut store, callback_table.clone(), |store| {
-                if let Ok(ctors) = instance
-                    .exports
-                    .get_typed_function::<(), ()>(store, "__wasm_call_ctors")
-                {
-                    let _ = ctors.call(store);
-                }
-                main.call(store, 0, 0)
-            })
-            .map_err(|err| anyhow::anyhow!("WASIX `main` call failed: {err:?}"))?
-        } else {
-            let start: TypedFunction<(), ()> = instance
-                .exports
-                .get_typed_function(&mut store, "_start")
-                .context("failed to find export `_start`")?;
-            let exit = match with_top_level_callback_state(&mut store, callback_table, |store| {
-                start.call(store)
-            }) {
-                Ok(()) => 0,
-                Err(err) => {
-                    if let Some(WasiError::Exit(code)) = err.downcast_ref::<WasiError>() {
-                        i32::from(*code)
-                    } else {
-                        return Err(anyhow::anyhow!("WASIX `_start` failed: {err}"));
-                    }
-                }
-            };
-            drop(start);
-            exit
-        };
-
-        drop(instance);
-        drop(import_object);
-        drop(wasi_env);
-        drop(store);
-        exit
     };
 
     let stdout = stdout_thread

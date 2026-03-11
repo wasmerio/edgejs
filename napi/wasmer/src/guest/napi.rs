@@ -6,7 +6,7 @@
 
 use std::ffi::CString;
 
-use wasmer::{Function, FunctionEnv, FunctionEnvMut, Imports, Store};
+use wasmer::{AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Imports};
 
 use crate::{RuntimeEnv, guest::{MAX_GUEST_CSTRING_SCAN, callback::CB_ENV_PTR}, snapi::*};
 
@@ -3782,7 +3782,11 @@ fn guest_napi_new_instance(
 // Register all WASM imports for the "napi" module
 // ============================================================
 
-pub fn register_napi_imports(store: &mut Store, fe: &FunctionEnv<RuntimeEnv>, io: &mut Imports) {
+pub fn register_napi_imports(
+    store: &mut impl AsStoreMut,
+    fe: &FunctionEnv<RuntimeEnv>,
+    io: &mut Imports,
+) {
     macro_rules! reg {
         ($name:expr, $func:expr) => {
             io.define(
@@ -4257,7 +4261,7 @@ fn guest_env_uv_get_constrained_memory() -> i64 {
     0
 }
 
-pub fn register_env_imports(store: &mut Store, io: &mut Imports) {
+pub fn register_env_imports(store: &mut impl AsStoreMut, io: &mut Imports) {
     macro_rules! reg_env {
         ($name:expr, $func:expr) => {
             io.define("env", $name, Function::new_typed(store, $func));
