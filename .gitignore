@@ -11,3 +11,7 @@
 v8-*.tar.xz
 /deps/libuv-wasix
 /deps/openssl-wasix
+
+# direnv
+.envrc
+.direnv
