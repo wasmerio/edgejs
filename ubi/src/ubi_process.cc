@@ -3471,7 +3471,13 @@ napi_value ProcessHrtimeCallback(napi_env env, napi_callback_info info) {
 
 napi_value ProcessObjectTitleGetter(napi_env env, napi_callback_info info) {
   napi_value result = nullptr;
-  const std::string title = GetProcessTitleString();
+  std::string title;
+  if (UbiWorkerEnvOwnsProcessState(env)) {
+    title = GetProcessTitleString();
+  } else {
+    title = UbiWorkerEnvGetProcessTitle(env);
+    if (title.empty()) title = GetProcessTitleString();
+  }
   if (napi_create_string_utf8(env, title.c_str(), NAPI_AUTO_LENGTH, &result) != napi_ok) return nullptr;
   return result;
 }
@@ -3482,9 +3488,14 @@ napi_value ProcessObjectTitleSetter(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1 || argv[0] == nullptr) {
     return nullptr;
   }
-  g_process_title = NapiValueToUtf8(env, argv[0]);
-  if (g_process_title.empty()) g_process_title = "node";
-  (void)uv_set_process_title(g_process_title.c_str());
+  std::string title = NapiValueToUtf8(env, argv[0]);
+  if (title.empty()) title = "node";
+  if (UbiWorkerEnvOwnsProcessState(env)) {
+    g_process_title = title;
+    (void)uv_set_process_title(g_process_title.c_str());
+  } else {
+    UbiWorkerEnvSetProcessTitle(env, title);
+  }
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
@@ -3492,7 +3503,8 @@ napi_value ProcessObjectTitleSetter(napi_env env, napi_callback_info info) {
 
 napi_value ProcessObjectDebugPortGetter(napi_env env, napi_callback_info info) {
   napi_value result = nullptr;
-  if (napi_create_uint32(env, g_process_debug_port, &result) != napi_ok) return nullptr;
+  const uint32_t port = UbiWorkerEnvOwnsProcessState(env) ? g_process_debug_port : UbiWorkerEnvGetDebugPort(env);
+  if (napi_create_uint32(env, port, &result) != napi_ok) return nullptr;
   return result;
 }
 
@@ -3513,7 +3525,11 @@ napi_value ProcessObjectDebugPortSetter(napi_env env, napi_callback_info info) {
     ThrowRangeErrorWithCode(env, "ERR_OUT_OF_RANGE", "process.debugPort must be 0 or in range 1024 to 65535");
     return nullptr;
   }
-  g_process_debug_port = static_cast<uint32_t>(port_i32);
+  if (UbiWorkerEnvOwnsProcessState(env)) {
+    g_process_debug_port = static_cast<uint32_t>(port_i32);
+  } else {
+    UbiWorkerEnvSetDebugPort(env, static_cast<uint32_t>(port_i32));
+  }
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
@@ -3889,12 +3905,12 @@ napi_value ProcessMethodsPatchProcessObjectCallback(napi_env env, napi_callback_
   napi_property_descriptor descriptors[3] = {};
   descriptors[0].utf8name = "title";
   descriptors[0].getter = ProcessObjectTitleGetter;
-  descriptors[0].setter = UbiWorkerEnvOwnsProcessState(env) ? ProcessObjectTitleSetter : nullptr;
+  descriptors[0].setter = ProcessObjectTitleSetter;
   descriptors[1].utf8name = "ppid";
   descriptors[1].getter = ProcessObjectPpidGetter;
   descriptors[2].utf8name = "debugPort";
   descriptors[2].getter = ProcessObjectDebugPortGetter;
-  descriptors[2].setter = UbiWorkerEnvOwnsProcessState(env) ? ProcessObjectDebugPortSetter : nullptr;
+  descriptors[2].setter = ProcessObjectDebugPortSetter;
   napi_define_properties(env, argv[0], 3, descriptors);
 
   // Node's process object has a custom constructor on its prototype where
@@ -4748,12 +4764,18 @@ napi_status UbiInstallProcessObject(napi_env env,
   if (owns_process_state && !process_title.empty()) {
     g_process_title = title;
     (void)uv_set_process_title(g_process_title.c_str());
+  } else if (!owns_process_state) {
+    UbiWorkerEnvSetProcessTitle(env, title);
   }
   napi_value title_value = nullptr;
   status = napi_create_string_utf8(env, title.c_str(), NAPI_AUTO_LENGTH, &title_value);
   if (status != napi_ok || title_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
   status = napi_set_named_property(env, process_obj, "title", title_value);
   if (status != napi_ok) return status;
+
+  if (!owns_process_state) {
+    UbiWorkerEnvSetDebugPort(env, g_process_debug_port);
+  }
 
   napi_value argv0_value = nullptr;
   status = napi_create_string_utf8(env, g_ubi_argv0.c_str(), NAPI_AUTO_LENGTH, &argv0_value);
