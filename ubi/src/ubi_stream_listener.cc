@@ -75,6 +75,56 @@ bool UbiStreamEmitRead(UbiStreamListenerState* state,
   return false;
 }
 
+namespace {
+
+bool EmitAfterWriteFrom(UbiStreamListener* listener,
+                        napi_value req_obj,
+                        int status) {
+  for (; listener != nullptr; listener = listener->previous) {
+    if (listener->on_after_write == nullptr) continue;
+    if (listener->on_after_write(listener, req_obj, status)) return true;
+  }
+  return false;
+}
+
+bool EmitAfterShutdownFrom(UbiStreamListener* listener,
+                           napi_value req_obj,
+                           int status) {
+  for (; listener != nullptr; listener = listener->previous) {
+    if (listener->on_after_shutdown == nullptr) continue;
+    if (listener->on_after_shutdown(listener, req_obj, status)) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+bool UbiStreamEmitAfterWrite(UbiStreamListenerState* state,
+                             napi_value req_obj,
+                             int status) {
+  if (state == nullptr) return false;
+  return EmitAfterWriteFrom(state->current, req_obj, status);
+}
+
+bool UbiStreamEmitAfterShutdown(UbiStreamListenerState* state,
+                                napi_value req_obj,
+                                int status) {
+  if (state == nullptr) return false;
+  return EmitAfterShutdownFrom(state->current, req_obj, status);
+}
+
+bool UbiStreamPassAfterWrite(UbiStreamListener* listener,
+                             napi_value req_obj,
+                             int status) {
+  return EmitAfterWriteFrom(listener != nullptr ? listener->previous : nullptr, req_obj, status);
+}
+
+bool UbiStreamPassAfterShutdown(UbiStreamListener* listener,
+                                napi_value req_obj,
+                                int status) {
+  return EmitAfterShutdownFrom(listener != nullptr ? listener->previous : nullptr, req_obj, status);
+}
+
 void UbiStreamNotifyClosed(UbiStreamListenerState* state) {
   if (state == nullptr) return;
   UbiStreamListener* listener = state->current;

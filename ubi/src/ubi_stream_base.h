@@ -58,6 +58,8 @@ void UbiStreamBaseSetInitialStreamProperties(UbiStreamBase* base,
 
 void UbiStreamBaseFinalize(UbiStreamBase* base);
 void UbiStreamBaseOnClosed(UbiStreamBase* base);
+void UbiStreamBaseEmitAfterWrite(UbiStreamBase* base, napi_value req_obj, int status);
+void UbiStreamBaseEmitAfterShutdown(UbiStreamBase* base, napi_value req_obj, int status);
 
 bool UbiStreamBasePushListener(UbiStreamBase* base, UbiStreamListener* listener);
 bool UbiStreamBaseRemoveListener(UbiStreamBase* base, UbiStreamListener* listener);
@@ -85,6 +87,7 @@ napi_value UbiStreamBaseAsyncReset(UbiStreamBase* base);
 napi_value UbiStreamBaseHasRefValue(UbiStreamBase* base);
 napi_value UbiStreamBaseGetWriteQueueSize(UbiStreamBase* base);
 uv_stream_t* UbiStreamBaseGetLibuvStream(napi_env env, napi_value value);
+UbiStreamBase* UbiStreamBaseFromValue(napi_env env, napi_value value);
 
 napi_value UbiStreamBaseMakeInt32(napi_env env, int32_t value);
 napi_value UbiStreamBaseMakeInt64(napi_env env, int64_t value);
@@ -98,6 +101,10 @@ void UbiStreamBaseInvokeReqOnComplete(napi_env env,
                                       int status,
                                       napi_value* argv,
                                       size_t argc);
+int UbiStreamBaseWriteBufferDirect(UbiStreamBase* base,
+                                   napi_value req_obj,
+                                   napi_value payload,
+                                   bool* async_out);
 
 size_t UbiTypedArrayElementSize(napi_typedarray_type type);
 bool UbiStreamBaseExtractByteSpan(napi_env env,

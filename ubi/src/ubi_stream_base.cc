@@ -12,6 +12,7 @@
 #include "ubi_module_loader.h"
 #include "ubi_pipe_wrap.h"
 #include "ubi_runtime.h"
+#include "ubi_js_stream.h"
 #include "ubi_stream_wrap.h"
 #include "ubi_tcp_wrap.h"
 #include "ubi_tty_wrap.h"
@@ -470,6 +471,34 @@ bool UserBufferOnRead(UbiStreamListener* listener, ssize_t nread, const uv_buf_t
   return true;
 }
 
+bool DefaultOnAfterReqFinished(UbiStreamBase* base,
+                               napi_value req_obj,
+                               int status) {
+  if (base == nullptr || base->env == nullptr || req_obj == nullptr) return true;
+  napi_value stream_obj = UbiStreamBaseGetWrapper(base);
+  napi_value argv[3] = {
+      UbiStreamBaseMakeInt32(base->env, status),
+      stream_obj != nullptr ? stream_obj : UbiStreamBaseUndefined(base->env),
+      status < 0 ? GetNamedPropertyValue(base->env, req_obj, "error") : UbiStreamBaseUndefined(base->env),
+  };
+  UbiStreamBaseInvokeReqOnComplete(base->env, req_obj, status, argv, 3);
+  return true;
+}
+
+bool DefaultOnAfterWrite(UbiStreamListener* listener,
+                         napi_value req_obj,
+                         int status) {
+  if (listener == nullptr) return false;
+  return DefaultOnAfterReqFinished(static_cast<UbiStreamBase*>(listener->data), req_obj, status);
+}
+
+bool DefaultOnAfterShutdown(UbiStreamListener* listener,
+                            napi_value req_obj,
+                            int status) {
+  if (listener == nullptr) return false;
+  return DefaultOnAfterReqFinished(static_cast<UbiStreamBase*>(listener->data), req_obj, status);
+}
+
 void DeleteOnReadRefs(UbiStreamBase* base) {
   if (base == nullptr || base->env == nullptr) return;
   DeleteRefIfPresent(base->env, &base->onread_ref);
@@ -534,13 +563,7 @@ void OnWriteDone(uv_write_t* req, int status) {
   auto* wr = static_cast<LibuvWriteReq*>(req->data);
   if (wr == nullptr) return;
   napi_value req_obj = GetRefValue(wr->env, wr->req_obj_ref);
-  napi_value stream_obj = wr->base != nullptr ? UbiStreamBaseGetWrapper(wr->base) : nullptr;
-  napi_value argv[3] = {
-      UbiStreamBaseMakeInt32(wr->env, status),
-      stream_obj != nullptr ? stream_obj : UbiStreamBaseUndefined(wr->env),
-      status < 0 ? GetNamedPropertyValue(wr->env, req_obj, "error") : UbiStreamBaseUndefined(wr->env),
-  };
-  UbiStreamBaseInvokeReqOnComplete(wr->env, req_obj, status, argv, 3);
+  UbiStreamBaseEmitAfterWrite(wr->base, req_obj, status);
   FreeWriteReq(wr);
 }
 
@@ -548,13 +571,7 @@ void OnShutdownDone(uv_shutdown_t* req, int status) {
   auto* sr = static_cast<LibuvShutdownReq*>(req->data);
   if (sr == nullptr) return;
   napi_value req_obj = GetRefValue(sr->env, sr->req_obj_ref);
-  napi_value stream_obj = sr->base != nullptr ? UbiStreamBaseGetWrapper(sr->base) : nullptr;
-  napi_value argv[3] = {
-      UbiStreamBaseMakeInt32(sr->env, status),
-      stream_obj != nullptr ? stream_obj : UbiStreamBaseUndefined(sr->env),
-      status < 0 ? GetNamedPropertyValue(sr->env, req_obj, "error") : UbiStreamBaseUndefined(sr->env),
-  };
-  UbiStreamBaseInvokeReqOnComplete(sr->env, req_obj, status, argv, 3);
+  UbiStreamBaseEmitAfterShutdown(sr->base, req_obj, status);
   DeleteRefIfPresent(sr->env, &sr->req_obj_ref);
   delete sr;
 }
@@ -573,6 +590,8 @@ void UbiStreamBaseInit(UbiStreamBase* base,
 
   base->default_listener.on_alloc = DefaultOnAlloc;
   base->default_listener.on_read = DefaultOnRead;
+  base->default_listener.on_after_write = DefaultOnAfterWrite;
+  base->default_listener.on_after_shutdown = DefaultOnAfterShutdown;
   base->default_listener.data = base;
 
   base->user_buffer_listener.on_alloc = UserBufferOnAlloc;
@@ -744,6 +763,20 @@ void UbiStreamBaseOnUvRead(UbiStreamBase* base, ssize_t nread, const uv_buf_t* b
 
   if (!UbiStreamEmitRead(&base->listener_state, nread, buf) && buf != nullptr && buf->base != nullptr) {
     free(buf->base);
+  }
+}
+
+void UbiStreamBaseEmitAfterWrite(UbiStreamBase* base, napi_value req_obj, int status) {
+  if (base == nullptr) return;
+  if (!UbiStreamEmitAfterWrite(&base->listener_state, req_obj, status) && req_obj != nullptr) {
+    UbiStreamBaseInvokeReqOnComplete(base->env, req_obj, status, nullptr, 0);
+  }
+}
+
+void UbiStreamBaseEmitAfterShutdown(UbiStreamBase* base, napi_value req_obj, int status) {
+  if (base == nullptr) return;
+  if (!UbiStreamEmitAfterShutdown(&base->listener_state, req_obj, status) && req_obj != nullptr) {
+    UbiStreamBaseInvokeReqOnComplete(base->env, req_obj, status, nullptr, 0);
   }
 }
 
@@ -919,6 +952,31 @@ uv_stream_t* UbiStreamBaseGetLibuvStream(napi_env env, napi_value value) {
   return nullptr;
 }
 
+UbiStreamBase* UbiStreamBaseFromValue(napi_env env, napi_value value) {
+  if (env == nullptr || value == nullptr) return nullptr;
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok) return nullptr;
+  if (type == napi_external) {
+    void* data = nullptr;
+    if (napi_get_value_external(env, value, &data) == napi_ok) {
+      return static_cast<UbiStreamBase*>(data);
+    }
+  }
+
+  if (type != napi_object && type != napi_function) {
+    return nullptr;
+  }
+
+  napi_value external = nullptr;
+  if (napi_get_named_property(env, value, "_externalStream", &external) != napi_ok || external == nullptr) {
+    return nullptr;
+  }
+  void* data = nullptr;
+  if (napi_get_value_external(env, external, &data) != napi_ok) return nullptr;
+  return static_cast<UbiStreamBase*>(data);
+}
+
 napi_value UbiStreamBaseMakeInt32(napi_env env, int32_t value) {
   if (env == nullptr) return nullptr;
   napi_value out = nullptr;
@@ -994,6 +1052,31 @@ void UbiStreamBaseInvokeReqOnComplete(napi_env env,
                            &ignored,
                            kUbiMakeCallbackNone);
   UbiStreamReqMarkDone(env, req_obj);
+}
+
+int UbiStreamBaseWriteBufferDirect(UbiStreamBase* base,
+                                   napi_value req_obj,
+                                   napi_value payload,
+                                   bool* async_out) {
+  if (async_out != nullptr) *async_out = false;
+  if (base == nullptr || base->env == nullptr) return UV_EBADF;
+
+  if (base->provider_type == kUbiProviderJsStream) {
+    return UbiJsStreamWriteBuffer(base, req_obj, payload, async_out);
+  }
+
+  napi_value status_value = UbiLibuvStreamWriteBuffer(base, req_obj, payload, nullptr, nullptr);
+  int32_t status = UV_EINVAL;
+  if (status_value == nullptr || napi_get_value_int32(base->env, status_value, &status) != napi_ok) {
+    return UV_EINVAL;
+  }
+
+  if (async_out != nullptr && status == 0) {
+    int32_t* state = UbiGetStreamBaseState(base->env);
+    *async_out = state != nullptr && state[kUbiLastWriteWasAsync] != 0;
+  }
+
+  return status;
 }
 
 size_t UbiTypedArrayElementSize(napi_typedarray_type type) {

@@ -95,43 +95,13 @@ int32_t CallMethodReturningInt32(napi_env env,
   }
   napi_value result = nullptr;
   if (UbiAsyncWrapMakeCallback(
-          env, async_id, self, self, fn, argc, argv, &result, kUbiMakeCallbackSkipTaskQueues) != napi_ok ||
+          env, async_id, self, self, fn, argc, argv, &result, kUbiMakeCallbackNone) != napi_ok ||
       result == nullptr) {
     return fallback;
   }
   int32_t out = fallback;
   if (napi_get_value_int32(env, result, &out) != napi_ok) return fallback;
   return out;
-}
-
-void FinishReq(napi_env env, napi_value req_obj, int32_t status) {
-  if (env == nullptr || req_obj == nullptr) return;
-  napi_value oncomplete = nullptr;
-  napi_value handle = nullptr;
-  napi_get_named_property(env, req_obj, "handle", &handle);
-  napi_value error = nullptr;
-  if (status < 0) napi_get_named_property(env, req_obj, "error", &error);
-  napi_value argv[3] = {
-      UbiStreamBaseMakeInt32(env, status),
-      handle != nullptr ? handle : UbiStreamBaseUndefined(env),
-      error != nullptr ? error : UbiStreamBaseUndefined(env),
-  };
-  if (napi_get_named_property(env, req_obj, "oncomplete", &oncomplete) != napi_ok || !IsFunction(env, oncomplete)) {
-    UbiStreamReqMarkDone(env, req_obj);
-    return;
-  }
-  napi_value ignored = nullptr;
-  UbiAsyncWrapMakeCallback(
-      env,
-      UbiStreamReqGetAsyncId(env, req_obj),
-      req_obj,
-      req_obj,
-      oncomplete,
-      3,
-      argv,
-      &ignored,
-      kUbiMakeCallbackSkipTaskQueues);
-  UbiStreamReqMarkDone(env, req_obj);
 }
 
 napi_value BuildWriteArray(napi_env env, const std::vector<std::vector<uint8_t>>& chunks) {
@@ -382,17 +352,27 @@ napi_value JsStreamEmitEOF(napi_env env, napi_callback_info info) {
 napi_value JsStreamFinishWrite(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 2) {
+  JsStreamWrap* wrap = nullptr;
+  if (!GetThisAndWrap(env, info, &argc, argv, nullptr, &wrap) || wrap == nullptr || argc < 2) {
     return UbiStreamBaseUndefined(env);
   }
   int32_t status = 0;
   if (napi_get_value_int32(env, argv[1], &status) != napi_ok) status = UV_EINVAL;
-  FinishReq(env, argv[0], status);
+  UbiStreamBaseEmitAfterWrite(&wrap->base, argv[0], status);
   return UbiStreamBaseUndefined(env);
 }
 
 napi_value JsStreamFinishShutdown(napi_env env, napi_callback_info info) {
-  return JsStreamFinishWrite(env, info);
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  JsStreamWrap* wrap = nullptr;
+  if (!GetThisAndWrap(env, info, &argc, argv, nullptr, &wrap) || wrap == nullptr || argc < 2) {
+    return UbiStreamBaseUndefined(env);
+  }
+  int32_t status = 0;
+  if (napi_get_value_int32(env, argv[1], &status) != napi_ok) status = UV_EINVAL;
+  UbiStreamBaseEmitAfterShutdown(&wrap->base, argv[0], status);
+  return UbiStreamBaseUndefined(env);
 }
 
 napi_value JsStreamGetOnRead(napi_env env, napi_callback_info info) {
@@ -526,4 +506,37 @@ napi_value UbiInstallJsStreamBinding(napi_env env) {
 
   napi_set_named_property(env, binding, "JSStream", ctor);
   return binding;
+}
+
+int UbiJsStreamWriteBuffer(UbiStreamBase* base,
+                           napi_value req_obj,
+                           napi_value payload,
+                           bool* async_out) {
+  if (async_out != nullptr) *async_out = false;
+  auto* wrap = FromBase(base);
+  if (wrap == nullptr || base == nullptr || base->env == nullptr) return UV_EBADF;
+
+  napi_value self = UbiStreamBaseGetWrapper(base);
+  if (self == nullptr) return UV_EBADF;
+
+  const uint8_t* data = nullptr;
+  size_t len = 0;
+  bool refable = false;
+  std::string temp_utf8;
+  UbiStreamBaseExtractByteSpan(base->env, payload, &data, &len, &refable, &temp_utf8);
+
+  std::vector<std::vector<uint8_t>> chunks;
+  chunks.emplace_back(data, data + len);
+
+  napi_value status_value = CallOnWrite(base->env, wrap, self, req_obj, chunks, len);
+  int32_t status = UV_EPROTO;
+  if (status_value == nullptr || napi_get_value_int32(base->env, status_value, &status) != napi_ok) {
+    return UV_EPROTO;
+  }
+
+  if (async_out != nullptr && status == 0) {
+    *async_out = true;
+  }
+
+  return status;
 }
