@@ -8,7 +8,7 @@ use std::ffi::CString;
 
 use wasmer::{Function, FunctionEnv, FunctionEnvMut, Imports, Store};
 
-use crate::{guest::MAX_GUEST_CSTRING_SCAN, snapi::*, RuntimeEnv, CB_ENV_PTR};
+use crate::{RuntimeEnv, guest::{MAX_GUEST_CSTRING_SCAN, callback::CB_ENV_PTR}, snapi::*};
 
 use super::util::*;
 
