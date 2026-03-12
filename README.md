@@ -14,12 +14,12 @@
 
 Edge.js is a secure **JavaScript** runtime.
 
-Edge.js **uses WebAssembly** for sandboxing via `--safe`, so even the most insecure programs can run on it safely.
+Edge.js **uses WebAssembly** for sandboxing when in `--safe` mode, so even the most insecure programs can run on it safely. Edge also is:
 
-✅ **Fully compatible with Node**.<br />
-🔒 **Sandboxed by design**.<br />
-🧩 **Choose the JS engine**: V8, JavaScriptCore or QuickJS.<br />
-💪 **Compatible with NPM/PNPM/Yarn/Bun**.
+* ✅ Fully **compatible with Node.js**.
+* 🔒 **Sandboxed** by design.
+* 🧩 Pluggable with any **JS engine**: V8, JavaScriptCore or QuickJS.
+* 💪 Compatible with **any package manager**: NPM/PNPM/Yarn/Bun.
 
 ## Install Edge.js
 
