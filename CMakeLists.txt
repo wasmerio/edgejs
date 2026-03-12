@@ -685,21 +685,7 @@ if(EDGE_BUILD_CLI)
   target_include_directories(edgeenv
     PRIVATE
       "${EDGE_ROOT}/src"
-      "${NAPI_INCLUDE_ROOT}"
   )
-  target_link_libraries(edgeenv
-    PRIVATE
-      edge_cli
-  )
-  if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8" AND NAPI_V8_DEFINES)
-    target_compile_definitions(edgeenv PRIVATE ${NAPI_V8_DEFINES})
-  endif()
-  if(EDGE_ALLOW_UNDEFINED_IMPORTS)
-    target_link_options(edgeenv PRIVATE
-      "-Wl,--allow-undefined"
-      "-Wl,--import-undefined"
-    )
-  endif()
 endif()
 
 if(NOT EDGE_IS_WASIX_TARGET)

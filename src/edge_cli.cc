@@ -916,6 +916,18 @@ int RunCliBuiltin(const char* source_text,
       error_out);
 }
 
+int RunEnvCliWithOffset(int argc,
+                        const char* const* argv,
+                        int dispatch_offset,
+                        std::string* error_out) {
+  if (argv != nullptr && argc > 0 && argv[0] != nullptr) {
+    EdgeSetProcessArgv0(argv[0]);
+  }
+  const int adjusted_argc = argc - dispatch_offset;
+  const char* const* adjusted_argv = argv != nullptr ? argv + dispatch_offset : nullptr;
+  return EdgeRunCompatCommand(adjusted_argc, adjusted_argv, error_out);
+}
+
 }  // namespace
 
 void EdgeInitializeCliProcess() {
@@ -955,6 +967,10 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   if (argv == nullptr || argc < 1) {
     if (error_out != nullptr) *error_out = kUsage;
     return 1;
+  }
+  if (argc > 1 && argv[1] != nullptr &&
+      std::string(argv[1]) == kEdgeInternalEnvCliDispatchFlag) {
+    return RunEnvCliWithOffset(argc, argv, 1, error_out);
   }
   if (argc > 1 && argv[1] != nullptr && EdgeShouldWrapCompatCommand(argv[1])) {
     return EdgeRunCompatCommand(argc, argv, error_out);
@@ -1264,5 +1280,5 @@ int EdgeRunEnvCli(int argc, const char* const* argv, std::string* error_out) {
   if (argv != nullptr && argc > 0 && argv[0] != nullptr) {
     EdgeSetProcessArgv0(argv[0]);
   }
-  return EdgeRunCompatCommand(argc, argv, error_out);
+  return RunEnvCliWithOffset(argc, argv, 0, error_out);
 }
