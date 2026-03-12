@@ -1,17 +1,17 @@
 .PHONY: build test test-only check-portability clean-dist dist dist-only
 
 UNAME_S := $(shell uname -s)
-BUILD_DIR ?= build-ubi
+BUILD_DIR ?= build-edge
 DIST_DIR ?= dist
 DIST_BIN_DIR ?= $(DIST_DIR)/bin
 DIST_BIN_COMPAT_DIR ?= $(DIST_DIR)/bin-compat
-DIST_NODE_LIB_DIR ?= $(DIST_DIR)/node-lib
-ZIP_NAME ?= ubi.zip
+DIST_LIB_DIR ?= $(DIST_DIR)/lib
+ZIP_NAME ?= edge.zip
 CMAKE_BUILD_TYPE ?= Release
 JOBS ?= 8
 TEST_JOBS ?= 0
-UBI_BINARY ?= $(BUILD_DIR)/ubi
-UBIENV_BINARY ?= $(BUILD_DIR)/ubienv
+EDGE_BINARY ?= $(BUILD_DIR)/edge
+EDGEENV_BINARY ?= $(BUILD_DIR)/edgeenv
 CMAKE_ARGS ?=
 BUILD_ENV ?= env
 EXTRA_CMAKE_ARGS ?=
@@ -23,7 +23,7 @@ EXTRA_CMAKE_ARGS += '-UOPENSSL_*' -DOPENSSL_USE_STATIC_LIBS=TRUE -DCMAKE_EXE_LIN
 endif
 
 build:
-	$(BUILD_ENV) cmake -S ubi -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) $(EXTRA_CMAKE_ARGS) $(CMAKE_ARGS)
+	$(BUILD_ENV) cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) $(EXTRA_CMAKE_ARGS) $(CMAKE_ARGS)
 	$(BUILD_ENV) cmake --build $(BUILD_DIR) -j$(JOBS)
 
 test: build test-only
@@ -33,7 +33,7 @@ test-only:
 
 check-portability:
 ifeq ($(UNAME_S),Darwin)
-	@for bin in $(UBI_BINARY) $(UBIENV_BINARY); do \
+	@for bin in $(EDGE_BINARY) $(EDGEENV_BINARY); do \
 		deps=$$(otool -L "$$bin" | tail -n +2 | awk '{print $$1}' | grep '^/' | grep -Ev '^(/System/Library/|/usr/lib/)' || true); \
 		if [ -n "$$deps" ]; then \
 			echo "error: $$bin links to non-system dylibs:" >&2; \
@@ -54,18 +54,18 @@ dist-only:
 	rm -rf $(DIST_DIR)
 	rm -f $(ZIP_NAME)
 	mkdir -p $(DIST_BIN_DIR)
-	cp $(UBI_BINARY) $(DIST_BIN_DIR)/ubi
-	cp $(UBIENV_BINARY) $(DIST_BIN_DIR)/ubienv
+	cp $(EDGE_BINARY) $(DIST_BIN_DIR)/edge
+	cp $(EDGEENV_BINARY) $(DIST_BIN_DIR)/edgeenv
 	cp -R bin-compat $(DIST_BIN_COMPAT_DIR)
 	cp README.md $(DIST_DIR)/README.md
-	cp -R node-lib $(DIST_NODE_LIB_DIR)
-	mkdir -p $(DIST_NODE_LIB_DIR)/internal/deps
+	cp -R lib $(DIST_LIB_DIR)
+	mkdir -p $(DIST_LIB_DIR)/internal/deps
 	for dep in undici acorn minimatch cjs-module-lexer amaro; do \
-		mkdir -p "$(DIST_NODE_LIB_DIR)/internal/deps/$$(dirname "$$dep")"; \
-		cp -R "node/deps/$$dep" "$(DIST_NODE_LIB_DIR)/internal/deps/$$dep"; \
+		mkdir -p "$(DIST_LIB_DIR)/internal/deps/$$(dirname "$$dep")"; \
+		cp -R "node/deps/$$dep" "$(DIST_LIB_DIR)/internal/deps/$$dep"; \
 	done
 	if [ "$(UNAME_S)" = "Darwin" ]; then \
-		for bin in $(DIST_BIN_DIR)/ubi $(DIST_BIN_DIR)/ubienv; do \
+		for bin in $(DIST_BIN_DIR)/edge $(DIST_BIN_DIR)/edgeenv; do \
 			deps=$$(otool -L "$$bin" | tail -n +2 | awk '{print $$1}' | grep '^/' | grep -Ev '^(/System/Library/|/usr/lib/)' || true); \
 			if [ -n "$$deps" ]; then \
 				echo "error: $$bin still links to non-system dylibs:" >&2; \
@@ -75,4 +75,4 @@ dist-only:
 			fi; \
 		done; \
 	fi
-	cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md node-lib
+	cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md lib

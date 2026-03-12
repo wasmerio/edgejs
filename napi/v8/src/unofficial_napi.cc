@@ -21,12 +21,12 @@
 #include "internal/napi_v8_env.h"
 #include "internal/unofficial_napi_bridge.h"
 #include "unofficial_napi_error_utils.h"
-#include "ubi_v8_platform.h"
+#include "edge_v8_platform.h"
 
 namespace {
 
 struct SharedRuntime {
-  std::unique_ptr<UbiV8Platform> platform;
+  std::unique_ptr<EdgeV8Platform> platform;
   uint32_t refcount = 0;
 };
 
@@ -472,7 +472,7 @@ void OOMErrorCallback(const char* location, const v8::OOMDetails& details) {
   }
 }
 
-napi_status AcquireRuntime(UbiV8Platform** platform_out) {
+napi_status AcquireRuntime(EdgeV8Platform** platform_out) {
   if (platform_out == nullptr) return napi_invalid_arg;
   std::lock_guard<std::mutex> lock(g_runtime_mu);
 
@@ -480,7 +480,7 @@ napi_status AcquireRuntime(UbiV8Platform** platform_out) {
     ApplyDefaultV8Flags();
     v8::V8::InitializeICUDefaultLocation("");
     v8::V8::InitializeExternalStartupData("");
-    g_runtime.platform = UbiV8Platform::Create();
+    g_runtime.platform = EdgeV8Platform::Create();
     v8::V8::InitializePlatform(g_runtime.platform.get());
     v8::V8::Initialize();
   }
@@ -1405,7 +1405,7 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
     void** scope_out) {
   if (env_out == nullptr || scope_out == nullptr) return napi_invalid_arg;
 
-  UbiV8Platform* platform = nullptr;
+  EdgeV8Platform* platform = nullptr;
   napi_status status = AcquireRuntime(&platform);
   if (status != napi_ok || platform == nullptr) return status != napi_ok ? status : napi_generic_failure;
 

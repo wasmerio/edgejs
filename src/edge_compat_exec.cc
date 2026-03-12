@@ -1,0 +1,222 @@
+#include "edge_compat_exec.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#if defined(_WIN32)
+#include <errno.h>
+#include <process.h>
+#else
+#include <errno.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+#include "edge_process.h"
+
+namespace {
+
+std::string BuildEdgeBinaryPath() {
+  namespace fs = std::filesystem;
+  fs::path exec_path = EdgeGetProcessExecPath();
+  if (exec_path.empty()) exec_path = "edge";
+  return exec_path.lexically_normal().string();
+}
+
+std::string BuildCompatWrappedPathPrefix() {
+  namespace fs = std::filesystem;
+  fs::path exec_path = EdgeGetProcessExecPath();
+  if (exec_path.empty()) exec_path = "edge";
+  fs::path exec_dir = exec_path.parent_path();
+  fs::path compat_dir;
+
+  std::vector<fs::path> candidate_dirs = {
+      (exec_dir / ".." / "bin-compat").lexically_normal(),
+      (exec_dir / "bin-compat").lexically_normal(),
+  };
+
+  std::error_code ec;
+  for (const fs::path& candidate : candidate_dirs) {
+    ec.clear();
+    if (candidate.empty()) continue;
+    if (!fs::exists(candidate, ec) || ec) continue;
+    ec.clear();
+    if (fs::is_directory(candidate, ec) && !ec) {
+      compat_dir = candidate;
+      break;
+    }
+  }
+
+  if (compat_dir.empty()) {
+    compat_dir = candidate_dirs.front();
+  }
+
+#if defined(_WIN32)
+  constexpr char kPathSeparator = ';';
+#else
+  constexpr char kPathSeparator = ':';
+#endif
+  std::string updated_path = compat_dir.lexically_normal().string();
+  const char* current_path = std::getenv("PATH");
+  if (current_path != nullptr && current_path[0] != '\0') {
+    updated_path.push_back(kPathSeparator);
+    updated_path += current_path;
+  }
+  return updated_path;
+}
+
+}  // namespace
+
+bool EdgeShouldWrapCompatCommand(std::string_view command) {
+  static constexpr std::string_view kWrappedCommands[] = {
+      "node",
+      "npm",
+      "npx",
+      "pnpm",
+      "pnpx",
+      "yarn",
+      "bun",
+      "deno",
+  };
+  for (const auto candidate : kWrappedCommands) {
+    if (command == candidate) return true;
+  }
+  return false;
+}
+
+int EdgeRunCompatCommand(int argc, const char* const* argv, std::string* error_out) {
+  if (argc <= 1 || argv == nullptr || argv[1] == nullptr) {
+    if (error_out != nullptr) *error_out = "Missing wrapped command";
+    return 1;
+  }
+
+  const std::string compat_path = BuildCompatWrappedPathPrefix();
+  const std::string edge_binary_path = BuildEdgeBinaryPath();
+
+#if defined(_WIN32)
+  std::vector<const char*> child_argv;
+  child_argv.reserve(static_cast<size_t>(argc));
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] != nullptr) child_argv.push_back(argv[i]);
+  }
+  child_argv.push_back(nullptr);
+
+  char* old_path = nullptr;
+  size_t old_path_len = 0;
+  char* old_edge_binary_path = nullptr;
+  size_t old_edge_binary_path_len = 0;
+  (void)_dupenv_s(&old_path, &old_path_len, "PATH");
+  (void)_dupenv_s(&old_edge_binary_path, &old_edge_binary_path_len, "EDGE_BINARY_PATH");
+  _putenv_s("PATH", compat_path.c_str());
+  _putenv_s("EDGE_BINARY_PATH", edge_binary_path.c_str());
+  const intptr_t rc = _spawnvp(_P_WAIT, child_argv[0], child_argv.data());
+  if (old_path != nullptr) {
+    _putenv_s("PATH", old_path);
+    free(old_path);
+  } else {
+    _putenv_s("PATH", "");
+  }
+  if (old_edge_binary_path != nullptr) {
+    _putenv_s("EDGE_BINARY_PATH", old_edge_binary_path);
+    free(old_edge_binary_path);
+  } else {
+    _putenv_s("EDGE_BINARY_PATH", "");
+  }
+  if (rc == -1) {
+    if (error_out != nullptr) {
+      *error_out = "spawn failed for compat command: " + std::string(child_argv[0]) +
+                   ": " + std::strerror(errno);
+    }
+    return 127;
+  }
+  return static_cast<int>(rc);
+#else
+  int error_pipe[2] = {-1, -1};
+  if (pipe(error_pipe) != 0) {
+    if (error_out != nullptr) {
+      *error_out = "pipe failed for compat command: " + std::string(std::strerror(errno));
+    }
+    return 1;
+  }
+
+  const pid_t child_pid = fork();
+  if (child_pid < 0) {
+    const int fork_errno = errno;
+    close(error_pipe[0]);
+    close(error_pipe[1]);
+    if (error_out != nullptr) {
+      *error_out = "fork failed for compat command: " + std::string(std::strerror(fork_errno));
+    }
+    return 1;
+  }
+
+  if (child_pid == 0) {
+    close(error_pipe[0]);
+    if (setenv("PATH", compat_path.c_str(), 1) != 0) {
+      const std::string child_error =
+          "setenv(PATH) failed for compat command: " + std::string(std::strerror(errno));
+      (void)write(error_pipe[1], child_error.c_str(), child_error.size());
+      _exit(127);
+    }
+    if (setenv("EDGE_BINARY_PATH", edge_binary_path.c_str(), 1) != 0) {
+      const std::string child_error =
+          "setenv(EDGE_BINARY_PATH) failed for compat command: " +
+          std::string(std::strerror(errno));
+      (void)write(error_pipe[1], child_error.c_str(), child_error.size());
+      _exit(127);
+    }
+
+    std::vector<char*> child_argv;
+    child_argv.reserve(static_cast<size_t>(argc));
+    for (int i = 1; i < argc; ++i) {
+      if (argv[i] != nullptr) child_argv.push_back(const_cast<char*>(argv[i]));
+    }
+    child_argv.push_back(nullptr);
+    execvp(child_argv[0], child_argv.data());
+
+    const std::string child_error = "exec failed for compat command: " + std::string(child_argv[0]) +
+                                    ": " + std::string(std::strerror(errno));
+    (void)write(error_pipe[1], child_error.c_str(), child_error.size());
+    _exit(127);
+  }
+
+  close(error_pipe[1]);
+
+  int status = 0;
+  while (waitpid(child_pid, &status, 0) < 0) {
+    if (errno == EINTR) continue;
+    const int wait_errno = errno;
+    close(error_pipe[0]);
+    if (error_out != nullptr) {
+      *error_out = "waitpid failed for compat command: " + std::string(std::strerror(wait_errno));
+    }
+    return 1;
+  }
+
+  std::string child_error;
+  char buffer[512];
+  while (true) {
+    const ssize_t n = read(error_pipe[0], buffer, sizeof(buffer));
+    if (n > 0) {
+      child_error.append(buffer, static_cast<size_t>(n));
+      continue;
+    }
+    break;
+  }
+  close(error_pipe[0]);
+
+  if (!child_error.empty() && error_out != nullptr) {
+    *error_out = child_error;
+  }
+
+  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+  if (error_out != nullptr && child_error.empty()) {
+    *error_out = "compat command ended unexpectedly";
+  }
+  return 1;
+#endif
+}

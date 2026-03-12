@@ -12,7 +12,7 @@
 
 <hr />
 
-Edge.js is a secure **JavaScript** runtime.
+Edge.js is a secure **JavaScript** runtime, designed for Edge computing and AI workloads.
 
 Edge.js **uses WebAssembly** for sandboxing when in `--safe` mode, so even the most insecure programs can run on it safely. Edge also is:
 
@@ -44,15 +44,15 @@ http
 ```
 
 ```bash
-$ ubi server.js
+$ edge server.js
 ```
 
-If you want to use it in your current workflow, just wrap your commands with `ubi`:
+If you want to use it in your current workflow, just wrap your commands with `edge`:
 
 ```bash
-$ ubi node myfile.js
-$ ubi npm install
-$ ubi pnpm run dev
+$ edge node myfile.js
+$ edge npm install
+$ edge pnpm run dev
 ```
 
 ## Development
@@ -61,27 +61,27 @@ Build the CLI locally:
 
 ```bash
 make build
-./build-ubi/ubi server.js
+./build-edge/edge server.js
 ```
 
 ```bash
-./build-ubi/ubi --run dev
+./build-edge/edge --run dev
 ```
 
 Or run the tests:
 ```bash
 make test
-NODE_TEST_RUNNER="$(pwd)/build-ubi/ubi" \
-./node-test/nodejs_test_harness --category=node:assert
+NODE_TEST_RUNNER="$(pwd)/build-edge/edge" \
+./test/nodejs_test_harness --category=node:assert
 ```
 
 
 ## Contribute 🤗
 
-We have created a [public ROADMAP](https://github.com/wasmerio/ubi/issues/8), so you can contribute into the project easily!
+We have created a [public ROADMAP](https://github.com/wasmerio/edgejs/issues/8), so you can contribute into the project easily!
 
 - `0.x` Production readiness: platform coverage across Linux, Windows, macOS, iOS, and Android; reliability in constrained environments; security audits; and successful real production use.
 - `1.x` Need for speed: faster startup, faster core paths, and performance that competes with or beats Node.js, Bun, and Deno on most workloads.
 - `2.x` Enhancements: first-class TypeScript support and a smoother developer experience.
 
-For architecture detail, see [`ubi/README.md`](./ubi/README.md) and [`ubi/ROADMAP.md`](./ubi/ROADMAP.md).
+For architecture detail, see [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`ROADMAP.md`](./ROADMAP.md).

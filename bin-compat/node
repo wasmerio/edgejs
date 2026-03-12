@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-if [ -z "${UBI_BINARY_PATH:-}" ]; then
-  echo "bin-compat/node: UBI_BINARY_PATH is not set" >&2
+if [ -z "${EDGE_BINARY_PATH:-}" ]; then
+  echo "bin-compat/node: EDGE_BINARY_PATH is not set" >&2
   exit 127
 fi
 
-exec "${UBI_BINARY_PATH}" "$@"
+exec "${EDGE_BINARY_PATH}" "$@"

@@ -10,7 +10,7 @@ jobs:
     name: metadata
     runs-on: ubuntu-latest
     outputs:
-      ubi_version: ${{ steps.version.outputs.ubi_version }}
+      edge_version: ${{ steps.version.outputs.edge_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       release_name: ${{ steps.version.outputs.release_name }}
     steps:
@@ -20,18 +20,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          major="$(sed -n 's/^#define UBI_MAJOR_VERSION //p' ubi/src/ubi_version.h)"
-          minor="$(sed -n 's/^#define UBI_MINOR_VERSION //p' ubi/src/ubi_version.h)"
-          patch="$(sed -n 's/^#define UBI_PATCH_VERSION //p' ubi/src/ubi_version.h)"
+          major="$(sed -n 's/^#define EDGE_MAJOR_VERSION //p' src/edge_version.h)"
+          minor="$(sed -n 's/^#define EDGE_MINOR_VERSION //p' src/edge_version.h)"
+          patch="$(sed -n 's/^#define EDGE_PATCH_VERSION //p' src/edge_version.h)"
           if [[ -z "${major}" || -z "${minor}" || -z "${patch}" ]]; then
-            echo "Failed to parse UBI version from ubi/src/ubi_version.h" >&2
+            echo "Failed to parse EDGE version from src/edge_version.h" >&2
             exit 1
           fi
-          ubi_version="${major}.${minor}.${patch}"
-          release_tag="${ubi_version}-nightly"
+          edge_version="${major}.${minor}.${patch}"
+          release_tag="${edge_version}-nightly"
           release_name="${release_tag}"
           {
-            echo "ubi_version=${ubi_version}"
+            echo "edge_version=${edge_version}"
             echo "release_tag=${release_tag}"
             echo "release_name=${release_name}"
           } >> "${GITHUB_OUTPUT}"
@@ -76,7 +76,7 @@ jobs:
       - name: Test napi-v8
         run: ctest --test-dir napi/v8/build --output-on-failure -R '^napi_v8\.'
 
-      - name: Build ubi
+      - name: Build edge
         run: |
           make build CMAKE_BUILD_TYPE=Release JOBS=4
 
@@ -84,16 +84,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make dist-only JOBS=4 ZIP_NAME=ubi-linux-amd64.zip
+          make dist-only JOBS=4 ZIP_NAME=edge-linux-amd64.zip
 
-      - name: Upload artifact ubi
+      - name: Upload artifact edge
         uses: actions/upload-artifact@v4
         with:
-          name: ubi-linux-amd64
-          path: ubi-linux-amd64.zip
+          name: edge-linux-amd64
+          path: edge-linux-amd64.zip
           if-no-files-found: error
 
-      - name: Test ubi
+      - name: Test edge
         run: |
           make test-only TEST_JOBS=4
 
@@ -112,31 +112,31 @@ jobs:
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     env:
       GH_TOKEN: ${{ secrets.RELEASE_PLEASE_GH_TOKEN }}
-      TARGET_REPO: wasmerio/ubi-nightlies
+      TARGET_REPO: wasmerio/edgejs-nightlies
       RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
       RELEASE_NAME: ${{ needs.metadata.outputs.release_name }}
-      UBI_VERSION: ${{ needs.metadata.outputs.ubi_version }}
+      EDGE_VERSION: ${{ needs.metadata.outputs.edge_version }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: ubi-linux-amd64
+          name: edge-linux-amd64
           path: release-assets/linux
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: ubi-macos-arm64
+          name: edge-macos-arm64
           path: release-assets/macos
 
       - name: Download WASIX artifact
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: ubi-wasix
+          name: edge-wasix
           path: release-assets/wasix
 
       - name: Collect release assets
@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "Automated nightly build for UBI ${UBI_VERSION}."
+            echo "Automated nightly build for EDGE ${EDGE_VERSION}."
             echo
             echo "- Source repo: ${GITHUB_REPOSITORY}"
             echo "- Commit: ${GITHUB_SHA}"
@@ -240,7 +240,7 @@ jobs:
       - name: Test napi-v8
         run: ctest --test-dir napi/v8/build --output-on-failure -R '^napi_v8\.'
 
-      - name: Build ubi
+      - name: Build edge
         run: |
           make build CMAKE_BUILD_TYPE=Release JOBS=4
 
@@ -248,16 +248,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make dist-only JOBS=4 ZIP_NAME=ubi-macos-arm64.zip
+          make dist-only JOBS=4 ZIP_NAME=edge-macos-arm64.zip
 
-      - name: Upload artifact ubi
+      - name: Upload artifact edge
         uses: actions/upload-artifact@v4
         with:
-          name: ubi-macos-arm64
-          path: ubi-macos-arm64.zip
+          name: edge-macos-arm64
+          path: edge-macos-arm64.zip
           if-no-files-found: error
 
-      - name: Test ubi
+      - name: Test edge
         run: |
           make test-only TEST_JOBS=4
 
@@ -291,23 +291,23 @@ jobs:
         run: |
           cargo install --locked wasm-tools
 
-      - name: Build ubi (WASIX)
+      - name: Build edge (WASIX)
         shell: bash
         run: |
           set -euo pipefail
-          ./ubi/scripts/build-wasix.sh
+          ./scripts/build-wasix.sh
 
       - name: Generate dist
         shell: bash
         run: |
           set -euo pipefail
-          make dist-only BUILD_DIR=build-wasix JOBS=4 ZIP_NAME=ubi-wasix.zip
+          make dist-only BUILD_DIR=build-wasix JOBS=4 ZIP_NAME=edge-wasix.zip
 
-      - name: Upload artifact ubi
+      - name: Upload artifact edge
         uses: actions/upload-artifact@v4
         with:
-          name: ubi-wasix
-          path: ubi-wasix.zip
+          name: edge-wasix
+          path: edge-wasix.zip
           if-no-files-found: error
 
       - name: sccache stats

@@ -116,7 +116,7 @@ NAPI_EXTERN napi_status unofficial_napi_remove_near_heap_limit_callback(
     size_t heap_limit);
 NAPI_EXTERN napi_status unofficial_napi_set_stack_limit(napi_env env, void* stack_limit);
 
-// Unofficial helpers used by util/options parity work in ubi.
+// Unofficial helpers used by util/options parity work in edge.
 // These expose engine-specific data that is not available in the public N-API.
 NAPI_EXTERN napi_status unofficial_napi_get_promise_details(napi_env env,
                                                             napi_value promise,

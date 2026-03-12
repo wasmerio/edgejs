@@ -28,7 +28,7 @@ add_library(napi_v8 STATIC
   src/unofficial_napi.cc
   src/unofficial_napi_error_utils.cc
   src/unofficial_napi_contextify.cc
-  src/ubi_v8_platform.cc
+  src/edge_v8_platform.cc
 )
 
 target_include_directories(napi_v8

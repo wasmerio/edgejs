@@ -1173,7 +1173,7 @@ napi_status NAPI_CDECL unofficial_napi_contextify_make_context(
     }
   }
 
-  // Align with node-lib internal/vm.js isContext() checks in Ubi.
+  // Align with lib internal/vm.js isContext() checks in Edge.
   v8::Local<v8::Context> property_context = vanilla ? context : current;
   SetApiPrivate(property_context, key_object, "node:contextify:context", key_object);
   SetApiPrivate(property_context,
