@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #if !defined(_WIN32)
 #include <cerrno>
@@ -110,6 +111,25 @@ bool StartsWith(std::string_view s, std::string_view prefix) {
   return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
+std::vector<std::string> SplitAsciiWhitespace(std::string_view s) {
+  std::vector<std::string> tokens;
+  while (!s.empty()) {
+    while (!s.empty() &&
+           (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
+      s.remove_prefix(1);
+    }
+    if (s.empty()) break;
+    size_t end = 0;
+    while (end < s.size() &&
+           s[end] != ' ' && s[end] != '\t' && s[end] != '\r' && s[end] != '\n') {
+      end += 1;
+    }
+    tokens.emplace_back(s.substr(0, end));
+    s.remove_prefix(end);
+  }
+  return tokens;
+}
+
 std::string_view TrimLeadingAsciiWhitespace(std::string_view s) {
   while (!s.empty() &&
          (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
@@ -118,10 +138,10 @@ std::string_view TrimLeadingAsciiWhitespace(std::string_view s) {
   return s;
 }
 
-bool ScriptStartsWithFlagsHeader(const std::filesystem::path& script_path) {
+std::vector<std::string> ParseLeadingFlagsHeader(const std::filesystem::path& script_path) {
   std::ifstream in(script_path);
   if (!in.is_open()) {
-    return false;
+    return {};
   }
 
   bool in_block_comment = false;
@@ -143,7 +163,10 @@ bool ScriptStartsWithFlagsHeader(const std::filesystem::path& script_path) {
       if (view.empty()) continue;
     }
 
-    if (StartsWith(view, "// Flags:")) return true;
+    if (StartsWith(view, "// Flags:")) {
+      view.remove_prefix(std::string_view("// Flags:").size());
+      return SplitAsciiWhitespace(view);
+    }
     if (StartsWith(view, "//")) continue;
     if (StartsWith(view, "#!")) continue;
 
@@ -156,12 +179,57 @@ bool ScriptStartsWithFlagsHeader(const std::filesystem::path& script_path) {
       view.remove_prefix(end + 2);
       view = TrimLeadingAsciiWhitespace(view);
       if (view.empty()) continue;
-      if (StartsWith(view, "// Flags:")) return true;
+      if (StartsWith(view, "// Flags:")) {
+        view.remove_prefix(std::string_view("// Flags:").size());
+        return SplitAsciiWhitespace(view);
+      }
       if (StartsWith(view, "//")) continue;
-      return false;
+      return {};
     }
 
-    return false;
+    return {};
+  }
+  return {};
+}
+
+bool IsUnsupportedFlagsHeaderToken(std::string_view token) {
+  static const std::unordered_set<std::string_view> kUnsupportedExactFlags = {
+      "--allow-natives-syntax",
+      "--disable-wasm-trap-handler",
+      "--expose-gc",
+      "--expose_gc",
+      "--gc-global",
+      "--jitless",
+      "--no-liftoff",
+      "--no-opt",
+      "--permission",
+  };
+  static const std::vector<std::string_view> kUnsupportedPrefixes = {
+      "--allow-fs-read",
+      "--allow-fs-write",
+      "--gc-",
+      "--max-old-space-size",
+      "--max_old_space_size",
+      "--perf-basic-prof",
+      "--stress-",
+  };
+
+  if (kUnsupportedExactFlags.find(token) != kUnsupportedExactFlags.end()) {
+    return true;
+  }
+  for (const auto& prefix : kUnsupportedPrefixes) {
+    if (StartsWith(token, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ScriptHasUnsupportedFlagsHeader(const std::filesystem::path& script_path) {
+  for (const auto& token : ParseLeadingFlagsHeader(script_path)) {
+    if (IsUnsupportedFlagsHeaderToken(token)) {
+      return true;
+    }
   }
   return false;
 }
@@ -205,8 +273,8 @@ std::filesystem::path ResolveRawNodeScriptPath(const char* node_test_relative_pa
   return fs::absolute(node_root_path / "test" / script_rel);
 }
 
-bool RawNodeScriptStartsWithFlagsHeader(const char* node_test_relative_path) {
-  return ScriptStartsWithFlagsHeader(ResolveRawNodeScriptPath(node_test_relative_path));
+bool RawNodeScriptHasUnsupportedFlagsHeader(const char* node_test_relative_path) {
+  return ScriptHasUnsupportedFlagsHeader(ResolveRawNodeScriptPath(node_test_relative_path));
 }
 #endif
 
@@ -283,7 +351,7 @@ int RunRawNodeTestScript(napi_env env,
       needs_global_serialization ? "/tmp/ubi-node-suite-serial.lock" : nullptr);
   const fs::path node_root_path = ResolveNodeRootPathForRawScript(script_rel);
   const std::string script_path_absolute = ResolveRawNodeScriptPath(node_test_relative_path).string();
-  if (ScriptStartsWithFlagsHeader(script_path_absolute)) {
+  if (ScriptHasUnsupportedFlagsHeader(script_path_absolute)) {
     if (error_out != nullptr) error_out->clear();
     return 0;
   }
@@ -995,8 +1063,8 @@ TEST_F(Test3NodeDropinSubsetPhase02, NodeCompatEventEmitterMethodNamesTest) {
         std::string_view(script_name).find("dgram") != std::string_view::npos) { \
       GTEST_SKIP() << "Skipping dgram test in restricted environment"; \
     }                                                            \
-    if (RawNodeScriptStartsWithFlagsHeader(script_name)) {       \
-      GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << script_name; \
+    if (RawNodeScriptHasUnsupportedFlagsHeader(script_name)) {   \
+      GTEST_SKIP() << "Skipping Node.js raw test with unsupported // Flags header: " << script_name; \
     }                                                            \
     std::string error;                                          \
     const int exit_code = RunRawNodeTestScriptInSubprocess(script_name, &error); \
@@ -1014,8 +1082,8 @@ TEST_F(Test3NodeDropinSubsetPhase02, NodeCompatEventEmitterMethodNamesTest) {
 
 #define DEFINE_RAW_NODE_SUBPROCESS_TEST(test_name, script_name) \
   TEST_F(Test3NodeDropinSubsetPhase02, test_name) {             \
-    if (RawNodeScriptStartsWithFlagsHeader(script_name)) {      \
-      GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << script_name; \
+    if (RawNodeScriptHasUnsupportedFlagsHeader(script_name)) {  \
+      GTEST_SKIP() << "Skipping Node.js raw test with unsupported // Flags header: " << script_name; \
     }                                                            \
     std::string error;                                           \
     const int exit_code = RunRawNodeTestScriptInSubprocess(script_name, &error); \
@@ -1025,8 +1093,8 @@ TEST_F(Test3NodeDropinSubsetPhase02, NodeCompatEventEmitterMethodNamesTest) {
 
 #define DEFINE_RAW_NODE_FILE_STDIO_SUBPROCESS_TEST(test_name, script_name) \
   TEST_F(Test3NodeDropinSubsetPhase02, test_name) {                        \
-    if (RawNodeScriptStartsWithFlagsHeader(script_name)) {                 \
-      GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << script_name; \
+    if (RawNodeScriptHasUnsupportedFlagsHeader(script_name)) {             \
+      GTEST_SKIP() << "Skipping Node.js raw test with unsupported // Flags header: " << script_name; \
     }                                                                      \
     std::string error;                                                     \
     const int exit_code =                                                  \
@@ -1037,8 +1105,8 @@ TEST_F(Test3NodeDropinSubsetPhase02, NodeCompatEventEmitterMethodNamesTest) {
 
 #define DEFINE_RAW_NODE_IN_PROCESS_TEST(test_name, script_name)  \
   TEST_F(Test3NodeDropinSubsetPhase02, test_name) {              \
-    if (RawNodeScriptStartsWithFlagsHeader(script_name)) {       \
-      GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << script_name; \
+    if (RawNodeScriptHasUnsupportedFlagsHeader(script_name)) {   \
+      GTEST_SKIP() << "Skipping Node.js raw test with unsupported // Flags header: " << script_name; \
     }                                                             \
     EnvScope s(runtime_.get());                                   \
     std::string error;                                            \
@@ -1162,8 +1230,8 @@ DEFINE_RAW_NODE_TEST(RawQuerystringEscapeFromNodeTest, "test-querystring-escape.
 DEFINE_RAW_NODE_IN_PROCESS_TEST(RawProcessFeaturesFromNodeTest, "test-process-features.js")
 DEFINE_RAW_NODE_SUBPROCESS_TEST(RawProcessAbortFromNodeTest, "test-process-abort.js")
 TEST_F(Test3NodeDropinSubsetPhase02, RawProcessArgv0FromNodeTest) {
-  if (RawNodeScriptStartsWithFlagsHeader("test-process-argv-0.js")) {
-    GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: test-process-argv-0.js";
+  if (RawNodeScriptHasUnsupportedFlagsHeader("test-process-argv-0.js")) {
+    GTEST_SKIP() << "Skipping Node.js raw test with unsupported // Flags header: test-process-argv-0.js";
   }
   EnvScope s(runtime_.get());
   std::string error;
@@ -1458,8 +1526,8 @@ DEFINE_RAW_NODE_TEST(RawPseudoTtyStdinEndFromNodeTest, "pseudo-tty/test-tty-stdi
 DEFINE_RAW_NODE_TEST(RawPseudoTtyStdinCallEndFromNodeTest, "pseudo-tty/test-tty-stdin-call-end.js")
 TEST_F(Test3NodeDropinSubsetPhase02, RawPseudoTtySetRawModeResetSignalFromNodeTest) {
   static constexpr const char* kScript = "pseudo-tty/test-set-raw-mode-reset-signal.js";
-  if (RawNodeScriptStartsWithFlagsHeader(kScript)) {
-    GTEST_SKIP() << "Skipping Node.js raw test with // Flags header: " << kScript;
+  if (RawNodeScriptHasUnsupportedFlagsHeader(kScript)) {
+    GTEST_SKIP() << "Skipping Node.js raw test with unsupported // Flags header: " << kScript;
   }
 #if !defined(_WIN32)
   if (isatty(STDIN_FILENO) == 0) {

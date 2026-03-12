@@ -7,6 +7,8 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <optional>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -35,6 +37,11 @@ constexpr const char kUsage[] = "Usage: ubi <script.js>";
 constexpr const char kSafeModeUnavailable[] = "--safe mode is not enabled in this release of ubi";
 constexpr unsigned kMaxSignal = 32;
 std::once_flag g_cli_init_once;
+#if defined(_WIN32)
+constexpr const char kPathEnvSeparator[] = ";";
+#else
+constexpr const char kPathEnvSeparator[] = ":";
+#endif
 
 void ResetSignalHandlersLikeNode() {
 #if defined(__POSIX__)
@@ -223,8 +230,26 @@ bool OptionConsumesNextToken(const std::string& token) {
       "--trace-event-categories",
       "--trace-event-file-pattern",
       "--run",
+      "--test-concurrency",
+      "--test-coverage-branches",
+      "--test-coverage-exclude",
+      "--test-coverage-functions",
+      "--test-coverage-include",
+      "--test-coverage-lines",
+      "--test-global-setup",
+      "--test-name-pattern",
+      "--test-reporter",
+      "--test-reporter-destination",
+      "--test-rerun-failures",
+      "--test-shard",
+      "--test-skip-pattern",
+      "--test-timeout",
+      "--test-isolation",
+      "--experimental-test-isolation",
       "--allow-fs-read",
       "--allow-fs-write",
+      "--watch-kill-signal",
+      "--watch-path",
   };
   return kValueOptions.find(token) != kValueOptions.end();
 }
@@ -350,6 +375,7 @@ bool IsKnownNonBooleanOption(const std::string& option) {
       "--secure-heap",
       "--secure-heap-min",
       "--stack-trace-limit",
+      "--experimental-test-isolation",
       "--test-global-setup",
       "--test-isolation",
       "--test-rerun-failures",
@@ -465,6 +491,14 @@ bool HasExactOptionToken(const std::vector<std::string>& tokens, const char* opt
   return false;
 }
 
+bool HasOptionTokenWithInlineValue(const std::vector<std::string>& tokens, const char* option) {
+  const std::string prefix = std::string(option) + "=";
+  for (const auto& token : tokens) {
+    if (token == option || token.rfind(prefix, 0) == 0) return true;
+  }
+  return false;
+}
+
 bool ValidateCaOptions(const ubi_options::EffectiveCliState& state, std::string* error_out) {
   const bool use_openssl_ca = HasExactOptionToken(state.effective_tokens, "--use-openssl-ca");
   const bool use_bundled_ca = HasExactOptionToken(state.effective_tokens, "--use-bundled-ca");
@@ -531,72 +565,314 @@ void WarnUnsupportedPermissionsIfNeeded(const ubi_options::EffectiveCliState& st
   }
 }
 
-bool TryLoadPackageScripts(const std::filesystem::path& package_json_path,
-                           std::vector<std::pair<std::string, std::string>>* scripts_out) {
-  if (scripts_out == nullptr) return false;
-  scripts_out->clear();
+bool StringEqualsPathVariableName(const std::string& name) {
+#if defined(_WIN32)
+  return name.size() == 4 &&
+         std::tolower(static_cast<unsigned char>(name[0])) == 'p' &&
+         std::tolower(static_cast<unsigned char>(name[1])) == 'a' &&
+         std::tolower(static_cast<unsigned char>(name[2])) == 't' &&
+         std::tolower(static_cast<unsigned char>(name[3])) == 'h';
+#else
+  return name == "PATH";
+#endif
+}
 
-  std::ifstream input(package_json_path, std::ios::in | std::ios::binary);
-  if (!input.is_open()) return false;
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-
-  simdjson::ondemand::parser parser;
-  simdjson::padded_string padded(buffer.str());
-  simdjson::ondemand::document document;
-  simdjson::ondemand::object root;
-  if (parser.iterate(padded).get(document) != simdjson::SUCCESS ||
-      document.get_object().get(root) != simdjson::SUCCESS) {
-    return false;
-  }
-
-  simdjson::ondemand::value scripts_value;
-  if (root["scripts"].get(scripts_value) != simdjson::SUCCESS) return false;
-  simdjson::ondemand::object scripts;
-  if (scripts_value.get_object().get(scripts) != simdjson::SUCCESS) return false;
-
-  for (auto field : scripts) {
-    std::string_view raw_key;
-    std::string_view value;
-    if (field.unescaped_key().get(raw_key) != simdjson::SUCCESS ||
-        field.value().get_string().get(value) != simdjson::SUCCESS) {
-      continue;
+bool StringEqualsNoCase(std::string_view lhs, std::string_view rhs) {
+  if (lhs.size() != rhs.size()) return false;
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
+        std::tolower(static_cast<unsigned char>(rhs[i]))) {
+      return false;
     }
-    scripts_out->push_back({std::string(raw_key), std::string(value)});
   }
   return true;
 }
 
-int RunCliPackageScript(const std::string& script_name, std::string* error_out) {
-  const std::filesystem::path package_json_path =
-      std::filesystem::current_path() / "package.json";
-  std::vector<std::pair<std::string, std::string>> scripts;
-  const bool has_scripts = TryLoadPackageScripts(package_json_path, &scripts);
+std::string EscapeShellArgument(std::string_view input) {
+  if (input.empty()) {
+#if defined(_WIN32)
+    return "\"\"";
+#else
+    return "''";
+#endif
+  }
 
-  if (!has_scripts) {
+  static constexpr std::string_view kForbiddenCharacters =
+      "[\t\n\r \"#$&'()*;<>?\\\\`|~]";
+  if (input.find_first_of(kForbiddenCharacters) == std::string::npos) {
+    return std::string(input);
+  }
+
+  static const std::regex kLeadingQuotePairs("^(?:'')+(?!$)");
+#if defined(_WIN32)
+  std::string escaped =
+      std::regex_replace(std::string(input), std::regex("\""), "\"\"");
+  escaped = "\"" + escaped + "\"";
+  static const std::regex kTripleSingleQuote("\\\\\"\"\"");
+  escaped = std::regex_replace(escaped, kLeadingQuotePairs, "");
+  escaped = std::regex_replace(escaped, kTripleSingleQuote, "\\\"");
+#else
+  std::string escaped =
+      std::regex_replace(std::string(input), std::regex("'"), "\\'");
+  escaped = "'" + escaped + "'";
+  static const std::regex kTripleSingleQuote("\\\\'''");
+  escaped = std::regex_replace(escaped, kLeadingQuotePairs, "");
+  escaped = std::regex_replace(escaped, kTripleSingleQuote, "\\'");
+#endif
+  return escaped;
+}
+
+struct CliPackageJsonInfo {
+  std::filesystem::path package_json_path;
+  std::string raw_json;
+  std::string path_env_prefix;
+};
+
+std::optional<CliPackageJsonInfo> FindCliPackageJson(const std::filesystem::path& cwd) {
+  namespace fs = std::filesystem;
+  CliPackageJsonInfo info;
+  bool found_package_json = false;
+
+  for (fs::path directory_path = cwd;; directory_path = directory_path.parent_path()) {
+    std::error_code ec;
+    const fs::path node_modules_bin = directory_path / "node_modules" / ".bin";
+    if (fs::is_directory(node_modules_bin, ec) && !ec) {
+      info.path_env_prefix += node_modules_bin.string();
+      info.path_env_prefix += kPathEnvSeparator;
+    }
+
+    if (!found_package_json) {
+      const fs::path package_json_path = directory_path / "package.json";
+      ec.clear();
+      if (fs::is_regular_file(package_json_path, ec) && !ec) {
+        std::ifstream input(package_json_path, std::ios::in | std::ios::binary);
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        info.package_json_path = package_json_path;
+        info.raw_json = buffer.str();
+        found_package_json = true;
+      }
+    }
+
+    if (directory_path == directory_path.root_path() ||
+        directory_path == directory_path.parent_path()) {
+      break;
+    }
+  }
+
+  if (!found_package_json) {
+    return std::nullopt;
+  }
+  return info;
+}
+
+class CliPackageScriptRunner {
+ public:
+  CliPackageScriptRunner(const std::filesystem::path& package_json_path,
+                         std::string script_name,
+                         std::string command,
+                         std::string path_env_prefix,
+                         std::vector<std::string> positional_args)
+      : package_json_path_(package_json_path),
+        script_name_(std::move(script_name)),
+        command_(std::move(command)),
+        path_env_prefix_(std::move(path_env_prefix)),
+        positional_args_(std::move(positional_args)) {
+    std::memset(&options_, 0, sizeof(options_));
+    options_.stdio_count = 3;
+    child_stdio_[0].flags = UV_INHERIT_FD;
+    child_stdio_[0].data.fd = 0;
+    child_stdio_[1].flags = UV_INHERIT_FD;
+    child_stdio_[1].data.fd = 1;
+    child_stdio_[2].flags = UV_INHERIT_FD;
+    child_stdio_[2].data.fd = 2;
+    options_.stdio = child_stdio_;
+    options_.exit_cb = ExitCallback;
+#ifdef _WIN32
+    options_.flags |= UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS;
+    file_ = "cmd.exe";
+#else
+    file_ = "/bin/sh";
+#endif
+    cwd_ = package_json_path_.parent_path().string();
+    process_.data = this;
+  }
+
+  int Run(std::string* error_out) {
+    SetEnvironmentVariables();
+    std::string command_string(command_);
+    for (const auto& arg : positional_args_) {
+      command_string += " ";
+      command_string += EscapeShellArgument(arg);
+    }
+
+#ifdef _WIN32
+    if (file_.ends_with("cmd.exe")) {
+      command_args_ = {
+          file_, "/d", "/s", "/c", "\"" + command_string + "\""};
+    } else {
+      command_args_ = {file_, "-c", command_string};
+    }
+#else
+    command_args_ = {file_, "-c", command_string};
+#endif
+
+    arg_ = std::make_unique<char*[]>(command_args_.size() + 1);
+    for (size_t i = 0; i < command_args_.size(); ++i) {
+      arg_[i] = const_cast<char*>(command_args_[i].c_str());
+    }
+    arg_[command_args_.size()] = nullptr;
+    options_.file = file_.c_str();
+    options_.args = arg_.get();
+
+    options_.cwd = cwd_.c_str();
+
+    if (const int rc = uv_spawn(uv_default_loop(), &process_, &options_); rc != 0) {
+      if (error_out != nullptr) {
+        *error_out = "Error: " + std::string(uv_strerror(rc));
+      }
+      return 1;
+    }
+
+    (void)uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+    return exit_code_;
+  }
+
+ private:
+  static void ExitCallback(uv_process_t* handle, int64_t exit_status, int /*term_signal*/) {
+    auto* self = static_cast<CliPackageScriptRunner*>(handle->data);
+    uv_close(reinterpret_cast<uv_handle_t*>(handle), nullptr);
+    self->exit_code_ = exit_status > 0 ? 1 : 0;
+  }
+
+  void SetEnvironmentVariables() {
+    uv_env_item_t* env_items = nullptr;
+    int env_count = 0;
+    if (uv_os_environ(&env_items, &env_count) != 0) {
+      return;
+    }
+
+    for (int i = 0; i < env_count; ++i) {
+      std::string name = env_items[i].name;
+      std::string value = env_items[i].value;
+#if defined(_WIN32)
+      if (StringEqualsNoCase(name, "comspec")) {
+        file_ = value;
+      }
+#endif
+      if (StringEqualsPathVariableName(name)) {
+        value = path_env_prefix_ + value;
+      }
+      env_vars_.push_back(name + "=" + value);
+    }
+    uv_os_free_environ(env_items, env_count);
+
+    env_vars_.push_back("NODE_RUN_SCRIPT_NAME=" + script_name_);
+    env_vars_.push_back("NODE_RUN_PACKAGE_JSON_PATH=" + package_json_path_.string());
+
+    env_ = std::make_unique<char*[]>(env_vars_.size() + 1);
+    for (size_t i = 0; i < env_vars_.size(); ++i) {
+      env_[i] = const_cast<char*>(env_vars_[i].c_str());
+    }
+    env_[env_vars_.size()] = nullptr;
+    options_.env = env_.get();
+  }
+
+  uv_process_t process_{};
+  uv_process_options_t options_{};
+  uv_stdio_container_t child_stdio_[3]{};
+  std::vector<std::string> command_args_;
+  std::vector<std::string> env_vars_;
+  std::unique_ptr<char*[]> env_;
+  std::unique_ptr<char*[]> arg_;
+  std::string file_;
+  std::string cwd_;
+  std::filesystem::path package_json_path_;
+  std::string script_name_;
+  std::string command_;
+  std::string path_env_prefix_;
+  std::vector<std::string> positional_args_;
+  int exit_code_ = 1;
+};
+
+int RunCliPackageScript(const std::string& script_name,
+                        const std::vector<std::string>& positional_args,
+                        std::string* error_out) {
+  const std::string current_working_directory = std::filesystem::current_path().string();
+  const auto package_json = FindCliPackageJson(std::filesystem::path(current_working_directory));
+  if (!package_json.has_value()) {
     if (error_out != nullptr) {
-      *error_out = "Missing script: \"" + script_name + "\"";
+      *error_out = "Can't find package.json for directory " + current_working_directory + "\n";
     }
     return 1;
   }
 
-  for (const auto& [name, _] : scripts) {
-    if (name == script_name) {
-      if (error_out != nullptr) {
-        *error_out = "The --run launcher is not implemented for existing scripts yet";
-      }
-      return 1;
+  const auto& package_json_path = package_json->package_json_path;
+  simdjson::ondemand::parser parser;
+  simdjson::padded_string padded(package_json->raw_json);
+  simdjson::ondemand::document document;
+  if (parser.iterate(padded).get(document) != simdjson::SUCCESS) {
+    if (error_out != nullptr) {
+      *error_out = "Can't parse " + package_json_path.string() + "\n";
     }
+    return 1;
   }
 
-  if (error_out != nullptr) {
-    *error_out = "Missing script: \"" + script_name + "\" for " +
-                 package_json_path.string() + "\n\nAvailable scripts are:\n";
-    for (const auto& [name, value] : scripts) {
-      *error_out += "  " + name + ": " + value + "\n";
+  simdjson::ondemand::object root;
+  if (const auto root_error = document.get_object().get(root); root_error != simdjson::SUCCESS) {
+    if (error_out != nullptr) {
+      if (root_error == simdjson::error_code::INCORRECT_TYPE) {
+        *error_out = "Root value unexpected not an object for " +
+                     package_json_path.string() + "\n\n";
+      } else {
+        *error_out = "Can't parse " + package_json_path.string() + "\n";
+      }
     }
+    return 1;
   }
-  return 1;
+
+  simdjson::ondemand::object scripts;
+  if (root["scripts"].get_object().get(scripts) != simdjson::SUCCESS) {
+    if (error_out != nullptr) {
+      *error_out = "Can't find \"scripts\" field in " + package_json_path.string() + "\n";
+    }
+    return 1;
+  }
+
+  std::string_view command;
+  if (const auto command_error = scripts[script_name].get_string().get(command);
+      command_error != simdjson::SUCCESS) {
+    if (error_out != nullptr) {
+      if (command_error == simdjson::error_code::INCORRECT_TYPE) {
+        *error_out = "Script \"" + script_name +
+                     "\" is unexpectedly not a string for " +
+                     package_json_path.string() + "\n\n";
+      } else {
+        *error_out = "Missing script: \"" + script_name + "\" for " +
+                     package_json_path.string() + "\n\nAvailable scripts are:\n";
+        scripts.reset();
+        simdjson::ondemand::value value;
+        for (auto field : scripts) {
+          std::string_view key;
+          std::string_view raw_value;
+          if (field.unescaped_key().get(key) != simdjson::SUCCESS ||
+              field.value().get(value) != simdjson::SUCCESS ||
+              value.get_string().get(raw_value) != simdjson::SUCCESS) {
+            continue;
+          }
+          *error_out += "  " + std::string(key) + ": " + std::string(raw_value) + "\n";
+        }
+      }
+    }
+    return 1;
+  }
+
+  CliPackageScriptRunner runner(package_json_path,
+                                script_name,
+                                std::string(command),
+                                package_json->path_env_prefix,
+                                positional_args);
+  return runner.Run(error_out);
 }
 
 bool StdinIsTTY() {
@@ -680,6 +956,7 @@ int UbiRunCli(int argc, const char* const* argv, std::string* error_out) {
 
   CliMode mode = CliMode::kNone;
   std::vector<std::string> raw_exec_argv;
+  std::vector<std::string> run_positional_argv;
   std::vector<std::string> script_argv;
   raw_exec_argv.reserve(static_cast<size_t>(argc));
   int script_index = argc;
@@ -820,8 +1097,7 @@ int UbiRunCli(int argc, const char* const* argv, std::string* error_out) {
       run_target = argv[++i];
       raw_exec_argv.push_back(run_target);
       mode = CliMode::kRun;
-      script_index = i + 1;
-      break;
+      continue;
     }
 
     raw_exec_argv.push_back(token);
@@ -844,6 +1120,43 @@ int UbiRunCli(int argc, const char* const* argv, std::string* error_out) {
 
   UbiSetExecArgv(raw_exec_argv);
   ApplySupportedV8Flags(raw_exec_argv);
+  const bool use_test_runner = HasExactOptionToken(effective_state.effective_tokens, "--test");
+  bool requested_test_flag = use_test_runner;
+  if (!requested_test_flag) {
+    for (int argi = script_index; argi < argc; ++argi) {
+      if (argv[argi] != nullptr && std::string(argv[argi]) == "--test") {
+        requested_test_flag = true;
+        break;
+      }
+    }
+  }
+
+  if (requested_test_flag) {
+    if (saw_check) {
+      if (error_out != nullptr) {
+        *error_out = FormatCliError("either --test or --check can be used, not both");
+      }
+      return 9;
+    }
+    if (has_eval_string) {
+      if (error_out != nullptr) {
+        *error_out = FormatCliError("either --test or --eval can be used, not both");
+      }
+      return 9;
+    }
+    if (force_repl) {
+      if (error_out != nullptr) {
+        *error_out = FormatCliError("either --test or --interactive can be used, not both");
+      }
+      return 9;
+    }
+    if (HasOptionTokenWithInlineValue(effective_state.effective_tokens, "--watch-path")) {
+      if (error_out != nullptr) {
+        *error_out = FormatCliError("--watch-path cannot be used in combination with --test");
+      }
+      return 9;
+    }
+  }
 
   if (force_repl) {
     if (RawExecArgvHasInputType(raw_exec_argv)) {
@@ -869,7 +1182,32 @@ int UbiRunCli(int argc, const char* const* argv, std::string* error_out) {
   }
 
   if (mode == CliMode::kRun) {
-    return RunCliPackageScript(run_target, error_out);
+    int positional_index = script_index;
+    if (positional_index < argc &&
+        argv[positional_index] != nullptr &&
+        std::string(argv[positional_index]) == "--") {
+      positional_index++;
+    }
+    run_positional_argv.reserve(static_cast<size_t>(argc - positional_index));
+    for (int argi = positional_index; argi < argc; ++argi) {
+      if (argv[argi] != nullptr) run_positional_argv.emplace_back(argv[argi]);
+    }
+    return RunCliPackageScript(run_target, run_positional_argv, error_out);
+  }
+
+  if (use_test_runner) {
+    int pattern_index = script_index;
+    if (pattern_index < argc &&
+        argv[pattern_index] != nullptr &&
+        std::string(argv[pattern_index]) == "--") {
+      pattern_index++;
+    }
+    script_argv.reserve(static_cast<size_t>(argc - pattern_index));
+    for (int argi = pattern_index; argi < argc; ++argi) {
+      if (argv[argi] != nullptr) script_argv.emplace_back(argv[argi]);
+    }
+    UbiSetScriptArgv(script_argv);
+    return RunCliBuiltin(";", "internal/main/test_runner", error_out);
   }
 
   const bool use_stdin_entry =
