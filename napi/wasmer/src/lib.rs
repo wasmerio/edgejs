@@ -4,24 +4,24 @@ mod snapi;
 use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use virtual_fs::{AsyncReadExt, FileSystem};
 use wasmer::Table;
 use wasmer::{
-    ExternType,
     imports,
     sys::{EngineBuilder, Features},
-    FunctionEnv, Imports, Instance, Memory, Module, Store, TypedFunction, Value,
+    ExternType, FunctionEnv, Imports, Instance, Memory, Module, Store, TypedFunction, Value,
 };
 use wasmer_cache::{Cache, FileSystemCache, Hash as CacheHash};
 use wasmer_compiler_llvm::{LLVMOptLevel, LLVM};
 use wasmer_types::ModuleHash;
 use wasmer_wasix::{
-    Pipe, PluggableRuntime, WasiError,
     runners::wasi::{RuntimeOrEngine, WasiRunner},
     runtime::task_manager::tokio::TokioTaskManager,
+    Pipe, PluggableRuntime, WasiError,
 };
 
+use crate::guest::callback::set_top_level_callback_state;
 use crate::guest::napi::register_env_imports;
 use crate::guest::napi::register_napi_imports;
 
@@ -237,6 +237,10 @@ pub fn run_wasix_main_capture_stdio(
             .with_stdout(Box::new(stdout_tx))
             .with_stderr(Box::new(stderr_tx))
             .with_args(args.iter().cloned());
+        runner
+            .capabilities_mut()
+            .threading
+            .enable_asynchronous_threading = false;
 
         let repo_root = resolve_repo_root(&[wasm_path]);
         if repo_root.is_some() || !extra_mounts.is_empty() {
@@ -280,9 +284,12 @@ pub fn run_wasix_main_capture_stdio(
             }
         }
 
+        let shared_func_env: Arc<Mutex<Option<FunctionEnv<RuntimeEnv>>>> =
+            Arc::new(Mutex::new(None));
         let task_manager = Arc::new(TokioTaskManager::new(tokio::runtime::Handle::current()));
         let mut runtime = PluggableRuntime::new(task_manager);
-        runtime.set_engine(engine);
+        runtime.set_engine(engine.clone());
+        let shared_func_env_for_imports = Arc::clone(&shared_func_env);
         runtime.with_additional_imports(move |store| {
             let mut import_object = Imports::new();
             register_env_imports(store, &mut import_object);
@@ -294,6 +301,9 @@ pub fn run_wasix_main_capture_stdio(
                 guest_data_ptrs: std::collections::HashMap::new(),
             };
             let func_env = FunctionEnv::new(store, runtime_env);
+            *shared_func_env_for_imports
+                .lock()
+                .expect("poisoned func env mutex") = Some(func_env.clone());
             register_napi_imports(store, &func_env, &mut import_object);
 
             if let Some(memory_type) = imported_memory_type {
@@ -310,7 +320,32 @@ pub fn run_wasix_main_capture_stdio(
 
             Ok(import_object)
         });
+        let shared_func_env_for_instance = Arc::clone(&shared_func_env);
+        runtime.with_instance_setup(move |store, instance| {
+            let func_env = shared_func_env_for_instance
+                .lock()
+                .expect("poisoned func env mutex")
+                .clone()
+                .context("missing runtime function env during instance setup")?;
 
+            for export_name in ["ubi_guest_malloc", "malloc"] {
+                if let Ok(malloc) = instance
+                    .exports
+                    .get_typed_function::<i32, i32>(&*store, export_name)
+                {
+                    func_env.as_mut(store).malloc_fn = Some(malloc);
+                    break;
+                }
+            }
+
+            func_env.as_mut(store).table = instance
+                .exports
+                .get_table("__indirect_function_table")
+                .ok()
+                .cloned();
+            set_top_level_callback_state(store, func_env.as_ref(store).table.clone());
+            Ok(())
+        });
         match runner.run_wasm(
             RuntimeOrEngine::Runtime(Arc::new(runtime)),
             "guest-test",

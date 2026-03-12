@@ -1,6 +1,7 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+use std::sync::Mutex;
 
-use wasmer::{FunctionEnvMut, Store, Table, Value};
+use wasmer::{FunctionEnvMut, StoreMut, Table, Value};
 
 use crate::{RuntimeEnv, UNOFFICIAL_ENV_HANDLE};
 
@@ -12,14 +13,17 @@ use crate::{RuntimeEnv, UNOFFICIAL_ENV_HANDLE};
 // 3. Callback is strictly nested within the FFI call
 thread_local! {
     pub static CB_ENV_PTR: Cell<*mut ()> = Cell::new(std::ptr::null_mut());
-    static CB_TOP_LEVEL: RefCell<Option<CallbackTopLevelState>> = const { RefCell::new(None) };
 }
+
+static CB_TOP_LEVEL: Mutex<Option<CallbackTopLevelState>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct CallbackTopLevelState {
-    store: *mut Store,
+    store: *mut StoreMut<'static>,
     table: Table,
 }
+
+unsafe impl Send for CallbackTopLevelState {}
 
 fn call_guest_callback(
     store: &mut impl wasmer::AsStoreMut,
@@ -54,24 +58,16 @@ fn call_guest_callback(
     }
 }
 
-pub fn with_top_level_callback_state<R, F>(store: &mut Store, table: Option<Table>, f: F) -> R
-where
-    F: FnOnce(&mut Store) -> R,
-{
+pub fn set_top_level_callback_state(store: &mut StoreMut<'_>, table: Option<Table>) {
+    let mut guard = CB_TOP_LEVEL
+        .lock()
+        .expect("callback top-level mutex poisoned");
     if let Some(table) = table {
-        CB_TOP_LEVEL.with(|cell| {
-            cell.replace(Some(CallbackTopLevelState {
-                store: store as *mut Store,
-                table,
-            }));
-        });
-        let result = f(store);
-        CB_TOP_LEVEL.with(|cell| {
-            cell.replace(None);
-        });
-        result
+        let raw: *mut StoreMut<'static> =
+            unsafe { std::mem::transmute(store as *mut StoreMut<'_>) };
+        *guard = Some(CallbackTopLevelState { store: raw, table });
     } else {
-        f(store)
+        *guard = None;
     }
 }
 
@@ -94,13 +90,15 @@ pub extern "C" fn snapi_host_invoke_wasm_callback(wasm_fn_ptr: u32, data_val: u6
             return call_guest_callback(&mut store, &table, wasm_fn_ptr, data_val);
         }
 
-        CB_TOP_LEVEL.with(|top_level| {
-            let Some(state) = top_level.borrow().clone() else {
-                eprintln!("[callback trampoline] no env pointer available");
-                return 0;
-            };
+        let state = CB_TOP_LEVEL
+            .lock()
+            .expect("callback top-level mutex poisoned")
+            .clone();
+        if let Some(state) = state {
             let store = unsafe { &mut *state.store };
-            call_guest_callback(store, &state.table, wasm_fn_ptr, data_val)
-        })
+            return call_guest_callback(store, &state.table, wasm_fn_ptr, data_val);
+        }
+        eprintln!("[callback trampoline] no env pointer available");
+        0
     })
 }

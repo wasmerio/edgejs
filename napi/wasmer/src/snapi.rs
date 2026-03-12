@@ -64,6 +64,7 @@ unsafe extern "C" {
         env_handle: u32,
         value_id: u32,
     ) -> i32;
+    pub fn snapi_bridge_unofficial_set_enqueue_foreground_task_callback(env_handle: u32) -> i32;
     pub fn snapi_bridge_unofficial_set_fatal_error_callbacks(
         env_handle: u32,
         fatal_callback_id: u32,
