@@ -7,18 +7,17 @@
 </p>
 
 <p align="center">
-  Run JavaScript anywhere. Safely.
+  Run JavaScript anywhere. <b>Safely</b>.
 </p>
 
 <hr />
 
-Edge.js is a **Node.js-compatible** runtime with stronger isolation and simpler architecture than Node. No new platform to learn: just your
-Node.js code, `node_modules`, `package.json`, `node:` built-ins, and N-API addons.
+Edge.js is a **Node.js-compatible** runtime with stronger sandboxing than any other JS runtime thanks to WebAssembly.
 
-- **Full Node.js compatibility** Use your codebase, packages, and workflow.
-- **Safer by design.** Built for edge, embedded, serverless, and multi-tenant workloads.
-- **N-API is the boundary.** Native compatibility matters; engine details stay behind stable interfaces.
-- **Compatible with NPM/PNPM/Yarn/Bun installers.** use your current package manager with `ubi`.
+- ✅ **Full compatible with Node.js**: use your codebase, packages, and workflow.
+- 🛡️ **Safer by design**: built for serverless and embedded workloads.
+- 🧩 **Pluggable JS engine**: you can use the JS engine you prefer: V8, JavaScriptCore or QuickJS.
+- 💪 **Compatible with NPM/PNPM/Yarn/Bun**: use your current package manager with `ubi`.
 
 
 ```js
