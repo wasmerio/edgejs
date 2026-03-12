@@ -1,130 +1,65 @@
-# Ubinode
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/edgejs-logo-white.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/edgejs-logo-dark.svg">
+    <img src="./assets/edgejs-logo-dark.svg" alt="Edge.js logo" height="120">
+  </picture>
+</p>
 
-Ubi reimagines Node: fully sandboxed, engine-agnostic, and built for embedded and serverless execution. Ubiquitous by design.
+<p align="center">
+  Run JavaScript anywhere. Safely.
+</p>
 
-## Why This Project
+<hr />
 
-Node.js is deeply tied to V8 internals. This project aims for a different architecture: a Node runtime centered on N-API contracts, where engine-specific behavior is isolated behind stable interfaces.
+Edge.js is a **Node.js-compatible** runtime with stronger isolation and simpler architecture than Node. No new platform to learn: just your
+Node.js code, `node_modules`, `package.json`, `node:` built-ins, and N-API addons.
 
-The intent is to make runtime internals less engine-coupled while preserving compatibility expectations for native modules.
+- **Full Node.js compatibility** Use your codebase, packages, and workflow.
+- **Safer by design.** Built for edge, embedded, serverless, and multi-tenant workloads.
+- **N-API is the boundary.** Native compatibility matters; engine details stay behind stable interfaces.
+- **Compatible with NPM/PNPM/Yarn/Bun installers.** use your current package manager with `ubi`.
 
-## Project Direction
 
-- Keep N-API as the primary abstraction boundary.
-- Avoid exposing V8-specific details from public or internal integration layers.
-- Progress incrementally, validating behavior with tests at every phase.
+```js
+const http = require("node:http");
 
-## Source And Test Porting Policy
+http
+  .createServer((_req, res) => {
+    res.end("hello from edge\n");
+  })
+  .listen(3000, () => {
+    console.log("listening on http://localhost:3000");
+  });
+```
 
-- Source and tests should be ported from Node as fully and verbatim as possible.
-- The only intended source-level exception is when upstream code uses direct V8
-  APIs: those paths should be adapted to use N-API interfaces instead.
-- Prefer adapting harness/runtime glue over rewriting upstream test logic.
-- Preserve upstream behavior and failure semantics while applying N-API-based
-  substitutions.
+## Development
 
-## Current Status
-
-The project is in planning/bootstrap stage. The roadmap below defines the execution order and milestones.
-
-## Roadmap
-
-### Phase 1: `napi/v8` Compatibility Layer
-
-Create a `napi/v8` project that exposes N-API using V8 under the hood, without exposing V8 details.
-
-Scope:
-- Base the implementation on Node's N-API implementation:
-  - `node_api.h`
-  - `js_native_api_v8.h`
-  - `js_native_api_v8.cc`
-  - `js_native_api_v8_internals.h`
-  - and the files they depend on
-- Preserve N-API behavior and contracts while hiding V8 internals.
-- Keep source and tests aligned with upstream Node files, except V8 API usage
-  which should be replaced with N-API usage.
-
-Exit criteria:
-- A standalone layer that passes initial N-API behavior checks.
-- No V8-specific API leakage through the public N-API surface.
-
-### Phase 2: Base `node-napi` Runtime
-
-Create a base `node-napi` project using the same dependencies as Node, except for V8-related dependencies.
-
-Scope:
-- Reproduce Node's non-V8 dependency stack as closely as possible.
-- Establish the runtime skeleton required to host N-API-first execution.
-
-Exit criteria:
-- Buildable base project with Node-aligned non-V8 dependencies.
-- Clear separation boundaries for engine-related components.
-
-### Phase 3: Native Modules + Test Convergence
-
-Implement native modules with N-API and get all tests passing one by one.
-
-Scope:
-- Port/enable modules incrementally through N-API interfaces.
-- Run the test suite continuously and resolve failures iteratively.
-
-Exit criteria:
-- Native modules functioning through N-API.
-- Progressive test pass-rate growth toward full green.
-
-## Notes
-
-- Initial implementation references Node's existing N-API files and their dependencies.
-- This README focuses on goals and direction; implementation docs can be added as the codebase grows.
-
-## V8 Build Modes
-
-`napi/v8` and `ubi` support deterministic V8 resolution through:
-
-- `NAPI_V8_BUILD_METHOD=prebuilt` (default)
-- `NAPI_V8_BUILD_METHOD=source`
-- `NAPI_V8_BUILD_METHOD=local`
-
-Canonical configuration variables:
-
-- `NAPI_V8_INCLUDE_DIR`
-- `NAPI_V8_LIBRARY`
-- `NAPI_V8_EXTRA_LIBS`
-- `NAPI_V8_DEFINES`
-
-Compatibility aliases (`NAPI_V8_V8_*`) are still accepted during migration.
-
-## Testing
-
-The supported JavaScript test workflow uses the vendored `node-test` harness at
-the repository root.
-
-Run a category against the local `ubi` build:
+Build the CLI locally:
 
 ```bash
-NODE_TEST_RUNNER="$(pwd)/build-ubi-rename/ubi" \
+make build
+./build-ubi/ubi server.js
+```
+
+```bash
+./build-ubi/ubi --run dev
+```
+
+Or run the tests:
+```bash
+make test
+NODE_TEST_RUNNER="$(pwd)/build-ubi/ubi" \
 ./node-test/nodejs_test_harness --category=node:assert
 ```
 
-Useful variants:
 
-```bash
-# Run multiple generated categories.
-NODE_TEST_RUNNER="$(pwd)/build-ubi-rename/ubi" \
-./node-test/nodejs_test_harness --categories=node:assert,node:buffer
+## Roadmap
 
-# Run one explicit test file.
-NODE_TEST_RUNNER="$(pwd)/build-ubi-rename/ubi" \
-./node-test/nodejs_test_harness parallel/test-assert.js
+### [Contribute to our ROADMAP](https://github.com/wasmerio/ubi/issues/8)
 
-# Print only the pass/fail counts for a category run.
-NODE_TEST_RUNNER="$(pwd)/build-ubi-rename/ubi" \
-./node-test/nodejs_test_harness --counts-only --category=node:assert
-```
+- `0.x` Production readiness: platform coverage across Linux, Windows, macOS, iOS, and Android; reliability in constrained environments; security audits; and successful real production use.
+- `1.x` Need for speed: faster startup, faster core paths, and performance that competes with or beats Node.js, Bun, and Deno on most workloads.
+- `2.x` Enhancements: first-class TypeScript support and a smoother developer experience.
 
-Notes:
-
-- `NODE_TEST_RUNNER` can point to `ubi`, `node`, `deno`, or any compatible
-  runtime binary.
-- Category filters expand from `node-test/module-categories/*.txt`.
-- The harness forwards additional arguments to `node-test/tools/test.py`.
+For architecture detail, see [`ubi/README.md`](./ubi/README.md) and [`ubi/ROADMAP.md`](./ubi/ROADMAP.md).
