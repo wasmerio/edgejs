@@ -113,6 +113,10 @@ impl NapiCtx {
         self.inner.active_sessions.load(Ordering::Acquire)
     }
 
+    pub fn prepare_module(&self, module: &Module) -> Result<NapiSession> {
+        self.new_session(module)
+    }
+
     pub fn new_session(&self, module: &Module) -> Result<NapiSession> {
         let previous = self.inner.active_sessions.fetch_add(1, Ordering::AcqRel);
         if let Some(max_sessions) = self.inner.limits.max_sessions {
@@ -155,7 +159,7 @@ impl NapiCtx {
         runtime: &mut PluggableRuntime,
         module: &Module,
     ) -> Result<NapiSession> {
-        let session = self.new_session(module)?;
+        let session = self.prepare_module(module)?;
         session.attach_to_runtime(runtime);
         Ok(session)
     }
@@ -218,7 +222,8 @@ impl NapiSession {
             func_env.as_mut(&mut *store).table = Some(table.clone());
         }
         let table = func_env.as_ref(&store).table.clone();
-        set_top_level_callback_state(store, table);
+        let guest_envs = func_env.as_ref(&store).napi_state_to_guest_env.clone();
+        set_top_level_callback_state(store, table, guest_envs);
         Ok(())
     }
 
@@ -230,5 +235,35 @@ impl NapiSession {
         runtime.with_instance_setup(move |store, instance| {
             session.configure_instance(store, instance)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NapiCtx;
+    use crate::module::make_store;
+    use wasmer::Module;
+
+    const EMPTY_WASM_MODULE: &[u8] = b"\0asm\x01\0\0\0";
+
+    #[test]
+    fn max_sessions_limit_is_enforced() {
+        let store = make_store();
+        let module = Module::new(&store, EMPTY_WASM_MODULE).expect("empty wasm module compiles");
+        let ctx = NapiCtx::builder().max_sessions(1).build();
+
+        let first = ctx
+            .prepare_module(&module)
+            .expect("first session should be created");
+        assert_eq!(ctx.active_sessions(), 1);
+        assert!(ctx.prepare_module(&module).is_err());
+
+        drop(first);
+        assert_eq!(ctx.active_sessions(), 0);
+
+        let _second = ctx
+            .prepare_module(&module)
+            .expect("session slot should be released after drop");
+        assert_eq!(ctx.active_sessions(), 1);
     }
 }

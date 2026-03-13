@@ -10,12 +10,13 @@ use std::path::Path;
 use wasmer::{FunctionEnv, Imports, Instance, Memory, TypedFunction};
 
 pub use ctx::{NapiCtx, NapiCtxBuilder, NapiLimits, NapiSession};
+pub use module::{load_wasix_module, LoadedWasm};
 pub use wasix::{
-    run_wasix_main_capture_stdio, run_wasix_main_capture_stdio_with_ctx,
+    configure_runner_mounts, run_wasix_main_capture_stdio, run_wasix_main_capture_stdio_with_ctx,
     run_wasix_main_capture_stdout, run_wasix_main_capture_stdout_with_ctx, GuestMount,
 };
 
-pub(crate) use env::{RuntimeEnv, UNOFFICIAL_ENV_HANDLE};
+pub(crate) use env::RuntimeEnv;
 use guest::napi::{register_env_imports, register_napi_imports};
 use module::{load_or_compile_module, make_store};
 

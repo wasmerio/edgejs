@@ -1,6 +1,16 @@
 use anyhow::{anyhow, bail, Context, Result};
-use napi_wasmer::{run_wasix_main_capture_stdio_with_ctx, run_wasm_main_i32, GuestMount, NapiCtx};
+use napi_wasmer::{
+    configure_runner_mounts, load_wasix_module, run_wasm_main_i32, GuestMount, NapiCtx,
+};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use virtual_fs::AsyncReadExt;
+use wasmer_wasix::{
+    runners::wasi::{RuntimeOrEngine, WasiRunner},
+    runtime::task_manager::tokio::TokioTaskManager,
+    Pipe, PluggableRuntime, WasiError,
+};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -31,6 +41,102 @@ fn parse_mount(spec: &str) -> Result<GuestMount> {
         host_path,
         guest_path,
     })
+}
+
+fn spawn_pipe_drain_thread(
+    mut pipe: Pipe,
+    mut sink: Box<dyn Write + Send>,
+) -> std::thread::JoinHandle<Result<String>> {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("failed to create stdio drain runtime")?;
+        let mut captured = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = runtime
+                .block_on(pipe.read(&mut chunk))
+                .context("failed reading WASIX stdio pipe")?;
+            if n == 0 {
+                break;
+            }
+            sink.write_all(&chunk[..n])
+                .context("failed writing drained WASIX stdio")?;
+            sink.flush()
+                .context("failed flushing drained WASIX stdio")?;
+            captured.extend_from_slice(&chunk[..n]);
+        }
+        String::from_utf8(captured).context("WASIX stdio was not valid UTF-8")
+    })
+}
+
+fn run_wasix_example(
+    napi: &NapiCtx,
+    wasm_path: &Path,
+    args: &[String],
+    extra_mounts: &[GuestMount],
+) -> Result<i32> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create tokio runtime for WASIX")?;
+    let _guard = runtime.enter();
+
+    let loaded = load_wasix_module(wasm_path)?;
+    let engine = loaded.store.engine().clone();
+    let module = loaded.module;
+    let module_hash = loaded.module_hash;
+
+    let (stdout_tx, stdout_rx) = Pipe::channel();
+    let (stderr_tx, stderr_rx) = Pipe::channel();
+    let stdout_thread = spawn_pipe_drain_thread(stdout_rx, Box::new(std::io::stdout()));
+    let stderr_thread = spawn_pipe_drain_thread(stderr_rx, Box::new(std::io::stderr()));
+
+    let exit_code = {
+        let mut runner = WasiRunner::new();
+        runner
+            .with_stdout(Box::new(stdout_tx))
+            .with_stderr(Box::new(stderr_tx))
+            .with_args(args.iter().cloned());
+        runner
+            .capabilities_mut()
+            .threading
+            .enable_asynchronous_threading = false;
+        configure_runner_mounts(&mut runner, wasm_path, extra_mounts)?;
+
+        let task_manager = Arc::new(TokioTaskManager::new(tokio::runtime::Handle::current()));
+        let mut runtime = PluggableRuntime::new(task_manager);
+        runtime.set_engine(engine);
+
+        let session = napi.prepare_module(&module)?;
+        session.attach_to_runtime(&mut runtime);
+
+        match runner.run_wasm(
+            RuntimeOrEngine::Runtime(Arc::new(runtime)),
+            "guest-test",
+            module,
+            module_hash,
+        ) {
+            Ok(()) => 0,
+            Err(err) => {
+                if let Some(WasiError::Exit(code)) = err.downcast_ref::<WasiError>() {
+                    i32::from(*code)
+                } else {
+                    return Err(err).context("failed to run WASIX module through WasiRunner");
+                }
+            }
+        }
+    };
+
+    stdout_thread
+        .join()
+        .map_err(|_| anyhow!("stdout drain thread panicked"))??;
+    stderr_thread
+        .join()
+        .map_err(|_| anyhow!("stderr drain thread panicked"))??;
+
+    Ok(exit_code)
 }
 
 fn main() -> Result<()> {
@@ -123,8 +229,7 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow!("script has no file name: {}", host_script.display()))?;
             guest_args.push(format!("/app/{}", script_name.to_string_lossy()));
         }
-        let (exit, _stdout, _stderr) =
-            run_wasix_main_capture_stdio_with_ctx(&napi, wasm_path, &guest_args, &extra_mounts)?;
+        let exit = run_wasix_example(&napi, wasm_path, &guest_args, &extra_mounts)?;
         println!("wasix_exit_code={exit}");
         return Ok(());
     }
