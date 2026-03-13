@@ -27,6 +27,22 @@ NAPI_EXTERN napi_status unofficial_napi_create_env_with_options(
     void** scope_out);
 NAPI_EXTERN napi_status unofficial_napi_set_edge_environment(napi_env env, void* environment);
 NAPI_EXTERN void* unofficial_napi_get_edge_environment(napi_env env);
+using unofficial_napi_env_cleanup_callback = void (*)(napi_env env, void* data);
+NAPI_EXTERN napi_status unofficial_napi_set_env_cleanup_callback(
+    napi_env env,
+    unofficial_napi_env_cleanup_callback callback,
+    void* data);
+using unofficial_napi_env_destroy_callback = void (*)(napi_env env, void* data);
+NAPI_EXTERN napi_status unofficial_napi_set_env_destroy_callback(
+    napi_env env,
+    unofficial_napi_env_destroy_callback callback,
+    void* data);
+using unofficial_napi_context_token_callback = void (*)(napi_env env, void* token, void* data);
+NAPI_EXTERN napi_status unofficial_napi_set_context_token_callbacks(
+    napi_env env,
+    unofficial_napi_context_token_callback assign_callback,
+    unofficial_napi_context_token_callback unassign_callback,
+    void* data);
 NAPI_EXTERN napi_status unofficial_napi_destroy_env_instance(napi_env env);
 NAPI_EXTERN napi_status unofficial_napi_release_env(void* scope);
 NAPI_EXTERN napi_status unofficial_napi_set_flags_from_string(

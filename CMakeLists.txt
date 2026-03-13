@@ -509,8 +509,8 @@ target_link_libraries(edge_node_api
     uv_a
 )
 if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
+  target_compile_definitions(napi_v8 PUBLIC EDGE_BUNDLED_NAPI_V8=1)
   target_link_libraries(edge_node_api PUBLIC napi_v8)
-  target_link_libraries(napi_v8 PUBLIC edge_environment_core)
 endif()
 
 add_library(edge_runtime STATIC

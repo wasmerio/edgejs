@@ -75,6 +75,13 @@ struct napi_env__ {
   std::vector<TypeTagEntry> type_tag_entries;
   bool async_cleanup_hook_registered = false;
   void (*node_api_cleanup_runner)(napi_env) = nullptr;
+  unofficial_napi_env_cleanup_callback env_cleanup_callback = nullptr;
+  void* env_cleanup_callback_data = nullptr;
+  unofficial_napi_env_destroy_callback env_destroy_callback = nullptr;
+  void* env_destroy_callback_data = nullptr;
+  unofficial_napi_context_token_callback context_token_assign_callback = nullptr;
+  unofficial_napi_context_token_callback context_token_unassign_callback = nullptr;
+  void* context_token_callback_data = nullptr;
   unofficial_napi_enqueue_foreground_task_callback enqueue_foreground_task_callback = nullptr;
   void* enqueue_foreground_task_target = nullptr;
 };

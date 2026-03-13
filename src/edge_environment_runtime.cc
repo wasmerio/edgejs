@@ -1,6 +1,5 @@
 #include "edge_environment_runtime.h"
 
-#include "unofficial_napi.h"
 #include "edge_cares_wrap.h"
 #include "edge_handle_wrap.h"
 #include "edge_runtime_platform.h"
@@ -53,9 +52,5 @@ bool EdgeAttachEnvironmentForRuntime(napi_env env, const EdgeEnvironmentConfig* 
   EdgeEnvironmentRegisterCleanupStage(env, CaresCleanup, nullptr, kCleanupCares);
   EdgeEnvironmentRegisterCleanupStage(env, HandleWrapCleanup, nullptr, kCleanupHandleWrap);
   EdgeEnvironmentRegisterCleanupStage(env, StreamBaseCleanup, nullptr, kCleanupStreamBase);
-
-#if defined(EDGE_BUNDLED_NAPI_V8)
-  (void)unofficial_napi_set_edge_environment(env, EdgeEnvironmentGet(env));
-#endif
   return true;
 }

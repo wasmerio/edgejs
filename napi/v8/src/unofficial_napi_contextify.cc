@@ -17,7 +17,6 @@
 #include "internal/unofficial_napi_bridge.h"
 #include "node_api.h"
 #include "unofficial_napi_error_utils.h"
-#include "edge_environment.h"
 
 namespace {
 
@@ -416,8 +415,9 @@ void CleanupContextRecords(void* arg) {
   auto it = g_context_records.find(env);
   if (it == g_context_records.end()) return;
   for (auto& rec : it->second) {
-    if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr && rec.key_ref != nullptr) {
-      environment->UnassignFromContext(rec.key_ref);
+    if (rec.key_ref != nullptr && env->context_token_unassign_callback != nullptr) {
+      env->context_token_unassign_callback(
+          env, rec.key_ref, env->context_token_callback_data);
     }
     if (rec.key_ref != nullptr) {
       napi_delete_reference(env, rec.key_ref);
@@ -938,8 +938,8 @@ bool StoreRecord(napi_env env,
   }
   record.context.Reset(env->isolate, context);
   record.own_microtask_queue = std::move(own_microtask_queue);
-  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
-    environment->AssignToContext(record.key_ref);
+  if (env->context_token_assign_callback != nullptr) {
+    env->context_token_assign_callback(env, record.key_ref, env->context_token_callback_data);
   }
   g_context_records[env].push_back(std::move(record));
   return true;
@@ -1293,8 +1293,9 @@ napi_status NAPI_CDECL unofficial_napi_contextify_dispose_context(
     if (napi_get_reference_value(env, rec.key_ref, &candidate) != napi_ok || candidate == nullptr) continue;
     bool same = false;
     if (napi_strict_equals(env, candidate, sandbox_or_context_global, &same) != napi_ok || !same) continue;
-    if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
-      environment->UnassignFromContext(rec.key_ref);
+    if (env->context_token_unassign_callback != nullptr) {
+      env->context_token_unassign_callback(
+          env, rec.key_ref, env->context_token_callback_data);
     }
     napi_delete_reference(env, rec.key_ref);
     rec.key_ref = nullptr;

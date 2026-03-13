@@ -28,14 +28,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(NAPI_V8_STANDALONE_BUILD ON)
 endif()
 
-if(NAPI_V8_STANDALONE_BUILD)
-  set(NAPI_V8_LIBUV_ROOT "${PROJECT_ROOT}/deps/uv")
-  if(CMAKE_SYSTEM_NAME MATCHES "WASI|WASIX" OR
-     CMAKE_C_COMPILER MATCHES "wasixcc" OR
-     CMAKE_CXX_COMPILER MATCHES "wasixcc\\+\\+")
-    set(NAPI_V8_LIBUV_ROOT "${PROJECT_ROOT}/deps/libuv-wasix")
-  endif()
+set(NAPI_V8_LIBUV_ROOT "${PROJECT_ROOT}/deps/uv")
+if(CMAKE_SYSTEM_NAME MATCHES "WASI|WASIX" OR
+   CMAKE_C_COMPILER MATCHES "wasixcc" OR
+   CMAKE_CXX_COMPILER MATCHES "wasixcc\\+\\+")
+  set(NAPI_V8_LIBUV_ROOT "${PROJECT_ROOT}/deps/libuv-wasix")
+endif()
 
+if(NAPI_V8_STANDALONE_BUILD)
   if(NOT TARGET uv_a)
     set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
     set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -75,6 +75,7 @@ target_include_directories(napi_v8
 target_compile_definitions(napi_v8
   PUBLIC
     NAPI_EXTERN=
+    EDGE_BUNDLED_NAPI_V8=1
 )
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(napi_v8 PRIVATE -fno-rtti)
@@ -88,10 +89,6 @@ endif()
 if(NAPI_V8_EXTRA_LIBS)
   target_link_libraries(napi_v8 PUBLIC ${NAPI_V8_EXTRA_LIBS})
 endif()
-if(NAPI_V8_STANDALONE_BUILD)
-  target_link_libraries(napi_v8 PUBLIC edge_environment_core)
-endif()
-
 if(NAPI_V8_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

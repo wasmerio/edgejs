@@ -29,7 +29,33 @@ test: build test-only
 
 test-only:
 	NODE_TEST_RUNNER=$(EDGE_BINARY) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
-	  --skip-tests=known_issues/test-stdin-is-always-net.socket.j,parallel/test-dns-perf_hooks.js
+	  --skip-tests=known_issues/test-stdin-is-always-net.socket.j,parallel/test-dns-perf_hooks.js,
+
+# 	Tests not working on linux
+
+# 	/parallel/test-dns-channel-timeout.js
+# 	/parallel/test-http-server-headers-timeout-keepalive.js
+# 	/parallel/test-http-server-request-timeout-keepalive.js
+# 	/parallel/test-crypto-argon2-unsupported.js
+# 	/parallel/test-crypto-encap-decap.js
+# 	/parallel/test-crypto-pqc-key-objects-ml-dsa.js
+# 	/parallel/test-crypto-pqc-key-objects-ml-kem.js
+# 	/parallel/test-crypto-pqc-key-objects-slh-dsa.js
+# 	/parallel/test-crypto-pqc-keygen-ml-dsa.js
+# 	/parallel/test-crypto-pqc-keygen-ml-kem.js
+# 	/parallel/test-crypto-pqc-keygen-slh-dsa.js
+# 	/parallel/test-crypto-rsa-dsa.js
+# 	/parallel/test-strace-openat-openssl.js
+# 	/parallel/test-webcrypto-supports.mjs
+# 	/parallel/test-http2-client-jsstream-destroy.js
+# 	/parallel/test-http2-https-fallback.js
+# 	/parallel/test-http2-respond-with-file-connection-abort.js
+# 	/parallel/test-http2-server-unknown-protocol.js
+# 	/parallel/test-tls-alpn-server-client.js
+# 	/parallel/test-tls-client-getephemeralkeyinfo.js
+# 	/parallel/test-tls-getprotocol.js
+# 	/parallel/test-tls-min-max-version.js
+# 	/parallel/test-tls-socket-destroy.js
 
 check-portability:
 ifeq ($(UNAME_S),Darwin)

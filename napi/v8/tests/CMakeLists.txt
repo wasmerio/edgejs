@@ -56,6 +56,9 @@ if(NAPI_V8_LIBRARY)
         napi_v8
         "${NAPI_V8_LIBRARY}"
     )
+    if(TARGET edge_environment_core)
+      target_link_libraries(${target_name} PRIVATE edge_environment_core)
+    endif()
     target_compile_definitions(${target_name}
       PRIVATE
         NAPI_V8_NODE_ROOT_PATH="${NAPI_V8_NODE_ROOT}"
