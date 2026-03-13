@@ -8,7 +8,7 @@ version = "0.0.1"
 
 [[module]]
 name = "edgejs"
-source = "./build-wasix/ubi.wasm"
+source = "./build-wasix/edgejs.wasm"
 
 [[command]]
 name = "edgejs"

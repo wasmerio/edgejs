@@ -55,10 +55,10 @@ cmake --build "${BUILD_DIR}" -j4
 
 if [[ -f "${BUILD_DIR}/edge" ]]; then
   optimize_wasm "${BUILD_DIR}/edge" "${BUILD_DIR}/edge.wasm"
-  cp "${BUILD_DIR}/edge.wasm" "${BUILD_DIR}/ubi.wasm"
+  cp "${BUILD_DIR}/edge.wasm" "${BUILD_DIR}/edgejs.wasm"
 elif [[ -f "${BUILD_DIR}/ubi" ]]; then
-  optimize_wasm "${BUILD_DIR}/ubi" "${BUILD_DIR}/ubi.wasm"
-  cp "${BUILD_DIR}/ubi.wasm" "${BUILD_DIR}/edge.wasm"
+  optimize_wasm "${BUILD_DIR}/ubi" "${BUILD_DIR}/edgejs.wasm"
+  cp "${BUILD_DIR}/edgejs.wasm" "${BUILD_DIR}/edge.wasm"
 else
   echo "error: expected ${BUILD_DIR}/edge or ${BUILD_DIR}/ubi after build" >&2
   exit 1
@@ -68,4 +68,4 @@ if [[ -f "${BUILD_DIR}/edgeenv" ]]; then
   optimize_wasm "${BUILD_DIR}/edgeenv" "${BUILD_DIR}/edgeenv.wasm"
 fi
 
-echo "Built WASIX targets at ${BUILD_DIR}/edge.wasm and ${BUILD_DIR}/ubi.wasm"
+echo "Built WASIX targets at ${BUILD_DIR}/edge.wasm and ${BUILD_DIR}/edgejs.wasm"
