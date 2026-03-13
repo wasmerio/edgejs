@@ -5,4 +5,3 @@
 [submodule "test"]
 	path = test
 	url = https://github.com/wasmerio/node-test.git
-	branch = main
