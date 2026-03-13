@@ -430,6 +430,19 @@ napi_value PipeClose(napi_env env, napi_callback_info info) {
   return EdgeStreamBaseClose(&wrap->base, argc > 0 ? argv[0] : nullptr);
 }
 
+napi_value PipeSetBlocking(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  PipeWrap* wrap = nullptr;
+  GetThis(env, info, &argc, argv, &wrap);
+  if (wrap == nullptr || argc < 1) return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
+  bool on = false;
+  napi_get_value_bool(env, argv[0], &on);
+  return EdgeStreamBaseMakeInt32(
+      env,
+      uv_stream_set_blocking(reinterpret_cast<uv_stream_t*>(&wrap->handle), on ? 1 : 0));
+}
+
 napi_value PipeSetPendingInstances(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -675,6 +688,7 @@ napi_value EdgeInstallPipeWrapBinding(napi_env env) {
 
   napi_property_descriptor pipe_props[] = {
       {"open", nullptr, PipeOpen, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"setBlocking", nullptr, PipeSetBlocking, nullptr, nullptr, nullptr, napi_default_method, nullptr},
       {"bind", nullptr, PipeBind, nullptr, nullptr, nullptr, napi_default_method, nullptr},
       {"listen", nullptr, PipeListen, nullptr, nullptr, nullptr, napi_default_method, nullptr},
       {"connect", nullptr, PipeConnect, nullptr, nullptr, nullptr, napi_default_method, nullptr},

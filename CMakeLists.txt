@@ -685,6 +685,7 @@ if(EDGE_BUILD_CLI)
   add_executable(edge
     "${EDGE_ROOT}/src/edge_main.cc"
   )
+  set_target_properties(edge PROPERTIES ENABLE_EXPORTS ON)
   target_include_directories(edge
     PRIVATE
       "${EDGE_ROOT}/src"
