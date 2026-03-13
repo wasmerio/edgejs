@@ -15,7 +15,6 @@ EDGEENV_BINARY ?= $(BUILD_DIR)/edgeenv
 CMAKE_ARGS ?=
 BUILD_ENV ?= env
 EXTRA_CMAKE_ARGS ?=
-CTEST_ARGS ?=
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS
@@ -29,7 +28,7 @@ build:
 test: build test-only
 
 test-only:
-	ctest --test-dir $(BUILD_DIR) --output-on-failure -j$(TEST_JOBS) $(CTEST_ARGS)
+	NODE_TEST_RUNNER=$(EDGE_BINARY) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys
 
 check-portability:
 ifeq ($(UNAME_S),Darwin)
