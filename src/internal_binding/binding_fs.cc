@@ -16,10 +16,6 @@
 #include <unordered_set>
 #include <vector>
 #include <uv.h>
-#if !defined(_WIN32)
-#include <cerrno>
-#include <unistd.h>
-#endif
 #include "ada.h"
 
 #include "edge_environment.h"

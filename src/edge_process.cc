@@ -4405,21 +4405,12 @@ napi_value ProcessMethodsEmptyArrayCallback(napi_env env, napi_callback_info inf
 }
 
 static size_t get_rss() {
-#if defined(__wasi__)
-  return 0;
-#else
   size_t rss = 0;
   if (uv_resident_set_memory(&rss) != 0) return 0;
   return rss;
-#endif
 }
 
 napi_value ProcessMethodsRssCallback(napi_env env, napi_callback_info info) {
-#if defined(__wasi__)
-  napi_value out = nullptr;
-  napi_create_double(env, 0, &out);
-  return out;
-#else
   size_t rss = 0;
   const int rc = uv_resident_set_memory(&rss);
   if (rc != 0) {
@@ -4429,7 +4420,6 @@ napi_value ProcessMethodsRssCallback(napi_env env, napi_callback_info info) {
   napi_value out = nullptr;
   napi_create_double(env, static_cast<double>(rss), &out);
   return out;
-#endif
 }
 
 napi_value ProcessMethodsCpuUsageBufferCallback(napi_env env, napi_callback_info info) {
@@ -4483,16 +4473,6 @@ napi_value ProcessMethodsMemoryUsageBufferCallback(napi_env env, napi_callback_i
   if (argc < 1 || argv[0] == nullptr) return nullptr;
   double* values = nullptr;
   if (!GetFloat64ArrayData(env, argv[0], 5, &values)) return nullptr;
-#if defined(__wasi__)
-  values[0] = 0;
-  values[1] = 0;
-  values[2] = 0;
-  values[3] = 0;
-  values[4] = 0;
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  return undefined;
-#else
   size_t rss = 0;
   const int rss_rc = uv_resident_set_memory(&rss);
   if (rss_rc != 0) {
@@ -4514,7 +4494,6 @@ napi_value ProcessMethodsMemoryUsageBufferCallback(napi_env env, napi_callback_i
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
-#endif
 }
 
 napi_value ProcessMethodsResourceUsageBufferCallback(napi_env env, napi_callback_info info) {

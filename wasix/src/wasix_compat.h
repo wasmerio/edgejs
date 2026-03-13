@@ -1,5 +1,5 @@
-#ifndef WASIX_LIBUV_COMPAT_H
-#define WASIX_LIBUV_COMPAT_H
+#ifndef WASIX_COMPAT_H
+#define WASIX_COMPAT_H
 
 #include <errno.h>
 #include <grp.h>
@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #if defined(__wasi__)
+int getgroups(int size, gid_t list[]);
+
 static inline pid_t wasix_fork(void) {
   errno = ENOSYS;
   return -1;
@@ -22,13 +24,13 @@ static inline pid_t wasix_fork(void) {
 #define fork wasix_fork
 
 static inline unsigned int wasix_if_nametoindex(const char* ifname) {
-  (void) ifname;
+  (void)ifname;
   return 0;
 }
 #define if_nametoindex wasix_if_nametoindex
 
 static inline char* wasix_if_indextoname(unsigned int ifindex, char* ifname) {
-  (void) ifindex;
+  (void)ifindex;
   if (ifname != NULL) ifname[0] = '\0';
   errno = ENXIO;
   return NULL;
@@ -42,18 +44,18 @@ static inline int wasix_getservbyport_r(
     char* buf,
     size_t buflen,
     struct servent** result) {
-  (void) port;
-  (void) proto;
-  (void) se;
-  (void) buf;
-  (void) buflen;
+  (void)port;
+  (void)proto;
+  (void)se;
+  (void)buf;
+  (void)buflen;
   if (result != NULL) *result = NULL;
   errno = ENOSYS;
   return ENOSYS;
 }
 #define getservbyport_r wasix_getservbyport_r
 
-static char* wasix_tzname[2] = {(char*) "UTC", (char*) "UTC"};
+static char* wasix_tzname[2] = {(char*)"UTC", (char*)"UTC"};
 static long wasix_timezone = 0;
 static int wasix_daylight = 0;
 #define tzname wasix_tzname
@@ -73,14 +75,14 @@ struct cmsghdr {
 };
 
 #define WASIX_CMSG_ALIGN(len) (((len) + sizeof(size_t) - 1) & ~(sizeof(size_t) - 1))
-#define CMSG_DATA(cmsg) ((unsigned char*) ((struct cmsghdr*) (cmsg) + 1))
+#define CMSG_DATA(cmsg) ((unsigned char*)((struct cmsghdr*)(cmsg) + 1))
 #define CMSG_SPACE(len) (WASIX_CMSG_ALIGN(sizeof(struct cmsghdr)) + WASIX_CMSG_ALIGN(len))
 #define CMSG_LEN(len) (WASIX_CMSG_ALIGN(sizeof(struct cmsghdr)) + (len))
 #define CMSG_FIRSTHDR(mhdr)                                                     \
-  ((size_t) (mhdr)->msg_controllen >= sizeof(struct cmsghdr)                    \
-       ? (struct cmsghdr*) (mhdr)->msg_control                                  \
-       : (struct cmsghdr*) 0)
-#define CMSG_NXTHDR(mhdr, cmsg) ((struct cmsghdr*) 0)
+  ((size_t)(mhdr)->msg_controllen >= sizeof(struct cmsghdr)                     \
+       ? (struct cmsghdr*)(mhdr)->msg_control                                   \
+       : (struct cmsghdr*)0)
+#define CMSG_NXTHDR(mhdr, cmsg) ((struct cmsghdr*)0)
 #endif
 
 #ifndef PRIO_PROCESS
@@ -88,15 +90,15 @@ struct cmsghdr {
 #endif
 
 static inline int getpriority(int which, int who) {
-  (void) which;
-  (void) who;
+  (void)which;
+  (void)who;
   return 0;
 }
 
 static inline int setpriority(int which, int who, int prio) {
-  (void) which;
-  (void) who;
-  (void) prio;
+  (void)which;
+  (void)who;
+  (void)prio;
   return -1;
 }
 
@@ -105,26 +107,26 @@ static inline int setpriority(int which, int who, int prio) {
 #endif
 
 static inline int wasix_pthread_getschedparam(pthread_t t, int* policy, struct sched_param* sp) {
-  (void) t;
+  (void)t;
   if (policy != NULL) *policy = SCHED_OTHER;
   if (sp != NULL) sp->sched_priority = 0;
   return 0;
 }
 
 static inline int wasix_pthread_setschedparam(pthread_t t, int policy, const struct sched_param* sp) {
-  (void) t;
-  (void) policy;
-  (void) sp;
+  (void)t;
+  (void)policy;
+  (void)sp;
   return 0;
 }
 
 static inline int wasix_sched_get_priority_min(int policy) {
-  (void) policy;
+  (void)policy;
   return 0;
 }
 
 static inline int wasix_sched_get_priority_max(int policy) {
-  (void) policy;
+  (void)policy;
   return 0;
 }
 
@@ -134,17 +136,17 @@ static inline int wasix_sched_get_priority_max(int policy) {
 #define sched_get_priority_max wasix_sched_get_priority_max
 
 static inline int wasix_pthread_getname_np(pthread_t t, char* name, size_t len) {
-  (void) t;
+  (void)t;
   if (name != NULL && len > 0) name[0] = '\0';
   return 0;
 }
 #define pthread_getname_np wasix_pthread_getname_np
 
 static inline char* wasix_ptsname(int fd) {
-  (void) fd;
+  (void)fd;
   errno = ENOSYS;
-  return (char*) 0;
+  return (char*)0;
 }
 #define ptsname wasix_ptsname
 
-#endif  // WASIX_LIBUV_COMPAT_H
+#endif  // WASIX_COMPAT_H

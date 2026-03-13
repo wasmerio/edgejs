@@ -624,73 +624,47 @@ void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback cb)
 void AttachInfoArrays(napi_env env, napi_value binding, TimersHostState* st) {
   if (st == nullptr) return;
 
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return;
-  napi_value int32_array_ctor = nullptr;
-  if (napi_get_named_property(env, global, "Int32Array", &int32_array_ctor) != napi_ok ||
-      int32_array_ctor == nullptr) {
-    return;
+  napi_value immediate_ab = nullptr;
+  void* immediate_data = nullptr;
+  if (napi_create_arraybuffer(env, 3 * sizeof(int32_t), &immediate_data, &immediate_ab) == napi_ok &&
+      immediate_ab != nullptr && immediate_data != nullptr) {
+    auto* ptr = static_cast<int32_t*>(immediate_data);
+    ptr[0] = 0;
+    ptr[1] = 0;
+    ptr[2] = 0;
+    napi_value immediate_info = nullptr;
+    if (napi_create_typedarray(env, napi_int32_array, 3, immediate_ab, 0, &immediate_info) == napi_ok &&
+        immediate_info != nullptr) {
+      napi_set_named_property(env, binding, "immediateInfo", immediate_info);
+      DeleteRefIfAny(env, &st->immediate_info_ref);
+      napi_create_reference(env, immediate_info, 1, &st->immediate_info_ref);
+      if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+        environment->immediate_info()->fields = ptr;
+        DeleteRefIfAny(env, &environment->immediate_info()->ref);
+        napi_create_reference(env, immediate_info, 1, &environment->immediate_info()->ref);
+      }
+    }
   }
 
-  auto create_info_array =
-      [&](uint32_t length,
-          napi_ref* ref_slot,
-          int32_t** fields_slot,
-          napi_ref* env_ref_slot,
-          const char* prop_name) {
-    napi_value js_length = nullptr;
-    if (napi_create_uint32(env, length, &js_length) != napi_ok || js_length == nullptr) return;
-
-    napi_value info = nullptr;
-    napi_value argv[1] = {js_length};
-    if (napi_new_instance(env, int32_array_ctor, 1, argv, &info) != napi_ok || info == nullptr) return;
-
-    napi_typedarray_type type = napi_uint8_array;
-    size_t actual_length = 0;
-    void* data = nullptr;
-    napi_value arraybuffer = nullptr;
-    size_t byte_offset = 0;
-    if (napi_get_typedarray_info(env, info, &type, &actual_length, &data, &arraybuffer, &byte_offset) != napi_ok ||
-        type != napi_int32_array || actual_length < length || data == nullptr) {
-      return;
+  napi_value timeout_ab = nullptr;
+  void* timeout_data = nullptr;
+  if (napi_create_arraybuffer(env, sizeof(int32_t), &timeout_data, &timeout_ab) == napi_ok &&
+      timeout_ab != nullptr && timeout_data != nullptr) {
+    auto* ptr = static_cast<int32_t*>(timeout_data);
+    ptr[0] = 0;
+    napi_value timeout_info = nullptr;
+    if (napi_create_typedarray(env, napi_int32_array, 1, timeout_ab, 0, &timeout_info) == napi_ok &&
+        timeout_info != nullptr) {
+      napi_set_named_property(env, binding, "timeoutInfo", timeout_info);
+      DeleteRefIfAny(env, &st->timeout_info_ref);
+      napi_create_reference(env, timeout_info, 1, &st->timeout_info_ref);
+      if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+        environment->timeout_info()->fields = ptr;
+        DeleteRefIfAny(env, &environment->timeout_info()->ref);
+        napi_create_reference(env, timeout_info, 1, &environment->timeout_info()->ref);
+      }
     }
-
-    auto* fields = static_cast<int32_t*>(data);
-    for (uint32_t i = 0; i < length; ++i) {
-      fields[i] = 0;
-    }
-
-    if (napi_set_named_property(env, binding, prop_name, info) != napi_ok) return;
-    DeleteRefIfAny(env, ref_slot);
-    if (napi_create_reference(env, info, 1, ref_slot) != napi_ok || *ref_slot == nullptr) return;
-    *fields_slot = fields;
-    if (env_ref_slot != nullptr) {
-      DeleteRefIfAny(env, env_ref_slot);
-      napi_create_reference(env, info, 1, env_ref_slot);
-    }
-  };
-
-  auto* environment = EdgeEnvironmentGet(env);
-  int32_t** immediate_fields_slot = environment != nullptr ? &environment->immediate_info()->fields : nullptr;
-  napi_ref* immediate_env_ref_slot = environment != nullptr ? &environment->immediate_info()->ref : nullptr;
-  int32_t** timeout_fields_slot = environment != nullptr ? &environment->timeout_info()->fields : nullptr;
-  napi_ref* timeout_env_ref_slot = environment != nullptr ? &environment->timeout_info()->ref : nullptr;
-
-  int32_t* local_immediate_fields = nullptr;
-  int32_t* local_timeout_fields = nullptr;
-  if (immediate_fields_slot == nullptr) immediate_fields_slot = &local_immediate_fields;
-  if (timeout_fields_slot == nullptr) timeout_fields_slot = &local_timeout_fields;
-
-  create_info_array(3,
-                    &st->immediate_info_ref,
-                    immediate_fields_slot,
-                    immediate_env_ref_slot,
-                    "immediateInfo");
-  create_info_array(1,
-                    &st->timeout_info_ref,
-                    timeout_fields_slot,
-                    timeout_env_ref_slot,
-                    "timeoutInfo");
+  }
 }
 
 }  // namespace

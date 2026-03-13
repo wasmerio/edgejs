@@ -71,7 +71,7 @@ No phase should be marked complete without passing its defined test gate.
 
 - Use `EDGE_NAPI_PROVIDER=imports` to compile `edge` with N-API imports only
   (no bundled `napi/v8` linkage).
-- WASIX toolchain file: `scripts/cmake/wasix-toolchain.cmake`.
+- WASIX toolchain file: `wasix/wasix-toolchain.cmake`.
 - Setup + build helper:
-  - `scripts/setup-wasix-deps.sh`
-  - `scripts/build-wasix.sh`
+  - `wasix/setup-wasix-deps.sh`
+  - `wasix/build-wasix.sh`

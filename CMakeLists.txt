@@ -122,7 +122,7 @@ endif()
 if(NOT EXISTS "${EDGE_LIBUV_ROOT}/CMakeLists.txt")
   message(FATAL_ERROR
     "libuv CMake project not found at ${EDGE_LIBUV_ROOT}. "
-    "For WASIX, run scripts/setup-wasix-deps.sh first.")
+    "For WASIX, run wasix/setup-wasix-deps.sh first.")
 endif()
 
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -292,7 +292,7 @@ if(EDGE_IS_WASIX_TARGET)
   if(NOT EXISTS "${_edge_openssl_include_dir}")
     message(FATAL_ERROR
       "OpenSSL include directory not found: ${_edge_openssl_include_dir}. "
-      "For WASIX, clone deps with scripts/setup-wasix-deps.sh.")
+      "For WASIX, clone deps with wasix/setup-wasix-deps.sh.")
   endif()
 
   set(_edge_openssl_crypto "")
@@ -402,13 +402,13 @@ if(EDGE_IS_WASIX_TARGET)
     OUTPUT "${EDGE_ICU_EMBED_C}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
     COMMAND
-      "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/scripts/cmake/embed_binary.py"
+      "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/wasix/cmake/embed_binary.py"
       --input "${EDGE_ICU_DATA_BZ2}"
       --output "${EDGE_ICU_EMBED_C}"
       --symbol "ubi_icudt78l_dat"
       --compression bz2
     DEPENDS
-      "${PROJECT_ROOT}/scripts/cmake/embed_binary.py"
+      "${PROJECT_ROOT}/wasix/cmake/embed_binary.py"
       "${EDGE_ICU_DATA_BZ2}"
     VERBATIM
   )
@@ -754,7 +754,7 @@ target_compile_definitions(edge_runtime
 )
 if(EDGE_IS_WASIX_TARGET)
   target_sources(edge_runtime PRIVATE
-    src/wasix_compat.cc
+    wasix/src/wasix_compat.cc
   )
 endif()
 if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
@@ -783,11 +783,6 @@ if(EDGE_BUILD_CLI)
   set(EDGE_CLI_SOURCES
     "${EDGE_ROOT}/src/edge_main.cc"
   )
-  if(EDGE_IS_WASIX_TARGET)
-    list(APPEND EDGE_CLI_SOURCES
-      "${EDGE_ROOT}/src/wasix_host_alloc.cc"
-    )
-  endif()
   add_executable(edge
     ${EDGE_CLI_SOURCES}
   )

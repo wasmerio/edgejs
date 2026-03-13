@@ -19,6 +19,54 @@ struct DetachedSlotState {
 
 std::unordered_map<napi_env, DetachedSlotState> g_detached_slots;
 
+void AttachedEnvCleanup(napi_env env, void* /*data*/) {
+  if (auto* environment = edge::Environment::Get(env); environment != nullptr) {
+    environment->RunCleanup();
+    environment->RunAtExitCallbacks();
+  }
+}
+
+void AttachedEnvDestroy(napi_env env, void* /*data*/) {
+  edge::Environment::Detach(env);
+}
+
+void AttachedEnvAssignContextToken(napi_env env, void* token, void* /*data*/) {
+  if (auto* environment = edge::Environment::Get(env); environment != nullptr) {
+    environment->AssignToContext(token);
+  }
+}
+
+void AttachedEnvUnassignContextToken(napi_env env, void* token, void* /*data*/) {
+  if (auto* environment = edge::Environment::Get(env); environment != nullptr) {
+    environment->UnassignFromContext(token);
+  }
+}
+
+bool RegisterAttachedEnvHooks(napi_env env) {
+#if defined(EDGE_BUNDLED_NAPI_V8)
+  if (unofficial_napi_set_edge_environment(env, edge::Environment::Get(env)) != napi_ok) {
+    return false;
+  }
+  if (unofficial_napi_set_env_cleanup_callback(env, AttachedEnvCleanup, nullptr) != napi_ok) {
+    (void)unofficial_napi_set_edge_environment(env, nullptr);
+    return false;
+  }
+  if (unofficial_napi_set_env_destroy_callback(env, AttachedEnvDestroy, nullptr) != napi_ok) {
+    (void)unofficial_napi_set_env_cleanup_callback(env, nullptr, nullptr);
+    (void)unofficial_napi_set_edge_environment(env, nullptr);
+    return false;
+  }
+  if (unofficial_napi_set_context_token_callbacks(
+          env, AttachedEnvAssignContextToken, AttachedEnvUnassignContextToken, nullptr) != napi_ok) {
+    (void)unofficial_napi_set_env_destroy_callback(env, nullptr, nullptr);
+    (void)unofficial_napi_set_env_cleanup_callback(env, nullptr, nullptr);
+    (void)unofficial_napi_set_edge_environment(env, nullptr);
+    return false;
+  }
+#endif
+  return true;
+}
+
 void RunSlotDeleters(std::unordered_map<size_t, edge::SlotEntry>* slots) {
   if (slots == nullptr) return;
   for (auto& [_, slot] : *slots) {
@@ -93,13 +141,27 @@ Environment* Environment::Get(napi_env env) {
 
 Environment* Environment::Attach(napi_env env, const EdgeEnvironmentConfig& config) {
   if (env == nullptr) return nullptr;
-  std::lock_guard<std::mutex> lock(g_environment_mu);
-  auto& slot = g_environments[env];
-  if (slot == nullptr) {
-    slot = std::make_unique<Environment>(env);
+  Environment* environment = nullptr;
+  bool created = false;
+  {
+    std::lock_guard<std::mutex> lock(g_environment_mu);
+    auto& slot = g_environments[env];
+    if (slot == nullptr) {
+      slot = std::make_unique<Environment>(env);
+      created = true;
+    }
+    slot->Configure(config);
+    environment = slot.get();
   }
-  slot->Configure(config);
-  return slot.get();
+  if (created && !RegisterAttachedEnvHooks(env)) {
+    std::lock_guard<std::mutex> lock(g_environment_mu);
+    auto it = g_environments.find(env);
+    if (it != g_environments.end() && it->second.get() == environment) {
+      g_environments.erase(it);
+    }
+    return nullptr;
+  }
+  return environment;
 }
 
 void Environment::Detach(napi_env env) {

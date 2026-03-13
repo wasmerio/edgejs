@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build-wasix"
-TOOLCHAIN_FILE="${PROJECT_ROOT}/scripts/cmake/wasix-toolchain.cmake"
+TOOLCHAIN_FILE="${PROJECT_ROOT}/wasix/wasix-toolchain.cmake"
 OPENSSL_WASIX_DIR="${PROJECT_ROOT}/deps/openssl-wasix"
 
 export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-yes}"
@@ -20,7 +20,14 @@ optimize_wasm() {
   cp "${input}" "${output}"
 }
 
-"${SCRIPT_DIR}/setup-wasix-deps.sh"
+"${PROJECT_ROOT}/wasix/setup-wasix-deps.sh"
+
+if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+  rm -f "${BUILD_DIR}/CMakeCache.txt"
+fi
+if [[ -d "${BUILD_DIR}/CMakeFiles" ]]; then
+  rm -rf "${BUILD_DIR}/CMakeFiles"
+fi
 
 if [[ ! -f "${OPENSSL_WASIX_DIR}/libcrypto.a" || ! -f "${OPENSSL_WASIX_DIR}/libssl.a" ]]; then
   echo "Building OpenSSL static libraries for WASIX..."
@@ -46,6 +53,8 @@ fi
 cmake \
   -S "${PROJECT_ROOT}" \
   -B "${BUILD_DIR}" \
+  -U CMAKE_C_FLAGS \
+  -U CMAKE_CXX_FLAGS \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
   -DEDGE_NAPI_PROVIDER=imports \
   -DEDGE_BUILD_CLI=ON \

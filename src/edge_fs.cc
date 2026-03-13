@@ -22,37 +22,6 @@
 
 namespace {
 
-int SyncWriteFd(int32_t fd, const char* data, size_t length, int64_t position) {
-#if defined(_WIN32)
-  uv_buf_t uv_buf = uv_buf_init(const_cast<char*>(data), static_cast<unsigned int>(length));
-  uv_fs_t req;
-  const int rc = uv_fs_write(nullptr, &req, fd, &uv_buf, 1, position, nullptr);
-  uv_fs_req_cleanup(&req);
-  return rc;
-#else
-  ssize_t rc = -1;
-  do {
-#if defined(__wasi__)
-    if (position >= 0) {
-      rc = pwrite(fd, data, length, position);
-    } else {
-      rc = write(fd, data, length);
-    }
-#else
-    if (position >= 0) {
-      rc = pwrite(fd, data, length, static_cast<off_t>(position));
-    } else {
-      rc = write(fd, data, length);
-    }
-#endif
-  } while (rc < 0 && errno == EINTR);
-  if (rc < 0) {
-    return -errno;
-  }
-  return static_cast<int>(rc);
-#endif
-}
-
 void ThrowUVExceptionCopyFile(napi_env env, int errorno, const char* src,
                               const char* dest);
 
@@ -1194,7 +1163,9 @@ napi_value BindingWriteSync(napi_env env, napi_callback_info info) {
   }
   uv_buf_t uv_buf = uv_buf_init(static_cast<char*>(buf_data) + offset,
                                  static_cast<unsigned int>(length));
-  int r = SyncWriteFd(fd, uv_buf.base, uv_buf.len, position);
+  uv_fs_t req;
+  int r = uv_fs_write(nullptr, &req, fd, &uv_buf, 1, position, nullptr);
+  uv_fs_req_cleanup(&req);
   if (r < 0) {
     ThrowUVException(env, r, "write", nullptr);
     return nullptr;
@@ -1232,7 +1203,9 @@ napi_value BindingWriteSyncString(napi_env env, napi_callback_info info) {
   }
   uv_buf_t uv_buf = uv_buf_init(const_cast<char*>(data.data()),
                                 static_cast<unsigned int>(data.size()));
-  int r = SyncWriteFd(fd, uv_buf.base, uv_buf.len, -1);
+  uv_fs_t req;
+  int r = uv_fs_write(nullptr, &req, fd, &uv_buf, 1, -1, nullptr);
+  uv_fs_req_cleanup(&req);
   if (r < 0) {
     ThrowUVException(env, r, "write", nullptr);
     return nullptr;
@@ -1289,7 +1262,9 @@ napi_value BindingWriteBuffer(napi_env env, napi_callback_info info) {
   size_t length = static_cast<size_t>(length_i);
   uv_buf_t uv_buf = uv_buf_init(static_cast<char*>(buf_data) + offset,
                                 static_cast<unsigned int>(length));
-  int r = SyncWriteFd(fd, uv_buf.base, uv_buf.len, position);
+  uv_fs_t req;
+  int r = uv_fs_write(nullptr, &req, fd, &uv_buf, 1, position, nullptr);
+  uv_fs_req_cleanup(&req);
   if (r < 0) {
     SetContextUVError(env, ctx, r, "write");
     napi_value undefined = nullptr;

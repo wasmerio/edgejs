@@ -68,23 +68,13 @@ napi_value ResolveMksnapshot(napi_env env, const ResolveOptions& /*options*/) {
   define_noop("setDeserializeCallback");
   define_noop("setDeserializeMainFunction");
 
+  void* data = nullptr;
+  napi_value ab = nullptr;
   napi_value is_building_snapshot_buffer = nullptr;
-  napi_value global = nullptr;
-  napi_value ctor = nullptr;
-  napi_value length = nullptr;
-  if (napi_get_global(env, &global) == napi_ok &&
-      global != nullptr &&
-      napi_get_named_property(env, global, "Uint8Array", &ctor) == napi_ok &&
-      ctor != nullptr &&
-      napi_create_uint32(env, 1, &length) == napi_ok &&
-      length != nullptr) {
-    napi_value argv[1] = {length};
-    if (napi_new_instance(env, ctor, 1, argv, &is_building_snapshot_buffer) == napi_ok &&
+  if (napi_create_arraybuffer(env, 1, &data, &ab) == napi_ok && data != nullptr && ab != nullptr) {
+    static_cast<uint8_t*>(data)[0] = 0;
+    if (napi_create_typedarray(env, napi_uint8_array, 1, ab, 0, &is_building_snapshot_buffer) == napi_ok &&
         is_building_snapshot_buffer != nullptr) {
-      napi_value zero = nullptr;
-      if (napi_get_boolean(env, false, &zero) == napi_ok && zero != nullptr) {
-        napi_set_element(env, is_building_snapshot_buffer, 0, zero);
-      }
       napi_set_named_property(env, out, "isBuildingSnapshotBuffer", is_building_snapshot_buffer);
     }
   }

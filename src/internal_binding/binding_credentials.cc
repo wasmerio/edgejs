@@ -317,7 +317,7 @@ napi_value CredentialsGetgroups(napi_env env, napi_callback_info /*info*/) {
   napi_create_array_with_length(env, 0, &out);
   if (out == nullptr) return Undefined(env);
 
-#if !defined(_WIN32) && !defined(__wasi__)
+#if !defined(_WIN32)
   const int count = ::getgroups(0, nullptr);
   if (count > 0) {
     std::vector<gid_t> groups(static_cast<size_t>(count));

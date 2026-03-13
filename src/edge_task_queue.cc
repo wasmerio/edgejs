@@ -39,47 +39,6 @@ TaskQueueBindingState& GetTaskQueueState(napi_env env) {
       env, kEdgeEnvironmentSlotTaskQueueBindingState);
 }
 
-bool CreateInt32Array(napi_env env, uint32_t length, napi_value* out_array, int32_t** out_data) {
-  if (out_array == nullptr || out_data == nullptr) return false;
-  *out_array = nullptr;
-  *out_data = nullptr;
-
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
-
-  napi_value int32_array_ctor = nullptr;
-  if (napi_get_named_property(env, global, "Int32Array", &int32_array_ctor) != napi_ok ||
-      int32_array_ctor == nullptr) {
-    return false;
-  }
-
-  napi_value js_length = nullptr;
-  if (napi_create_uint32(env, length, &js_length) != napi_ok || js_length == nullptr) return false;
-
-  napi_value argv[1] = {js_length};
-  napi_value array = nullptr;
-  if (napi_new_instance(env, int32_array_ctor, 1, argv, &array) != napi_ok || array == nullptr) return false;
-
-  napi_typedarray_type type = napi_uint8_array;
-  size_t actual_length = 0;
-  void* data = nullptr;
-  napi_value arraybuffer = nullptr;
-  size_t byte_offset = 0;
-  if (napi_get_typedarray_info(env, array, &type, &actual_length, &data, &arraybuffer, &byte_offset) != napi_ok ||
-      type != napi_int32_array || actual_length < length || data == nullptr) {
-    return false;
-  }
-
-  auto* fields = static_cast<int32_t*>(data);
-  for (uint32_t i = 0; i < length; ++i) {
-    fields[i] = 0;
-  }
-
-  *out_array = array;
-  *out_data = fields;
-  return true;
-}
-
 static napi_value TaskQueueEnqueueMicrotask(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -179,12 +138,24 @@ napi_value EdgeGetOrCreateTaskQueueBinding(napi_env env) {
     return nullptr;
   }
 
-  napi_value tick_info = nullptr;
-  int32_t* tick_info_fields = nullptr;
-  if (!CreateInt32Array(env, 2, &tick_info, &tick_info_fields)) return nullptr;
-  st.tick_info_fields = tick_info_fields;
+  napi_value tick_ab = nullptr;
+  void* tick_data = nullptr;
+  if (napi_create_arraybuffer(env, 2 * sizeof(int32_t), &tick_data, &tick_ab) != napi_ok ||
+      tick_ab == nullptr || tick_data == nullptr) {
+    return nullptr;
+  }
+
+  auto* fields = static_cast<int32_t*>(tick_data);
+  fields[0] = 0;
+  fields[1] = 0;
+  st.tick_info_fields = fields;
   if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
-    environment->tick_info()->fields = tick_info_fields;
+    environment->tick_info()->fields = fields;
+  }
+
+  napi_value tick_info = nullptr;
+  if (napi_create_typedarray(env, napi_int32_array, 2, tick_ab, 0, &tick_info) != napi_ok || tick_info == nullptr) {
+    return nullptr;
   }
   if (napi_set_named_property(env, binding, "tickInfo", tick_info) != napi_ok) return nullptr;
   if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {

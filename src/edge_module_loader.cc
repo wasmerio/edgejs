@@ -2269,6 +2269,8 @@ static napi_value OptionsGetCLIOptionsInfoCallback(napi_env env, napi_callback_i
   for (const auto& opt : documented) add_option(opt);
 
   const std::vector<std::string> extras = {
+      // Keep alias targets present even when CLI docs are unavailable from cwd.
+      "--require",
       "--debug-arraybuffer-allocations",
       "--no-debug-arraybuffer-allocations",
       "--es-module-specifier-resolution",
@@ -4085,7 +4087,7 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
   options.callbacks.resolve_options = ResolveOptionsBinding;
 
   napi_value resolved = internal_binding::Resolve(env, name, options);
-  if (resolved != nullptr && !IsUndefinedValue(env, resolved)) {
+  if (resolved != nullptr) {
     if (!name.empty() && ShouldCacheInternalBinding(name) && !IsUndefinedValue(env, resolved)) {
       napi_value cached = CacheInternalBinding(state, env, name.c_str(), resolved);
       if (cached != nullptr) {
@@ -4095,55 +4097,11 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
     return resolved;
   }
 
-  napi_value direct = DispatchResolveBinding(env, state, name.c_str());
-  if (direct != nullptr) {
-    if (!name.empty() && ShouldCacheInternalBinding(name) && !IsUndefinedValue(env, direct)) {
-      napi_value cached = CacheInternalBinding(state, env, name.c_str(), direct);
-      if (cached != nullptr) {
-        return cached;
-      }
-    }
-    return direct;
-  }
-
   bool has_pending_exception = false;
   if (napi_is_exception_pending(env, &has_pending_exception) == napi_ok && has_pending_exception) {
     return nullptr;
   }
   return undefined;
-}
-
-static bool InitializeBuiltinBootstrapState(napi_env env, ModuleLoaderState* state) {
-  if (env == nullptr || state == nullptr) return false;
-
-  internal_binding::ResolveOptions options;
-  options.state = state;
-  options.callbacks.get_or_create_builtins = DispatchGetOrCreateBuiltins;
-  options.callbacks.get_or_create_task_queue = DispatchGetOrCreateTaskQueue;
-  options.callbacks.get_or_create_errors = DispatchGetOrCreateErrors;
-  options.callbacks.get_or_create_trace_events = DispatchGetOrCreateTraceEvents;
-  options.callbacks.resolve_binding = DispatchResolveBinding;
-  options.callbacks.resolve_uv = ResolveUvBinding;
-  options.callbacks.resolve_contextify = ResolveContextifyBinding;
-  options.callbacks.resolve_modules = ResolveModulesBinding;
-  options.callbacks.resolve_options = ResolveOptionsBinding;
-
-  napi_value private_symbols = EdgeGetPrivateSymbols(env);
-  if (private_symbols == nullptr || IsUndefinedValue(env, private_symbols)) {
-    private_symbols = EdgeCreatePrivateSymbolsObject(env);
-    if (private_symbols == nullptr || IsUndefinedValue(env, private_symbols)) return false;
-    EdgeSetPrivateSymbols(env, private_symbols);
-  }
-  ResetStateRef(env, &state->private_symbols_ref, private_symbols);
-
-  napi_value per_isolate_symbols = internal_binding::Resolve(env, "symbols", options);
-  if (per_isolate_symbols == nullptr || IsUndefinedValue(env, per_isolate_symbols)) {
-    per_isolate_symbols = EdgeCreatePerIsolateSymbolsObject(env);
-    if (per_isolate_symbols == nullptr || IsUndefinedValue(env, per_isolate_symbols)) return false;
-    EdgeSetPerIsolateSymbols(env, per_isolate_symbols);
-  }
-  ResetStateRef(env, &state->per_isolate_symbols_ref, per_isolate_symbols);
-  return true;
 }
 
 bool ResolveModulePath(const std::string& specifier, const std::string& base_dir, fs::path* out) {
@@ -4889,9 +4847,6 @@ napi_status EdgeInstallModuleLoader(napi_env env, const char* entry_script_path)
                               global,
                               "internalBinding",
                               native_get_internal_binding_fn) != napi_ok) {
-    return napi_generic_failure;
-  }
-  if (!InitializeBuiltinBootstrapState(env, state)) {
     return napi_generic_failure;
   }
   return napi_ok;

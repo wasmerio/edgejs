@@ -93,25 +93,21 @@ std::vector<fs::path> NodeLibRootCandidates() {
   const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
   std::vector<fs::path> candidates;
 
-  AppendPathCandidate(&candidates, fs::path("/lib"));
   AppendPathCandidate(&candidates, fs::path("/node-lib"));
+
   const fs::path exec_path = fs::path(EdgeGetProcessExecPath()).lexically_normal();
   if (!exec_path.empty()) {
     const fs::path install_root = exec_path.parent_path().parent_path();
     AppendPathCandidate(&candidates, install_root / "lib");
-    AppendPathCandidate(&candidates, install_root / "node-lib");
   }
 
   AppendPathCandidate(&candidates, source_root / "lib");
-  AppendPathCandidate(&candidates, source_root / "node-lib");
 
   std::error_code ec;
   const fs::path cwd = fs::current_path(ec);
   if (!ec && !cwd.empty()) {
     AppendPathCandidate(&candidates, cwd / "lib");
-    AppendPathCandidate(&candidates, cwd / "node-lib");
     AppendPathCandidate(&candidates, cwd.parent_path() / "lib");
-    AppendPathCandidate(&candidates, cwd.parent_path() / "node-lib");
   }
 
   return candidates;
@@ -121,7 +117,6 @@ std::vector<fs::path> NodeDepsRootCandidates() {
   const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
   std::vector<fs::path> candidates;
 
-  AppendPathCandidate(&candidates, fs::path("/node/deps"));
   const fs::path exec_path = fs::path(EdgeGetProcessExecPath()).lexically_normal();
   if (!exec_path.empty()) {
     const fs::path install_root = exec_path.parent_path().parent_path();

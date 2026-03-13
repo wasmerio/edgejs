@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# This helper is WASIX-scoped on purpose.
+# We currently use it only in the WASIX build to embed ICU data as a C array;
+# keeping it under `wasix/` makes that coupling explicit and avoids implying
+# it is a general CMake utility for non-WASIX targets.
 import argparse
 import bz2
 from pathlib import Path

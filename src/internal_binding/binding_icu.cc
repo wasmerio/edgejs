@@ -52,6 +52,7 @@ struct ConverterWrap {
   bool bom_seen = false;
   bool unicode = false;
 };
+
 void DeleteRefIfPresent(napi_env env, napi_ref* ref) {
   if (env == nullptr || ref == nullptr || *ref == nullptr) return;
   napi_delete_reference(env, *ref);

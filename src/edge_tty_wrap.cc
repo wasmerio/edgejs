@@ -1,21 +1,17 @@
 #include "edge_tty_wrap.h"
 
-#include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
-#include <unistd.h>
 #include <uv.h>
 
 #include "edge_async_wrap.h"
 #include "edge_environment.h"
 #include "edge_env_loop.h"
 #include "edge_stream_base.h"
-#include "edge_stream_wrap.h"
 
 namespace {
 
@@ -43,12 +39,6 @@ struct TtyBindingState {
 TtyBindingState& EnsureBindingState(napi_env env) {
   return EdgeEnvironmentGetOrCreateSlotData<TtyBindingState>(
       env, kEdgeEnvironmentSlotTtyBindingState);
-}
-
-void SetStreamState(napi_env env, int idx, int32_t value) {
-  int32_t* state = EdgeGetStreamBaseState(env);
-  if (state == nullptr) return;
-  state[idx] = value;
 }
 
 TtyWrap* FromBase(EdgeStreamBase* base) {
@@ -85,18 +75,6 @@ const EdgeStreamBaseOps kTtyOps = {
     TtyDestroy,
     nullptr,
 };
-
-int SyncTtyWrite(TtyWrap* wrap, const char* data, size_t len) {
-  if (wrap == nullptr || !wrap->initialized || wrap->fd < 0) return UV_EBADF;
-  if (len == 0) return 0;
-  ssize_t rc = -1;
-  do {
-    rc = write(wrap->fd, data, len);
-  } while (rc < 0 && errno == EINTR);
-  if (rc < 0) return -errno;
-  wrap->base.bytes_written += static_cast<uint64_t>(rc);
-  return 0;
-}
 
 napi_value GetThis(napi_env env,
                    napi_callback_info info,
@@ -303,21 +281,7 @@ napi_value TtyWriteBuffer(napi_env env, napi_callback_info info) {
   if (wrap == nullptr || !wrap->initialized || argc < 2) {
     return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
   }
-#if defined(__wasi__)
-  const uint8_t* data = nullptr;
-  size_t len = 0;
-  bool refable = false;
-  std::string temp_utf8;
-  EdgeStreamBaseExtractByteSpan(env, argv[1], &data, &len, &refable, &temp_utf8);
-  if (data == nullptr && len > 0) return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
-  const int rc = SyncTtyWrite(wrap, reinterpret_cast<const char*>(data), len);
-  SetStreamState(env, kEdgeBytesWritten, rc == 0 ? static_cast<int32_t>(len) : 0);
-  SetStreamState(env, kEdgeLastWriteWasAsync, 0);
-  EdgeStreamBaseSetReqError(env, argv[0], rc);
-  return EdgeStreamBaseMakeInt32(env, rc);
-#else
   return EdgeLibuvStreamWriteBuffer(&wrap->base, argv[0], argv[1], nullptr, nullptr);
-#endif
 }
 
 napi_value TtyWriteString(napi_env env, napi_callback_info info) {
@@ -333,32 +297,12 @@ napi_value TtyWriteString(napi_env env, napi_callback_info info) {
   if (wrap == nullptr || !wrap->initialized || argc < 2) {
     return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
   }
-#if defined(__wasi__)
-  napi_value encoding = nullptr;
-  const char* encoding_name = static_cast<const char*>(data);
-  if (encoding_name != nullptr) {
-    napi_create_string_utf8(env, encoding_name, NAPI_AUTO_LENGTH, &encoding);
-  }
-  napi_value buffer = EdgeStreamBufferFromWithEncoding(env, argv[1], encoding);
-  const uint8_t* bytes = nullptr;
-  size_t len = 0;
-  bool refable = false;
-  std::string temp_utf8;
-  EdgeStreamBaseExtractByteSpan(env, buffer, &bytes, &len, &refable, &temp_utf8);
-  if (bytes == nullptr && len > 0) return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
-  const int rc = SyncTtyWrite(wrap, reinterpret_cast<const char*>(bytes), len);
-  SetStreamState(env, kEdgeBytesWritten, rc == 0 ? static_cast<int32_t>(len) : 0);
-  SetStreamState(env, kEdgeLastWriteWasAsync, 0);
-  EdgeStreamBaseSetReqError(env, argv[0], rc);
-  return EdgeStreamBaseMakeInt32(env, rc);
-#else
   return EdgeLibuvStreamWriteString(&wrap->base,
                                    argv[0],
                                    argv[1],
                                    static_cast<const char*>(data),
                                    nullptr,
                                    nullptr);
-#endif
 }
 
 napi_value TtyWriteV(napi_env env, napi_callback_info info) {

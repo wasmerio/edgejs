@@ -112,7 +112,7 @@ void DeleteRefIfPresent(napi_env env, napi_ref* ref) {
 }
 
 napi_value GetRefValue(napi_env env, napi_ref ref) {
-  if (env == nullptr || ref == nullptr) return nullptr;
+  if (ref == nullptr) return nullptr;
   napi_value value = nullptr;
   if (napi_get_reference_value(env, ref, &value) != napi_ok || value == nullptr) return nullptr;
   return value;
@@ -1136,22 +1136,15 @@ bool InstallConstants(napi_env env, napi_value binding) {
 }
 
 bool InstallShouldAbortToggle(napi_env env, napi_value binding) {
-  napi_value global = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
+  napi_value ab = nullptr;
+  void* data = nullptr;
+  if (napi_create_arraybuffer(env, sizeof(uint32_t), &data, &ab) != napi_ok || ab == nullptr || data == nullptr) {
     return false;
   }
-  napi_value ctor = nullptr;
-  if (napi_get_named_property(env, global, "Uint32Array", &ctor) != napi_ok || ctor == nullptr) {
-    return false;
-  }
-  napi_value length = nullptr;
-  if (napi_create_uint32(env, 1, &length) != napi_ok || length == nullptr) return false;
+  static_cast<uint32_t*>(data)[0] = 1;
+
   napi_value out = nullptr;
-  napi_value argv[1] = {length};
-  if (napi_new_instance(env, ctor, 1, argv, &out) != napi_ok || out == nullptr) return false;
-  napi_value initial = nullptr;
-  if (napi_create_uint32(env, 1, &initial) != napi_ok || initial == nullptr) return false;
-  if (napi_set_element(env, out, 0, initial) != napi_ok) return false;
+  if (napi_create_typedarray(env, napi_uint32_array, 1, ab, 0, &out) != napi_ok || out == nullptr) return false;
   return SetNamedProperty(env, binding, "shouldAbortOnUncaughtToggle", out);
 }
 
@@ -1371,15 +1364,11 @@ napi_value EdgeInstallUtilBinding(napi_env env) {
     return nullptr;
   }
 
+  if (!InstallTypesBinding(env)) return nullptr;
   return binding;
 }
 
 napi_value EdgeGetTypesBinding(napi_env env) {
   auto* state = EdgeEnvironmentGetSlotData<TypesBindingState>(env, kEdgeEnvironmentSlotTypesBindingState);
-  if (state != nullptr) {
-    if (napi_value types = GetRefValue(env, state->binding_ref); types != nullptr) return types;
-  }
-  if (!InstallTypesBinding(env)) return nullptr;
-  state = EdgeEnvironmentGetSlotData<TypesBindingState>(env, kEdgeEnvironmentSlotTypesBindingState);
   return state != nullptr ? GetRefValue(env, state->binding_ref) : nullptr;
 }

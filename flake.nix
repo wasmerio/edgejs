@@ -130,7 +130,7 @@
               export V8_DEFINES="''${V8_DEFINES:-V8_COMPRESS_POINTERS}"
               export LD_LIBRARY_PATH="$V8_LIB_DIR:$LD_LIBRARY_PATH"
               echo "WASIX build shell ready."
-              echo "Try: ubi/scripts/build-wasix.sh"
+              echo "Try: ubi/wasix/build-wasix.sh"
               echo "Try: cargo build --manifest-path napi/wasmer/Cargo.toml"
             '';
           };

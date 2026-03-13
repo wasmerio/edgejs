@@ -297,7 +297,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./scripts/build-wasix.sh
+          ./wasix/build-wasix.sh
 
       - name: Generate dist
         shell: bash
