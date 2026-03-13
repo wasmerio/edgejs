@@ -537,8 +537,14 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
   wrap->handle_wrap.state = kEdgeHandleUninitialized;
 
   const int rc = uv_spawn(loop, &wrap->process, &options);
+  wrap->handle_wrap.state = kEdgeHandleInitialized;
+  EdgeHandleWrapAttach(&wrap->handle_wrap,
+                      wrap,
+                      reinterpret_cast<uv_handle_t*>(&wrap->process),
+                      CloseProcessWrapForCleanup);
+  EdgeHandleWrapHoldWrapperRef(&wrap->handle_wrap);
+
   if (rc != 0) {
-    wrap->process = {};
     wrap->pid = 0;
     wrap->alive = false;
     SetPidUndefined(env, self);
@@ -548,12 +554,6 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
     return MakeInt32(env, rc);
   }
 
-  wrap->handle_wrap.state = kEdgeHandleInitialized;
-  EdgeHandleWrapAttach(&wrap->handle_wrap,
-                      wrap,
-                      reinterpret_cast<uv_handle_t*>(&wrap->process),
-                      CloseProcessWrapForCleanup);
-  EdgeHandleWrapHoldWrapperRef(&wrap->handle_wrap);
   wrap->pid = static_cast<int32_t>(wrap->process.pid);
   wrap->alive = true;
   TrackLiveChildPid(wrap->pid);

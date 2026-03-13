@@ -765,6 +765,15 @@ bool IsProcessExiting(napi_env env) {
   return napi_get_value_bool(env, exiting_value, &exiting) == napi_ok && exiting;
 }
 
+bool ShouldSuppressExceptionsForExit(napi_env env) {
+  if (env == nullptr) return false;
+  if (IsProcessExiting(env)) return true;
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr && environment->stop_requested()) {
+    return true;
+  }
+  return !EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env);
+}
+
 bool SetProcessExitCodeIfNeeded(napi_env env, int exit_code, bool only_if_unset) {
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
@@ -1039,8 +1048,7 @@ bool DispatchUncaughtException(napi_env env,
   if (effective_exception_line_out != nullptr) *effective_exception_line_out = prior_exception_line;
   if (exception == nullptr) return false;
 
-  if (!EdgeWorkerEnvOwnsProcessState(env) &&
-      (EdgeWorkerEnvStopRequested(env) || IsProcessExiting(env))) {
+  if (ShouldSuppressExceptionsForExit(env)) {
     bool has_pending = false;
     if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
       napi_value ignored = nullptr;
@@ -1080,8 +1088,7 @@ bool DispatchUncaughtException(napi_env env,
   napi_value handled_value = nullptr;
   const napi_status status = napi_call_function(env, process_obj, fatal_exception_fn, 2, argv, &handled_value);
   if (status != napi_ok) {
-    if (!EdgeWorkerEnvOwnsProcessState(env) &&
-        (EdgeWorkerEnvStopRequested(env) || IsProcessExiting(env))) {
+    if (ShouldSuppressExceptionsForExit(env)) {
       bool has_pending = false;
       if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
         napi_value ignored = nullptr;
@@ -1173,7 +1180,7 @@ int HandleExtractedException(napi_env env,
 }
 
 int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
-  if (!EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env)) {
+  if (ShouldSuppressExceptionsForExit(env)) {
     PendingExceptionInfo ignored = {};
     (void)TakePendingExceptionInfo(env, &ignored);
     (void)unofficial_napi_cancel_terminate_execution(env);
@@ -3313,6 +3320,10 @@ bool EdgeInitializeOpenSslForCli(std::string* error_out) {
     std::abort();
   }
   return true;
+}
+
+void EdgeSetCurrentScriptPath(const std::string& script_path) {
+  g_edge_current_script_path = script_path;
 }
 
 void EdgeSetScriptArgv(const std::vector<std::string>& script_argv) {

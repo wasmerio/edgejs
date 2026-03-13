@@ -38,6 +38,16 @@
 #include "edge_worker_control.h"
 #include "edge_worker_env.h"
 
+#if !defined(_WIN32)
+namespace node {
+void InitializeStdio();
+void RegisterSignalHandler(int signal,
+                           void (*handler)(int signal, siginfo_t* info, void* ucontext),
+                           bool reset_handler = false);
+void SignalExit(int signal, siginfo_t* info, void* ucontext);
+}  // namespace node
+#endif
+
 namespace {
 
 constexpr const char kUsage[] = "Usage: edge <script.js>";
@@ -51,7 +61,7 @@ constexpr const char kPathEnvSeparator[] = ":";
 #endif
 
 void ResetSignalHandlersLikeNode() {
-#if defined(__POSIX__)
+#if !defined(_WIN32)
   struct sigaction act;
   std::memset(&act, 0, sizeof(act));
 
@@ -167,6 +177,22 @@ std::string CliErrorPrefix() {
 
 std::string FormatCliError(const std::string& message) {
   return CliErrorPrefix() + ": " + message;
+}
+
+std::string GetBashCompletion() {
+  return R"(_node_complete() {
+  local cur_word options
+  cur_word="${COMP_WORDS[COMP_CWORD]}"
+  if [[ "${cur_word}" == -* ]] ; then
+    COMPREPLY=( $(compgen -W '' -- "${cur_word}") )
+    return 0
+  else
+    COMPREPLY=( $(compgen -f "${cur_word}") )
+    return 0
+  fi
+}
+complete -o filenames -o nospace -o bashdefault -F _node_complete node node_g
+)";
 }
 
 bool ApplyEnvUpdate(const std::string& key, const std::string& value) {
@@ -569,6 +595,55 @@ bool ValidateTraceRequireModuleOption(const edge_options::EffectiveCliState& sta
   return true;
 }
 
+bool ValidateUnhandledRejectionsOption(const edge_options::EffectiveCliState& state,
+                                       std::string* error_out) {
+  constexpr std::string_view kPrefix = "--unhandled-rejections=";
+  for (size_t i = 0; i < state.effective_tokens.size(); ++i) {
+    const std::string& token = state.effective_tokens[i];
+    std::string value;
+    if (token == "--unhandled-rejections") {
+      if (i + 1 >= state.effective_tokens.size()) break;
+      value = state.effective_tokens[i + 1];
+      i++;
+    } else if (token.rfind(kPrefix, 0) == 0) {
+      value = token.substr(kPrefix.size());
+    } else {
+      continue;
+    }
+
+    if (value == "none" || value == "strict" || value == "throw" ||
+        value == "warn" || value == "warn-with-error-code") {
+      continue;
+    }
+    if (error_out != nullptr) {
+      *error_out = "invalid value for --unhandled-rejections";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool GetSecurityRevertTokenValue(const std::vector<std::string>& tokens, std::string* value_out) {
+  if (value_out != nullptr) value_out->clear();
+  constexpr std::string_view kInlinePrefix = "--security-revert=";
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == "--security-reverts" || token == "--security-revert") {
+      if (i + 1 < tokens.size() && value_out != nullptr) {
+        *value_out = tokens[i + 1];
+      }
+      return i + 1 < tokens.size();
+    }
+    if (token.rfind(kInlinePrefix, 0) == 0) {
+      if (value_out != nullptr) {
+        *value_out = token.substr(kInlinePrefix.size());
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 bool RawExecArgvHasInputType(const std::vector<std::string>& raw_exec_argv) {
   for (const auto& token : raw_exec_argv) {
     if (token == "--input-type" || token.rfind("--input-type=", 0) == 0) {
@@ -928,9 +1003,11 @@ bool StdinIsTTY() {
 
 int RunCliBuiltin(const char* source_text,
                   const char* native_main_builtin_id,
+                  const char* current_script_path,
                   std::string* error_out) {
   return RunWithFreshEnv(
       [&](napi_env env) {
+        EdgeSetCurrentScriptPath(current_script_path != nullptr ? current_script_path : "");
         return EdgeRunScriptSourceWithLoop(env,
                                           source_text,
                                           error_out,
@@ -957,6 +1034,11 @@ int RunEnvCliWithOffset(int argc,
 void EdgeInitializeCliProcess() {
   std::call_once(g_cli_init_once, []() {
     ResetSignalHandlersLikeNode();
+#if !defined(_WIN32)
+    node::InitializeStdio();
+    node::RegisterSignalHandler(SIGINT, node::SignalExit, true);
+    node::RegisterSignalHandler(SIGTERM, node::SignalExit, true);
+#endif
   });
 }
 
@@ -1052,6 +1134,9 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     if (!ValidateTraceRequireModuleOption(*out_state, error_out)) {
       return false;
     }
+    if (!ValidateUnhandledRejectionsOption(*out_state, error_out)) {
+      return false;
+    }
     for (const auto& warning : out_state->warnings) {
       std::cerr << warning << "\n";
     }
@@ -1062,7 +1147,13 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   int i = 1;
   for (; i < argc; ++i) {
     if (argv[i] == nullptr) continue;
-    const std::string token(argv[i]);
+    std::string token(argv[i]);
+
+    if (token == "--pending_deprecation") {
+      token = "--pending-deprecation";
+    } else if (token == "--security-reverts") {
+      token = "--security-revert";
+    }
 
     if (token == "--") {
       script_index = i + 1;
@@ -1131,8 +1222,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
         print_flag = true;
       }
       mode = print_flag ? CliMode::kPrint : CliMode::kEval;
-      script_index = i + 1;
-      break;
+      continue;
     }
     if (token == "-p" || token == "--print") {
       raw_exec_argv.push_back(token);
@@ -1143,8 +1233,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
         if (!IsRecognizedCliOptionToken(next)) {
           raw_exec_argv.emplace_back(argv[++i]);
           has_eval_string = true;
-          script_index = i + 1;
-          break;
+          continue;
         }
       }
       continue;
@@ -1181,6 +1270,16 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
 
   EdgeSetExecArgv(raw_exec_argv);
   ApplySupportedV8Flags(raw_exec_argv);
+  if (HasExactOptionToken(effective_state.effective_tokens, "--completion-bash")) {
+    std::cout << GetBashCompletion();
+    return 0;
+  }
+  std::string security_revert;
+  if (GetSecurityRevertTokenValue(raw_exec_argv, &security_revert)) {
+    std::cerr << CliErrorPrefix() << ": Error: Attempt to revert an unknown CVE ["
+              << security_revert << "]\n";
+    return 12;
+  }
   const bool use_test_runner = HasExactOptionToken(effective_state.effective_tokens, "--test");
   const bool use_watch_mode =
       IsBooleanOptionEnabled(effective_state.effective_tokens, "--watch") ||
@@ -1269,7 +1368,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       return 1;
     }
     EdgeSetScriptArgv({});
-    return RunCliBuiltin(";", "internal/main/repl", error_out);
+    return RunCliBuiltin(";", "internal/main/repl", nullptr, error_out);
   }
 
   if (has_eval_string || (print_flag && mode == CliMode::kPrint)) {
@@ -1281,7 +1380,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       if (argv[argi] != nullptr) script_argv.emplace_back(argv[argi]);
     }
     EdgeSetScriptArgv(script_argv);
-    return RunCliBuiltin(";", "internal/main/eval_string", error_out);
+    return RunCliBuiltin(";", "internal/main/eval_string", nullptr, error_out);
   }
 
   if (mode == CliMode::kRun) {
@@ -1310,7 +1409,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       if (argv[argi] != nullptr) script_argv.emplace_back(argv[argi]);
     }
     EdgeSetScriptArgv(script_argv);
-    return RunCliBuiltin(";", "internal/main/test_runner", error_out);
+    return RunCliBuiltin(";", "internal/main/test_runner", nullptr, error_out);
   }
 
   if (use_watch_mode) {
@@ -1325,7 +1424,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       if (argv[argi] != nullptr) script_argv.emplace_back(argv[argi]);
     }
     EdgeSetScriptArgv(script_argv);
-    return RunCliBuiltin(";", "internal/main/watch_mode", error_out);
+    return RunCliBuiltin(";", "internal/main/watch_mode", nullptr, error_out);
   }
 
   const bool use_stdin_entry =
@@ -1339,9 +1438,10 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     }
     EdgeSetScriptArgv(script_argv);
     if (mode == CliMode::kCheck) {
-      return RunCliBuiltin(";", "internal/main/check_syntax", error_out);
+      return RunCliBuiltin(";", "internal/main/check_syntax", "-", error_out);
     }
-    return RunCliBuiltin(";", StdinIsTTY() ? "internal/main/repl" : "internal/main/eval_stdin", error_out);
+    return RunCliBuiltin(";", StdinIsTTY() ? "internal/main/repl" : "internal/main/eval_stdin",
+                         "-", error_out);
   }
 
   script_argv.reserve(static_cast<size_t>(argc - (mode == CliMode::kCheck ? script_index : (script_index + 1))));
@@ -1350,7 +1450,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   }
   EdgeSetScriptArgv(script_argv);
   if (mode == CliMode::kCheck) {
-    return RunCliBuiltin(";", "internal/main/check_syntax", error_out);
+    return RunCliBuiltin(";", "internal/main/check_syntax", nullptr, error_out);
   }
   return EdgeRunCliScript(argv[script_index], error_out);
 }

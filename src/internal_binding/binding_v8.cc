@@ -257,6 +257,16 @@ napi_value V8GetCppHeapStatistics(napi_env env, napi_callback_info /*info*/) {
   return out != nullptr ? out : MakeUndefined(env);
 }
 
+napi_value V8GetHashSeed(napi_env env, napi_callback_info /*info*/) {
+  uint64_t hash_seed = 0;
+  if (unofficial_napi_get_hash_seed(env, &hash_seed) != napi_ok) {
+    return MakeUndefined(env);
+  }
+  napi_value out = nullptr;
+  napi_create_uint32(env, static_cast<uint32_t>(hash_seed), &out);
+  return out != nullptr ? out : MakeUndefined(env);
+}
+
 }  // namespace
 
 napi_value ResolveV8(napi_env env, const ResolveOptions& /*options*/) {
@@ -268,6 +278,7 @@ napi_value ResolveV8(napi_env env, const ResolveOptions& /*options*/) {
   SetNamedMethod(env, out, "startCpuProfile", V8StartCpuProfile);
   SetNamedMethod(env, out, "stopCpuProfile", V8StopCpuProfile);
   SetNamedMethod(env, out, "isStringOneByteRepresentation", V8IsStringOneByteRepresentation);
+  SetNamedMethod(env, out, "getHashSeed", V8GetHashSeed);
   SetNamedMethod(env, out, "updateHeapStatisticsBuffer", V8UpdateHeapStatisticsBuffer);
   SetNamedMethod(env, out, "updateHeapSpaceStatisticsBuffer", V8UpdateHeapSpaceStatisticsBuffer);
   SetNamedMethod(env, out, "updateHeapCodeStatisticsBuffer", V8UpdateHeapCodeStatisticsBuffer);

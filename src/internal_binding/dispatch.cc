@@ -64,6 +64,7 @@ napi_value ResolveUrlPattern(napi_env env, const ResolveOptions& options);
 napi_value ResolveUtil(napi_env env, const ResolveOptions& options);
 napi_value ResolveV8(napi_env env, const ResolveOptions& options);
 napi_value ResolveUv(napi_env env, const ResolveOptions& options);
+napi_value ResolveWatchdog(napi_env env, const ResolveOptions& options);
 napi_value ResolveWasmWebApi(napi_env env, const ResolveOptions& options);
 napi_value ResolveWorker(napi_env env, const ResolveOptions& options);
 napi_value ResolveZlib(napi_env env, const ResolveOptions& options);
@@ -77,7 +78,7 @@ struct BindingResolverEntry {
   ResolverFn resolver;
 };
 
-constexpr std::array<BindingResolverEntry, 60> kResolvers = {{
+constexpr std::array<BindingResolverEntry, 61> kResolvers = {{
     {"async_wrap", ResolveAsyncWrap},
     {"async_context_frame", ResolveAsyncContextFrame},
     {"block_list", ResolveBlockList},
@@ -135,6 +136,7 @@ constexpr std::array<BindingResolverEntry, 60> kResolvers = {{
     {"util", ResolveUtil},
     {"v8", ResolveV8},
     {"uv", ResolveUv},
+    {"watchdog", ResolveWatchdog},
     {"wasm_web_api", ResolveWasmWebApi},
     {"worker", ResolveWorker},
     {"zlib", ResolveZlib},

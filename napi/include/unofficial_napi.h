@@ -168,6 +168,9 @@ NAPI_EXTERN napi_status unofficial_napi_preview_entries(napi_env env,
 NAPI_EXTERN napi_status unofficial_napi_get_call_sites(napi_env env,
                                                        uint32_t frames,
                                                        napi_value* callsites_out);
+NAPI_EXTERN napi_status unofficial_napi_get_current_stack_trace(napi_env env,
+                                                                uint32_t frames,
+                                                                napi_value* callsites_out);
 
 NAPI_EXTERN napi_status unofficial_napi_get_caller_location(napi_env env,
                                                             napi_value* location_out);
@@ -228,6 +231,10 @@ NAPI_EXTERN napi_status unofficial_napi_get_process_memory_info(
     double* heap_used_out,
     double* external_out,
     double* array_buffers_out);
+
+// Unofficial helper for Node's internalBinding('v8').getHashSeed().
+NAPI_EXTERN napi_status unofficial_napi_get_hash_seed(napi_env env,
+                                                      uint64_t* hash_seed_out);
 
 #define UNOFFICIAL_NAPI_HEAP_SPACE_NAME_MAX_LENGTH 64
 

@@ -580,6 +580,7 @@ add_library(edge_runtime STATIC
   src/internal_binding/binding_util.cc
   src/internal_binding/binding_v8.cc
   src/internal_binding/binding_uv.cc
+  src/internal_binding/binding_watchdog.cc
   src/internal_binding/binding_wasm_web_api.cc
   src/internal_binding/binding_worker.cc
   src/internal_binding/binding_zlib.cc

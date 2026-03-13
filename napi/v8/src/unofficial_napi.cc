@@ -11,6 +11,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -72,6 +73,7 @@ struct PrepareStackTraceState {
 std::mutex g_runtime_mu;
 SharedRuntime g_runtime;
 std::unordered_map<v8::Isolate*, napi_env> g_env_by_isolate;
+std::unordered_map<v8::Isolate*, uint64_t> g_hash_seeds;
 std::unordered_map<v8::Isolate*, v8::Global<v8::Function>> g_promise_reject_callbacks;
 std::unordered_map<v8::Isolate*, std::array<v8::Global<v8::Function>, 4>> g_promise_hooks;
 std::unordered_map<napi_env, PrepareStackTraceState> g_prepare_stack_trace_callbacks;
@@ -155,6 +157,14 @@ bool CopyStringToMallocBuffer(const std::string& input, char** data_out, size_t*
   *data_out = buffer;
   *len_out = input.size();
   return true;
+}
+
+uint64_t GenerateHashSeed() {
+  std::random_device random_device;
+  const uint64_t high = static_cast<uint64_t>(random_device());
+  const uint64_t low = static_cast<uint64_t>(random_device());
+  const uint64_t mixed = (high << 32) ^ low ^ static_cast<uint64_t>(uv_hrtime());
+  return mixed == 0 ? 1 : mixed;
 }
 
 void AppendEscapedJsonString(std::string* out, std::string_view input) {
@@ -1307,6 +1317,7 @@ napi_status NAPI_CDECL unofficial_napi_destroy_env_instance(napi_env env) {
     if (env_it != g_env_by_isolate.end() && env_it->second == env) {
       g_env_by_isolate.erase(env_it);
     }
+    g_hash_seeds.erase(env->isolate);
     auto cb_it = g_promise_reject_callbacks.find(env->isolate);
     if (cb_it != g_promise_reject_callbacks.end()) {
       cb_it->second.Reset();
@@ -1465,6 +1476,7 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
   }
   {
     std::lock_guard<std::mutex> lock(g_runtime_mu);
+    g_hash_seeds[isolate] = GenerateHashSeed();
     g_tracking_allocators[allocator] = allocator;
   }
 
@@ -2018,9 +2030,12 @@ napi_status NAPI_CDECL unofficial_napi_preview_entries(napi_env env,
   return napi_ok;
 }
 
-napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
-                                                      uint32_t frames,
-                                                      napi_value* callsites_out) {
+namespace {
+
+napi_status GetCallSitesImpl(napi_env env,
+                             uint32_t frames,
+                             uint32_t skip_frames,
+                             napi_value* callsites_out) {
   if (env == nullptr || env->isolate == nullptr || callsites_out == nullptr) return napi_invalid_arg;
   if (frames < 1 || frames > 200) return napi_invalid_arg;
 
@@ -2028,9 +2043,9 @@ napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
   v8::HandleScope scope(isolate);
   v8::Local<v8::Context> context = env->context();
 
-  v8::Local<v8::StackTrace> stack = v8::StackTrace::CurrentStackTrace(isolate, frames + 1);
+  v8::Local<v8::StackTrace> stack = v8::StackTrace::CurrentStackTrace(isolate, frames + skip_frames);
   const int frame_count = stack->GetFrameCount();
-  const int start_index = frame_count > 0 ? 1 : 0;
+  const int start_index = frame_count > 0 ? static_cast<int>(skip_frames) : 0;
   const int available = frame_count - start_index;
   uint32_t count = available > 0 ? static_cast<uint32_t>(available) : 0;
   if (count > frames) count = frames;
@@ -2079,6 +2094,20 @@ napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
   *callsites_out = napi_v8_wrap_value(env, out);
   if (*callsites_out == nullptr) return napi_generic_failure;
   return napi_ok;
+}
+
+}  // namespace
+
+napi_status NAPI_CDECL unofficial_napi_get_call_sites(napi_env env,
+                                                      uint32_t frames,
+                                                      napi_value* callsites_out) {
+  return GetCallSitesImpl(env, frames, 1, callsites_out);
+}
+
+napi_status NAPI_CDECL unofficial_napi_get_current_stack_trace(napi_env env,
+                                                               uint32_t frames,
+                                                               napi_value* callsites_out) {
+  return GetCallSitesImpl(env, frames, 0, callsites_out);
 }
 
 napi_status NAPI_CDECL unofficial_napi_get_caller_location(napi_env env, napi_value* location_out) {
@@ -2217,6 +2246,23 @@ napi_status NAPI_CDECL unofficial_napi_get_process_memory_info(
   *heap_used_out = static_cast<double>(stats.used_heap_size());
   *external_out = static_cast<double>(stats.external_memory());
   *array_buffers_out = static_cast<double>(array_buffers);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_get_hash_seed(napi_env env,
+                                                     uint64_t* hash_seed_out) {
+  if (env == nullptr || env->isolate == nullptr || hash_seed_out == nullptr) {
+    return napi_invalid_arg;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_runtime_mu);
+    auto it = g_hash_seeds.find(env->isolate);
+    if (it != g_hash_seeds.end()) {
+      *hash_seed_out = it->second;
+      return napi_ok;
+    }
+  }
+  *hash_seed_out = env->isolate->GetHashSeed();
   return napi_ok;
 }
 

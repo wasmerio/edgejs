@@ -53,21 +53,24 @@ void CloseEnvLoopHandles(uv_loop_t* loop) {
       nullptr);
 }
 
-void DrainAndCloseEnvLoop(uv_loop_t* loop) {
-  if (loop == nullptr) return;
-  CloseEnvLoopHandles(loop);
-  for (size_t guard = 0; guard < 1024; ++guard) {
-    if (uv_run(loop, UV_RUN_NOWAIT) == 0) {
-      if (uv_loop_close(loop) == 0) return;
+bool DrainAndCloseEnvLoop(uv_loop_t* loop) {
+  if (loop == nullptr) return true;
+
+  for (size_t guard = 0; guard < 256; ++guard) {
+    if (uv_run(loop, UV_RUN_NOWAIT) == 0 && uv_loop_close(loop) == 0) {
+      return true;
     }
-    CloseEnvLoopHandles(loop);
   }
 
-  CloseEnvLoopHandles(loop);
-  while (uv_run(loop, UV_RUN_NOWAIT) != 0) {
+  for (size_t guard = 0; guard < 64; ++guard) {
     CloseEnvLoopHandles(loop);
+    (void)uv_run(loop, UV_RUN_NOWAIT);
+    if (uv_loop_close(loop) == 0) {
+      return true;
+    }
   }
-  (void)uv_loop_close(loop);
+
+  return false;
 }
 
 napi_value GetRefValue(napi_env env, napi_ref ref) {
@@ -347,8 +350,9 @@ void Environment::CloseAndDestroyEventLoop() {
     loop_ = nullptr;
   }
   if (loop != nullptr) {
-    DrainAndCloseEnvLoop(loop);
-    delete loop;
+    if (DrainAndCloseEnvLoop(loop)) {
+      delete loop;
+    }
   }
 }
 
@@ -811,16 +815,16 @@ void Environment::RunCleanup() {
     if (!did_work) break;
   }
 
+  ResetTrackedRefs();
+  CloseTrackedUnmanagedFds();
+  CloseAndDestroyEventLoop();
+
   std::unordered_map<size_t, SlotEntry> slots;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     slots.swap(slots_);
   }
   RunSlotDeleters(&slots);
-
-  ResetTrackedRefs();
-  CloseTrackedUnmanagedFds();
-  CloseAndDestroyEventLoop();
 }
 
 }  // namespace edge
