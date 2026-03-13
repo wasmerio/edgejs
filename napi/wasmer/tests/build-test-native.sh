@@ -24,6 +24,8 @@ NATIVE_INIT_SRC="$ROOT_DIR/tests/napi_native_init.cc"
 NAPI_V8_DIR="$PROJECT_ROOT/napi/v8"
 NAPI_V8_INCLUDE="$PROJECT_ROOT/napi/include"
 NAPI_V8_SRC="$NAPI_V8_DIR/src"
+EDGE_SRC="$PROJECT_ROOT/src"
+LIBUV_INCLUDE="$PROJECT_ROOT/deps/uv/include"
 
 # V8 paths (auto-detect Homebrew)
 V8_INCLUDE_DIR="${V8_INCLUDE_DIR:-/opt/homebrew/Cellar/v8/14.5.201.9/include}"
@@ -59,11 +61,17 @@ clang++ -std=c++20 -O2 \
   -I"$NAPI_INCLUDE_DIR" \
   -I"$NAPI_V8_INCLUDE" \
   -I"$NAPI_V8_SRC" \
+  -I"$EDGE_SRC" \
+  -I"$LIBUV_INCLUDE" \
   -I"$V8_INCLUDE_DIR" \
   "$OUT_DIR/${TEST_NAME}.o" \
   "$NATIVE_INIT_SRC" \
+  "$EDGE_SRC/edge_environment.cc" \
   "$NAPI_V8_SRC/js_native_api_v8.cc" \
   "$NAPI_V8_SRC/unofficial_napi.cc" \
+  "$NAPI_V8_SRC/unofficial_napi_error_utils.cc" \
+  "$NAPI_V8_SRC/unofficial_napi_contextify.cc" \
+  "$NAPI_V8_SRC/edge_v8_platform.cc" \
   -L"$V8_LIB_DIR" \
   -lv8 \
   -lv8_libplatform \

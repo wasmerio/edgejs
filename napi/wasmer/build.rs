@@ -16,8 +16,19 @@ fn main() {
     // V8 paths
     let default_v8_include = "/opt/homebrew/Cellar/v8/14.5.201.9/include".to_string();
     let default_v8_lib = "/opt/homebrew/Cellar/v8/14.5.201.9/lib".to_string();
-    let v8_include = std::env::var("V8_INCLUDE_DIR").unwrap_or(default_v8_include);
-    let v8_lib = std::env::var("V8_LIB_DIR").unwrap_or(default_v8_lib);
+    let v8_include = std::env::var("V8_INCLUDE_DIR")
+        .or_else(|_| std::env::var("NAPI_V8_INCLUDE_DIR"))
+        .unwrap_or(default_v8_include);
+    let v8_lib = std::env::var("V8_LIB_DIR")
+        .or_else(|_| {
+            std::env::var("NAPI_V8_LIBRARY").map(|path| {
+                std::path::Path::new(&path)
+                    .parent()
+                    .map(|dir| dir.to_string_lossy().into_owned())
+                    .unwrap_or(path)
+            })
+        })
+        .unwrap_or(default_v8_lib);
 
     let v8_defines = std::env::var("V8_DEFINES")
         .or_else(|_| std::env::var("NAPI_V8_DEFINES"))
@@ -39,7 +50,10 @@ fn main() {
         .file("src/napi_bridge_init.cc")
         .file(edge_src.join("edge_environment.cc").to_str().unwrap())
         .file(napi_v8_src.join("js_native_api_v8.cc").to_str().unwrap())
-        .file(napi_v8_src.join("unofficial_napi.cc").to_str().unwrap());
+        .file(napi_v8_src.join("unofficial_napi.cc").to_str().unwrap())
+        .file(napi_v8_src.join("unofficial_napi_error_utils.cc").to_str().unwrap())
+        .file(napi_v8_src.join("unofficial_napi_contextify.cc").to_str().unwrap())
+        .file(napi_v8_src.join("edge_v8_platform.cc").to_str().unwrap());
 
     for raw in v8_defines.split(&[';', ',', ' '][..]) {
         let entry = raw.trim();
