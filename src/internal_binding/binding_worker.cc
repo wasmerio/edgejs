@@ -479,6 +479,12 @@ bool IsDisallowedWorkerExecArgvFlag(const std::string& flag) {
          flag == "--redirect-warnings";
 }
 
+bool IsAlwaysAllowedWorkerExecArgvFlag(const std::string& flag) {
+  // Node allows source map support in worker execArgv, and userland test
+  // runners like AVA rely on that behavior for worker startup.
+  return flag == "--enable-source-maps";
+}
+
 std::vector<std::string> ValidateExecArgv(napi_env env,
                                           const std::vector<std::string>& args,
                                           bool explicitly_provided) {
@@ -489,6 +495,7 @@ std::vector<std::string> ValidateExecArgv(napi_env env,
     std::string flag = arg;
     const size_t eq = flag.find('=');
     if (eq != std::string::npos) flag.resize(eq);
+    if (IsAlwaysAllowedWorkerExecArgvFlag(flag)) continue;
     if (IsDisallowedWorkerExecArgvFlag(flag) || !IsAllowedNodeEnvironmentFlag(env, flag)) {
       invalid.push_back(arg);
     }
