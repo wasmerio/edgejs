@@ -368,13 +368,9 @@ bool EdgeHandleWrapHasRef(const EdgeHandleWrap* wrap, const uv_handle_t* handle)
 }
 
 bool EdgeHandleWrapEnvCleanupStarted(napi_env env) {
-  if (env == nullptr) return false;
-  std::lock_guard<std::mutex> lock(g_handle_wrap_env_states_mutex);
-  auto* state = GetHandleWrapState(env);
-  return state != nullptr && state->cleanup_started;
+  return EdgeEnvironmentCleanupStarted(env);
 }
 
 void EdgeHandleWrapRunEnvCleanup(napi_env env) {
-  if (env == nullptr) return;
-  RunHandleWrapEnvCleanup(env);
+  (void)env;
 }

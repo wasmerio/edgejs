@@ -101,6 +101,14 @@ struct SlotEntry {
   void (*deleter)(void* data) = nullptr;
 };
 
+using EdgeEnvironmentHandleHasRef = bool (*)(void* data);
+using EdgeEnvironmentHandleGetOwner = napi_value (*)(napi_env env, void* data);
+using EdgeEnvironmentHandleClose = void (*)(void* data);
+using EdgeEnvironmentRequestCancel = void (*)(void* data);
+using EdgeEnvironmentRequestGetOwner = napi_value (*)(napi_env env, void* data);
+
+struct ActiveHandleEntry;
+struct ActiveRequestEntry;
 class Environment;
 
 }  // namespace edge
@@ -231,10 +239,37 @@ class Environment {
   void RunAtExitCallbacks();
   void RunCleanup();
   bool cleanup_started() const;
+  bool can_call_into_js() const;
+  void set_can_call_into_js(bool can_call_into_js);
+  bool is_stopping() const;
+  void set_stopping(bool stopping);
+  bool filehandle_close_warning() const;
+  void set_filehandle_close_warning(bool on);
+  void QueueFileHandleGcWarning(int fd, int close_status);
 
   void AddUnmanagedFd(int fd);
   void RemoveUnmanagedFd(int fd);
   void CloseTrackedUnmanagedFds();
+
+  void* RegisterActiveHandle(napi_value keepalive_owner,
+                             const char* resource_name,
+                             EdgeEnvironmentHandleHasRef has_ref,
+                             EdgeEnvironmentHandleGetOwner get_owner,
+                             void* data,
+                             EdgeEnvironmentHandleClose close_callback = nullptr);
+  void UnregisterActiveHandle(void* token);
+  void* RegisterActiveRequest(napi_value owner,
+                              const char* resource_name,
+                              void* data = nullptr,
+                              EdgeEnvironmentRequestCancel cancel = nullptr,
+                              EdgeEnvironmentRequestGetOwner get_owner = nullptr);
+  void UnregisterActiveRequest(void* token);
+  void UnregisterActiveRequestByOwner(napi_value owner);
+  void CancelActiveRequests();
+  void CloseActiveHandles();
+  napi_value GetActiveHandlesArray();
+  napi_value GetActiveRequestsArray();
+  napi_value GetActiveResourcesInfoArray();
 
   size_t callback_scope_depth() const;
   void IncrementCallbackScopeDepth();
@@ -281,7 +316,10 @@ class Environment {
   void DeleteRefIfPresent(napi_ref* ref);
   bool EnsureThreadsafeImmediateHandleLocked();
   void CloseThreadsafeImmediateHandleLocked();
-  void EmitProcessWarning(const std::string& message) const;
+  void CleanupActiveRegistryEntries();
+  void EmitProcessWarning(const std::string& message,
+                          const char* type = nullptr,
+                          const char* code = nullptr) const;
   static uint64_t DeriveFlags(const EdgeEnvironmentConfig& config);
 
   napi_env env_ = nullptr;
@@ -291,6 +329,9 @@ class Environment {
   bool cleanup_started_ = false;
   bool at_exit_ran_ = false;
   bool stop_requested_ = false;
+  bool can_call_into_js_ = true;
+  bool stopping_ = false;
+  bool emit_filehandle_warning_ = true;
   uv_loop_t* loop_ = nullptr;
   size_t callback_scope_depth_ = 0;
   size_t open_callback_scopes_ = 0;
@@ -301,6 +342,8 @@ class Environment {
   std::vector<CleanupStageEntry> cleanup_stages_;
   std::deque<AtExitEntry> at_exit_callbacks_;
   std::unordered_set<int> unmanaged_fds_;
+  std::vector<ActiveHandleEntry*> active_handles_;
+  std::vector<ActiveRequestEntry*> active_requests_;
   napi_ref binding_ref_ = nullptr;
   napi_ref env_message_port_ref_ = nullptr;
   TickInfo tick_info_;

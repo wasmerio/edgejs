@@ -38,9 +38,24 @@ struct StreamSymbolCache {
 };
 
 napi_value GetOwnerSymbol(napi_env env);
+napi_value GetRefValue(napi_env env, napi_ref ref);
+
+struct LibuvWriteReq;
+struct LibuvShutdownReq;
 
 bool StreamBaseHasRefForTracking(void* data) {
   return EdgeStreamBaseHasRef(static_cast<EdgeStreamBase*>(data));
+}
+
+void CloseStreamBaseForCleanup(void* data) {
+  auto* base = static_cast<EdgeStreamBase*>(data);
+  if (base == nullptr || base->ops == nullptr || base->ops->get_handle == nullptr || base->ops->on_close == nullptr) {
+    return;
+  }
+  uv_handle_t* handle = base->ops->get_handle(base);
+  if (handle == nullptr || base->closed || base->closing || uv_is_closing(handle) != 0) return;
+  base->closing = true;
+  uv_close(handle, base->ops->on_close);
 }
 
 napi_value StreamBaseGetActiveOwner(napi_env env, void* data) {
@@ -59,6 +74,11 @@ napi_value StreamBaseGetActiveOwner(napi_env env, void* data) {
   if (owner_type == napi_undefined || owner_type == napi_null) return nullptr;
   return owner;
 }
+
+napi_value LibuvWriteReqGetOwner(napi_env env, void* data);
+void CancelLibuvWriteReq(void* data);
+napi_value LibuvShutdownReqGetOwner(napi_env env, void* data);
+void CancelLibuvShutdownReq(void* data);
 
 const char* ActiveResourceNameForProvider(int32_t provider_type) {
   switch (provider_type) {
@@ -84,6 +104,7 @@ struct LibuvWriteReq {
   napi_env env = nullptr;
   EdgeStreamBase* base = nullptr;
   napi_ref req_obj_ref = nullptr;
+  void* active_request_token = nullptr;
   napi_ref send_handle_ref = nullptr;
   uv_buf_t* bufs = nullptr;
   uv_buf_t* bufs_storage = nullptr;
@@ -98,7 +119,30 @@ struct LibuvShutdownReq {
   napi_env env = nullptr;
   EdgeStreamBase* base = nullptr;
   napi_ref req_obj_ref = nullptr;
+  void* active_request_token = nullptr;
 };
+
+napi_value LibuvWriteReqGetOwner(napi_env env, void* data) {
+  auto* req = static_cast<LibuvWriteReq*>(data);
+  return req != nullptr ? GetRefValue(env, req->req_obj_ref) : nullptr;
+}
+
+void CancelLibuvWriteReq(void* data) {
+  auto* req = static_cast<LibuvWriteReq*>(data);
+  if (req == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->req));
+}
+
+napi_value LibuvShutdownReqGetOwner(napi_env env, void* data) {
+  auto* req = static_cast<LibuvShutdownReq*>(data);
+  return req != nullptr ? GetRefValue(env, req->req_obj_ref) : nullptr;
+}
+
+void CancelLibuvShutdownReq(void* data) {
+  auto* req = static_cast<LibuvShutdownReq*>(data);
+  if (req == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->req));
+}
 
 struct StreamBaseEnvState {
   explicit StreamBaseEnvState(napi_env /*env_in*/) {}
@@ -655,6 +699,10 @@ void DestroyBase(EdgeStreamBase* base) {
 
 void FreeWriteReq(LibuvWriteReq* wr) {
   if (wr == nullptr) return;
+  if (wr->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(wr->env, wr->active_request_token);
+    wr->active_request_token = nullptr;
+  }
   if (wr->bufs_refs != nullptr) {
     for (uint32_t i = 0; i < wr->nbufs_storage; ++i) {
       DeleteRefIfPresent(wr->env, &wr->bufs_refs[i]);
@@ -687,6 +735,10 @@ void OnWriteDone(uv_write_t* req, int status) {
 void OnShutdownDone(uv_shutdown_t* req, int status) {
   auto* sr = static_cast<LibuvShutdownReq*>(req->data);
   if (sr == nullptr) return;
+  if (sr->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(sr->env, sr->active_request_token);
+    sr->active_request_token = nullptr;
+  }
   napi_value req_obj = GetRefValue(sr->env, sr->req_obj_ref);
   EdgeStreamBaseEmitAfterShutdown(sr->base, req_obj, status);
   DeleteRefIfPresent(sr->env, &sr->req_obj_ref);
@@ -734,7 +786,8 @@ void EdgeStreamBaseSetWrapperRef(EdgeStreamBase* base, napi_ref wrapper_ref) {
                                                         ActiveResourceNameForProvider(base->provider_type),
                                                         StreamBaseHasRefForTracking,
                                                         StreamBaseGetActiveOwner,
-                                                        base);
+                                                        base,
+                                                        CloseStreamBaseForCleanup);
   }
   if (!base->async_init_emitted && base->async_id > 0) {
     EdgeAsyncWrapEmitInit(
@@ -824,14 +877,14 @@ void EdgeStreamBaseOnClosed(EdgeStreamBase* base) {
   base->closed = true;
   StreamBaseDetach(base);
 
+  MaybeCallHandleOnClose(base);
+
   if (!base->destroy_notified) {
     base->destroy_notified = true;
     EdgeAsyncWrapQueueDestroyId(base->env, base->async_id);
     base->async_id = -1;
     EdgeStreamNotifyClosed(&base->listener_state);
   }
-
-  MaybeCallHandleOnClose(base);
 
   if (base->active_handle_token != nullptr) {
     EdgeUnregisterActiveHandle(base->env, base->active_handle_token);
@@ -989,15 +1042,11 @@ void EdgeStreamBaseUnref(EdgeStreamBase* base) {
 }
 
 bool EdgeStreamBaseEnvCleanupStarted(napi_env env) {
-  if (env == nullptr) return false;
-  std::lock_guard<std::mutex> lock(g_stream_base_env_states_mutex);
-  auto* state = GetStreamBaseState(env);
-  return state != nullptr && state->cleanup_started;
+  return EdgeEnvironmentCleanupStarted(env);
 }
 
 void EdgeStreamBaseRunEnvCleanup(napi_env env) {
-  if (env == nullptr) return;
-  RunStreamBaseEnvCleanup(env);
+  (void)env;
 }
 
 napi_value EdgeStreamBaseGetOnRead(EdgeStreamBase* base) {
@@ -1198,6 +1247,11 @@ void EdgeStreamBaseInvokeReqOnComplete(napi_env env,
   if (env == nullptr || req_obj == nullptr) return;
 
   EdgeStreamBaseSetReqError(env, req_obj, status);
+  if (auto* environment = EdgeEnvironmentGet(env);
+      environment != nullptr && !environment->can_call_into_js()) {
+    EdgeStreamReqMarkDone(env, req_obj);
+    return;
+  }
   napi_value oncomplete = nullptr;
   if (napi_get_named_property(env, req_obj, "oncomplete", &oncomplete) != napi_ok ||
       !IsFunction(env, oncomplete)) {
@@ -1508,6 +1562,13 @@ napi_value EdgeLibuvStreamWriteBuffer(EdgeStreamBase* base,
   wr->env = base->env;
   wr->base = base;
   napi_create_reference(base->env, req_obj, 1, &wr->req_obj_ref);
+  wr->active_request_token =
+      EdgeRegisterActiveRequest(base->env,
+                                req_obj,
+                                "WriteWrap",
+                                wr,
+                                CancelLibuvWriteReq,
+                                LibuvWriteReqGetOwner);
   wr->nbufs = 1;
   wr->nbufs_storage = 1;
   wr->bufs_storage = new uv_buf_t[1];
@@ -1603,6 +1664,13 @@ napi_value EdgeLibuvStreamWriteV(EdgeStreamBase* base,
   wr->env = base->env;
   wr->base = base;
   napi_create_reference(base->env, req_obj, 1, &wr->req_obj_ref);
+  wr->active_request_token =
+      EdgeRegisterActiveRequest(base->env,
+                                req_obj,
+                                "WriteWrap",
+                                wr,
+                                CancelLibuvWriteReq,
+                                LibuvWriteReqGetOwner);
   wr->nbufs = nbufs;
   wr->nbufs_storage = nbufs;
   wr->bufs_storage = new uv_buf_t[nbufs];
@@ -1715,6 +1783,13 @@ napi_value EdgeLibuvStreamShutdown(EdgeStreamBase* base, napi_value req_obj) {
   sr->base = base;
   EdgeStreamReqActivate(base->env, req_obj, kEdgeProviderShutdownWrap, base->async_id);
   napi_create_reference(base->env, req_obj, 1, &sr->req_obj_ref);
+  sr->active_request_token =
+      EdgeRegisterActiveRequest(base->env,
+                                req_obj,
+                                "ShutdownWrap",
+                                sr,
+                                CancelLibuvShutdownReq,
+                                LibuvShutdownReqGetOwner);
   sr->req.data = sr;
 
   int rc = uv_shutdown(&sr->req, base->ops->get_stream(base), OnShutdownDone);

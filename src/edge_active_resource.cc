@@ -1,85 +1,8 @@
 #include "edge_active_resource.h"
 
-#include <algorithm>
-#include <string>
-#include <vector>
-
 #include "edge_environment.h"
 
 namespace {
-
-struct ActiveHandleEntry {
-  napi_ref keepalive_ref = nullptr;
-  std::string resource_name;
-  EdgeActiveHandleHasRef has_ref = nullptr;
-  EdgeActiveHandleGetOwner get_owner = nullptr;
-  void* data = nullptr;
-};
-
-struct ActiveRequestEntry {
-  napi_ref req_ref = nullptr;
-  std::string resource_name;
-};
-
-void DeleteRef(napi_env env, napi_ref* ref);
-
-struct ActiveResourceState {
-  explicit ActiveResourceState(napi_env env_in) : env(env_in) {}
-  ~ActiveResourceState() {
-    for (ActiveHandleEntry* entry : handles) {
-      if (entry == nullptr) continue;
-      DeleteRef(env, &entry->keepalive_ref);
-      delete entry;
-    }
-    for (ActiveRequestEntry* entry : requests) {
-      if (entry == nullptr) continue;
-      DeleteRef(env, &entry->req_ref);
-      delete entry;
-    }
-    handles.clear();
-    requests.clear();
-  }
-
-  napi_env env = nullptr;
-  std::vector<ActiveHandleEntry*> handles;
-  std::vector<ActiveRequestEntry*> requests;
-};
-
-ActiveResourceState& GetState(napi_env env) {
-  return EdgeEnvironmentGetOrCreateSlotData<ActiveResourceState>(
-      env, kEdgeEnvironmentSlotActiveResourceState);
-}
-
-void DeleteRef(napi_env env, napi_ref* ref) {
-  if (env == nullptr || ref == nullptr || *ref == nullptr) return;
-  napi_delete_reference(env, *ref);
-  *ref = nullptr;
-}
-
-napi_value GetRefValue(napi_env env, napi_ref ref) {
-  if (env == nullptr || ref == nullptr) return nullptr;
-  napi_value value = nullptr;
-  if (napi_get_reference_value(env, ref, &value) != napi_ok || value == nullptr) return nullptr;
-  return value;
-}
-
-void AppendArrayValue(napi_env env, napi_value array, uint32_t* index, napi_value value) {
-  if (env == nullptr || array == nullptr || index == nullptr || value == nullptr) return;
-  napi_set_element(env, array, (*index)++, value);
-}
-
-void AppendStringValue(napi_env env, napi_value array, uint32_t* index, const std::string& value) {
-  if (env == nullptr || array == nullptr || index == nullptr || value.empty()) return;
-  napi_value str = nullptr;
-  if (napi_create_string_utf8(env, value.c_str(), value.size(), &str) != napi_ok || str == nullptr) return;
-  AppendArrayValue(env, array, index, str);
-}
-
-napi_value CreateArray(napi_env env) {
-  napi_value out = nullptr;
-  napi_create_array(env, &out);
-  return out;
-}
 
 }  // namespace
 
@@ -88,109 +11,73 @@ void* EdgeRegisterActiveHandle(napi_env env,
                               const char* resource_name,
                               EdgeActiveHandleHasRef has_ref,
                               EdgeActiveHandleGetOwner get_owner,
-                              void* data) {
-  if (env == nullptr || keepalive_owner == nullptr || resource_name == nullptr || has_ref == nullptr) return nullptr;
-  auto* entry = new ActiveHandleEntry();
-  entry->resource_name = resource_name;
-  entry->has_ref = has_ref;
-  entry->get_owner = get_owner;
-  entry->data = data;
-  if (napi_create_reference(env, keepalive_owner, 1, &entry->keepalive_ref) != napi_ok || entry->keepalive_ref == nullptr) {
-    delete entry;
-    return nullptr;
+                              void* data,
+                              EdgeActiveHandleClose close_callback) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->RegisterActiveHandle(
+        keepalive_owner, resource_name, has_ref, get_owner, data, close_callback);
   }
-  GetState(env).handles.push_back(entry);
-  return entry;
+  return nullptr;
 }
 
 void EdgeUnregisterActiveHandle(napi_env env, void* token) {
-  if (env == nullptr || token == nullptr) return;
-  ActiveResourceState& state = GetState(env);
-  auto* entry = static_cast<ActiveHandleEntry*>(token);
-  auto it = std::find(state.handles.begin(), state.handles.end(), entry);
-  if (it == state.handles.end()) return;
-  DeleteRef(env, &entry->keepalive_ref);
-  state.handles.erase(it);
-  delete entry;
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->UnregisterActiveHandle(token);
+  }
+}
+
+void* EdgeRegisterActiveRequest(napi_env env,
+                               napi_value req,
+                               const char* resource_name,
+                               void* data,
+                               EdgeActiveRequestCancel cancel,
+                               EdgeActiveRequestGetOwner get_owner) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->RegisterActiveRequest(req, resource_name, data, cancel, get_owner);
+  }
+  return nullptr;
+}
+
+void EdgeUnregisterActiveRequestToken(napi_env env, void* token) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->UnregisterActiveRequest(token);
+  }
 }
 
 void EdgeTrackActiveRequest(napi_env env, napi_value req, const char* resource_name) {
-  if (env == nullptr || req == nullptr || resource_name == nullptr) return;
-  auto* entry = new ActiveRequestEntry();
-  entry->resource_name = resource_name;
-  if (napi_create_reference(env, req, 1, &entry->req_ref) != napi_ok || entry->req_ref == nullptr) {
-    delete entry;
-    return;
-  }
-  GetState(env).requests.push_back(entry);
+  (void)EdgeRegisterActiveRequest(env, req, resource_name);
 }
 
 void EdgeUntrackActiveRequest(napi_env env, napi_value req) {
   if (env == nullptr || req == nullptr) return;
-  ActiveResourceState& state = GetState(env);
-  for (auto it = state.requests.begin(); it != state.requests.end(); ++it) {
-    auto* entry = *it;
-    napi_value current = GetRefValue(env, entry->req_ref);
-    if (current == nullptr) continue;
-    bool same = false;
-    if (napi_strict_equals(env, current, req, &same) != napi_ok || !same) continue;
-    DeleteRef(env, &entry->req_ref);
-    state.requests.erase(it);
-    delete entry;
-    return;
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->UnregisterActiveRequestByOwner(req);
   }
 }
 
 napi_value EdgeGetActiveHandlesArray(napi_env env) {
-  napi_value out = CreateArray(env);
-  if (out == nullptr) return nullptr;
-
-  uint32_t index = 0;
-  ActiveResourceState& state = GetState(env);
-  for (ActiveHandleEntry* entry : state.handles) {
-    if (entry == nullptr || !entry->has_ref(entry->data)) continue;
-    napi_value owner =
-        entry->get_owner != nullptr ? entry->get_owner(env, entry->data) : GetRefValue(env, entry->keepalive_ref);
-    if (owner == nullptr) owner = GetRefValue(env, entry->keepalive_ref);
-    if (owner == nullptr) continue;
-    AppendArrayValue(env, out, &index, owner);
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->GetActiveHandlesArray();
   }
+  napi_value out = nullptr;
+  napi_create_array(env, &out);
   return out;
 }
 
 napi_value EdgeGetActiveRequestsArray(napi_env env) {
-  napi_value out = CreateArray(env);
-  if (out == nullptr) return nullptr;
-
-  uint32_t index = 0;
-  ActiveResourceState& state = GetState(env);
-  for (ActiveRequestEntry* entry : state.requests) {
-    if (entry == nullptr) continue;
-    napi_value req = GetRefValue(env, entry->req_ref);
-    if (req == nullptr) continue;
-    AppendArrayValue(env, out, &index, req);
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->GetActiveRequestsArray();
   }
+  napi_value out = nullptr;
+  napi_create_array(env, &out);
   return out;
 }
 
 napi_value EdgeGetActiveResourcesInfoArray(napi_env env) {
-  napi_value out = CreateArray(env);
-  if (out == nullptr) return nullptr;
-
-  uint32_t index = 0;
-  ActiveResourceState& state = GetState(env);
-  for (ActiveRequestEntry* entry : state.requests) {
-    if (entry == nullptr) continue;
-    if (GetRefValue(env, entry->req_ref) == nullptr) continue;
-    AppendStringValue(env, out, &index, entry->resource_name);
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->GetActiveResourcesInfoArray();
   }
-  for (ActiveHandleEntry* entry : state.handles) {
-    if (entry == nullptr || !entry->has_ref(entry->data)) continue;
-    napi_value owner =
-        entry->get_owner != nullptr ? entry->get_owner(env, entry->data) : GetRefValue(env, entry->keepalive_ref);
-    if (owner == nullptr) owner = GetRefValue(env, entry->keepalive_ref);
-    if (owner == nullptr) continue;
-    AppendStringValue(env, out, &index, entry->resource_name);
-  }
+  napi_value out = nullptr;
+  napi_create_array(env, &out);
   return out;
 }

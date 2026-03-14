@@ -128,7 +128,72 @@ napi_value GetRefValue(napi_env env, napi_ref ref) {
   return value;
 }
 
+bool IsStrictEqual(napi_env env, napi_value lhs, napi_value rhs) {
+  if (env == nullptr || lhs == nullptr || rhs == nullptr) return false;
+  bool same = false;
+  return napi_strict_equals(env, lhs, rhs, &same) == napi_ok && same;
+}
+
+bool IsProcessStdioStream(napi_env env, napi_value value) {
+  if (env == nullptr || value == nullptr) return false;
+  napi_value global = nullptr;
+  napi_value process = nullptr;
+  if (napi_get_global(env, &global) != napi_ok ||
+      global == nullptr ||
+      napi_get_named_property(env, global, "process", &process) != napi_ok ||
+      process == nullptr) {
+    return false;
+  }
+
+  napi_value candidate = nullptr;
+  if ((napi_get_named_property(env, process, "stdin", &candidate) == napi_ok && IsStrictEqual(env, value, candidate)) ||
+      (napi_get_named_property(env, process, "stdout", &candidate) == napi_ok && IsStrictEqual(env, value, candidate)) ||
+      (napi_get_named_property(env, process, "stderr", &candidate) == napi_ok && IsStrictEqual(env, value, candidate))) {
+    return true;
+  }
+  return false;
+}
+
+napi_value CreateArray(napi_env env) {
+  napi_value out = nullptr;
+  napi_create_array(env, &out);
+  return out;
+}
+
+void AppendArrayValue(napi_env env, napi_value array, uint32_t* index, napi_value value) {
+  if (env == nullptr || array == nullptr || index == nullptr || value == nullptr) return;
+  napi_set_element(env, array, (*index)++, value);
+}
+
+void AppendStringValue(napi_env env, napi_value array, uint32_t* index, const std::string& value) {
+  if (env == nullptr || array == nullptr || index == nullptr || value.empty()) return;
+  napi_value str = nullptr;
+  if (napi_create_string_utf8(env, value.c_str(), value.size(), &str) != napi_ok || str == nullptr) return;
+  AppendArrayValue(env, array, index, str);
+}
+
 }  // namespace
+
+namespace edge {
+
+struct ActiveHandleEntry {
+  napi_ref keepalive_ref = nullptr;
+  std::string resource_name;
+  EdgeEnvironmentHandleHasRef has_ref = nullptr;
+  EdgeEnvironmentHandleGetOwner get_owner = nullptr;
+  EdgeEnvironmentHandleClose close_callback = nullptr;
+  void* data = nullptr;
+};
+
+struct ActiveRequestEntry {
+  napi_ref owner_ref = nullptr;
+  std::string resource_name;
+  EdgeEnvironmentRequestCancel cancel = nullptr;
+  EdgeEnvironmentRequestGetOwner get_owner = nullptr;
+  void* data = nullptr;
+};
+
+}  // namespace edge
 
 namespace edge {
 
@@ -182,6 +247,7 @@ Environment::Environment(napi_env env) : env_(env) {
 
 Environment::~Environment() {
   ResetTrackedRefs();
+  CleanupActiveRegistryEntries();
   CloseTrackedUnmanagedFds();
   CloseAndDestroyEventLoop();
   RunSlotDeleters(&slots_);
@@ -487,12 +553,104 @@ bool Environment::cleanup_started() const {
   return cleanup_started_;
 }
 
-void Environment::EmitProcessWarning(const std::string& message) const {
-  if (env_ == nullptr || message.empty()) return;
+bool Environment::can_call_into_js() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return can_call_into_js_ && !stopping_;
+}
+
+void Environment::set_can_call_into_js(bool can_call_into_js) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  can_call_into_js_ = can_call_into_js;
+}
+
+bool Environment::is_stopping() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return stopping_;
+}
+
+void Environment::set_stopping(bool stopping) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  stopping_ = stopping;
+}
+
+bool Environment::filehandle_close_warning() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return emit_filehandle_warning_;
+}
+
+void Environment::set_filehandle_close_warning(bool on) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  emit_filehandle_warning_ = on;
+}
+
+void Environment::QueueFileHandleGcWarning(int fd, int close_status) {
+  if (env_ == nullptr || fd < 0) return;
+  const bool should_schedule =
+      SetImmediateThreadsafe(
+          [](napi_env env, void* data) {
+            auto* payload = static_cast<std::pair<Environment*, std::pair<int, int>>*>(data);
+            if (payload == nullptr) return;
+            Environment* environment = payload->first;
+            const int closed_fd = payload->second.first;
+            const int status = payload->second.second;
+            delete payload;
+            if (environment == nullptr) return;
+            if (status < 0) {
+              environment->EmitProcessWarning(
+                  "Closing file descriptor " + std::to_string(closed_fd) +
+                  " on garbage collection failed");
+              return;
+            }
+            environment->EmitProcessWarning(
+                "Closing file descriptor " + std::to_string(closed_fd) + " on garbage collection");
+            bool emit_deprecation = false;
+            {
+              std::lock_guard<std::mutex> lock(environment->mutex_);
+              emit_deprecation = environment->emit_filehandle_warning_;
+              environment->emit_filehandle_warning_ = false;
+            }
+            if (emit_deprecation) {
+              environment->EmitProcessWarning(
+                  "Closing a FileHandle object on garbage collection is deprecated. "
+                  "Please close FileHandle objects explicitly using "
+                  "FileHandle.prototype.close(). In the future, an error will be "
+                  "thrown if a file descriptor is closed during garbage collection.",
+                  "DeprecationWarning",
+                  "DEP0137");
+            }
+          },
+          new std::pair<Environment*, std::pair<int, int>>(this, {fd, close_status}),
+          false) == napi_ok;
+  if (!should_schedule) {
+    EmitProcessWarning("Closing file descriptor " + std::to_string(fd) + " on garbage collection");
+    bool emit_deprecation = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      emit_deprecation = emit_filehandle_warning_;
+      emit_filehandle_warning_ = false;
+    }
+    if (emit_deprecation) {
+      EmitProcessWarning(
+          "Closing a FileHandle object on garbage collection is deprecated. "
+          "Please close FileHandle objects explicitly using "
+          "FileHandle.prototype.close(). In the future, an error will be "
+          "thrown if a file descriptor is closed during garbage collection.",
+          "DeprecationWarning",
+          "DEP0137");
+    }
+  }
+}
+
+void Environment::EmitProcessWarning(const std::string& message,
+                                     const char* type,
+                                     const char* code) const {
+  if (env_ == nullptr || message.empty() || !can_call_into_js()) return;
   napi_value global = nullptr;
   napi_value process = nullptr;
   napi_value emit_warning = nullptr;
   napi_value message_value = nullptr;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  size_t argc = 1;
   if (napi_get_global(env_, &global) != napi_ok ||
       global == nullptr ||
       napi_get_named_property(env_, global, "process", &process) != napi_ok ||
@@ -503,8 +661,26 @@ void Environment::EmitProcessWarning(const std::string& message) const {
       message_value == nullptr) {
     return;
   }
+  argv[0] = message_value;
+  if (type != nullptr) {
+    if (napi_create_string_utf8(env_, type, NAPI_AUTO_LENGTH, &argv[1]) != napi_ok || argv[1] == nullptr) {
+      return;
+    }
+    argc = 2;
+  }
+  if (code != nullptr) {
+    if (argv[1] == nullptr &&
+        (napi_create_string_utf8(env_, "Warning", NAPI_AUTO_LENGTH, &argv[1]) != napi_ok ||
+         argv[1] == nullptr)) {
+      return;
+    }
+    if (napi_create_string_utf8(env_, code, NAPI_AUTO_LENGTH, &argv[2]) != napi_ok || argv[2] == nullptr) {
+      return;
+    }
+    argc = 3;
+  }
   napi_value ignored = nullptr;
-  (void)napi_call_function(env_, process, emit_warning, 1, &message_value, &ignored);
+  (void)napi_call_function(env_, process, emit_warning, argc, argv, &ignored);
 }
 
 void Environment::AddUnmanagedFd(int fd) {
@@ -546,6 +722,196 @@ void Environment::CloseTrackedUnmanagedFds() {
     (void)uv_fs_close(nullptr, &req, fd, nullptr);
     uv_fs_req_cleanup(&req);
   }
+}
+
+void* Environment::RegisterActiveHandle(napi_value keepalive_owner,
+                                        const char* resource_name,
+                                        EdgeEnvironmentHandleHasRef has_ref,
+                                        EdgeEnvironmentHandleGetOwner get_owner,
+                                        void* data,
+                                        EdgeEnvironmentHandleClose close_callback) {
+  if (env_ == nullptr || keepalive_owner == nullptr || resource_name == nullptr || has_ref == nullptr) {
+    return nullptr;
+  }
+  auto* entry = new (std::nothrow) ActiveHandleEntry();
+  if (entry == nullptr) return nullptr;
+  entry->resource_name = resource_name;
+  entry->has_ref = has_ref;
+  entry->get_owner = get_owner;
+  entry->close_callback = close_callback;
+  entry->data = data;
+  if (napi_create_reference(env_, keepalive_owner, 1, &entry->keepalive_ref) != napi_ok ||
+      entry->keepalive_ref == nullptr) {
+    delete entry;
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  active_handles_.push_back(entry);
+  return entry;
+}
+
+void Environment::UnregisterActiveHandle(void* token) {
+  auto* entry = static_cast<ActiveHandleEntry*>(token);
+  if (entry == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = std::find(active_handles_.begin(), active_handles_.end(), entry);
+    if (it == active_handles_.end()) return;
+    active_handles_.erase(it);
+  }
+  DeleteRefIfPresent(&entry->keepalive_ref);
+  delete entry;
+}
+
+void* Environment::RegisterActiveRequest(napi_value owner,
+                                         const char* resource_name,
+                                         void* data,
+                                         EdgeEnvironmentRequestCancel cancel,
+                                         EdgeEnvironmentRequestGetOwner get_owner) {
+  if (env_ == nullptr || owner == nullptr || resource_name == nullptr) return nullptr;
+  auto* entry = new (std::nothrow) ActiveRequestEntry();
+  if (entry == nullptr) return nullptr;
+  entry->resource_name = resource_name;
+  entry->cancel = cancel;
+  entry->get_owner = get_owner;
+  entry->data = data;
+  if (napi_create_reference(env_, owner, 1, &entry->owner_ref) != napi_ok || entry->owner_ref == nullptr) {
+    delete entry;
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  active_requests_.push_back(entry);
+  return entry;
+}
+
+void Environment::UnregisterActiveRequest(void* token) {
+  auto* entry = static_cast<ActiveRequestEntry*>(token);
+  if (entry == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = std::find(active_requests_.begin(), active_requests_.end(), entry);
+    if (it == active_requests_.end()) return;
+    active_requests_.erase(it);
+  }
+  DeleteRefIfPresent(&entry->owner_ref);
+  delete entry;
+}
+
+void Environment::UnregisterActiveRequestByOwner(napi_value owner) {
+  if (owner == nullptr) return;
+  ActiveRequestEntry* match = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (ActiveRequestEntry* entry : active_requests_) {
+      if (entry == nullptr) continue;
+      napi_value current = GetRefValue(env_, entry->owner_ref);
+      if (current == nullptr) continue;
+      bool same = false;
+      if (napi_strict_equals(env_, current, owner, &same) != napi_ok || !same) continue;
+      match = entry;
+      break;
+    }
+  }
+  if (match != nullptr) {
+    UnregisterActiveRequest(match);
+  }
+}
+
+void Environment::CancelActiveRequests() {
+  std::vector<ActiveRequestEntry*> requests;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    requests = active_requests_;
+  }
+  for (ActiveRequestEntry* entry : requests) {
+    if (entry != nullptr && entry->cancel != nullptr) {
+      entry->cancel(entry->data);
+    }
+  }
+}
+
+void Environment::CloseActiveHandles() {
+  std::vector<ActiveHandleEntry*> handles;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handles = active_handles_;
+  }
+  for (ActiveHandleEntry* entry : handles) {
+    if (entry != nullptr && entry->close_callback != nullptr) {
+      entry->close_callback(entry->data);
+    }
+  }
+}
+
+napi_value Environment::GetActiveHandlesArray() {
+  napi_value out = CreateArray(env_);
+  if (out == nullptr) return nullptr;
+  std::vector<ActiveHandleEntry*> handles;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handles = active_handles_;
+  }
+  uint32_t index = 0;
+  for (ActiveHandleEntry* entry : handles) {
+    if (entry == nullptr || entry->has_ref == nullptr || !entry->has_ref(entry->data)) continue;
+    napi_value owner =
+        entry->get_owner != nullptr ? entry->get_owner(env_, entry->data) : GetRefValue(env_, entry->keepalive_ref);
+    if (owner == nullptr) owner = GetRefValue(env_, entry->keepalive_ref);
+    if (owner == nullptr) continue;
+    AppendArrayValue(env_, out, &index, owner);
+  }
+  return out;
+}
+
+napi_value Environment::GetActiveRequestsArray() {
+  napi_value out = CreateArray(env_);
+  if (out == nullptr) return nullptr;
+  std::vector<ActiveRequestEntry*> requests;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    requests = active_requests_;
+  }
+  uint32_t index = 0;
+  for (ActiveRequestEntry* entry : requests) {
+    if (entry == nullptr) continue;
+    napi_value owner =
+        entry->get_owner != nullptr ? entry->get_owner(env_, entry->data) : GetRefValue(env_, entry->owner_ref);
+    if (owner == nullptr) owner = GetRefValue(env_, entry->owner_ref);
+    if (owner == nullptr) continue;
+    AppendArrayValue(env_, out, &index, owner);
+  }
+  return out;
+}
+
+napi_value Environment::GetActiveResourcesInfoArray() {
+  napi_value out = CreateArray(env_);
+  if (out == nullptr) return nullptr;
+  std::vector<ActiveRequestEntry*> requests;
+  std::vector<ActiveHandleEntry*> handles;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    requests = active_requests_;
+    handles = active_handles_;
+  }
+  uint32_t index = 0;
+  for (ActiveRequestEntry* entry : requests) {
+    if (entry == nullptr) continue;
+    napi_value owner =
+        entry->get_owner != nullptr ? entry->get_owner(env_, entry->data) : GetRefValue(env_, entry->owner_ref);
+    if (owner == nullptr) owner = GetRefValue(env_, entry->owner_ref);
+    if (owner == nullptr) continue;
+    AppendStringValue(env_, out, &index, entry->resource_name);
+  }
+  for (ActiveHandleEntry* entry : handles) {
+    if (entry == nullptr || entry->has_ref == nullptr || !entry->has_ref(entry->data)) continue;
+    napi_value owner =
+        entry->get_owner != nullptr ? entry->get_owner(env_, entry->data) : GetRefValue(env_, entry->keepalive_ref);
+    if (owner == nullptr) owner = GetRefValue(env_, entry->keepalive_ref);
+    if (owner == nullptr) continue;
+    if (IsProcessStdioStream(env_, owner)) continue;
+    AppendStringValue(env_, out, &index, entry->resource_name);
+  }
+  return out;
 }
 
 size_t Environment::callback_scope_depth() const {
@@ -816,6 +1182,26 @@ void Environment::ResetTrackedRefs() {
   stream_base_state_.fields = nullptr;
 }
 
+void Environment::CleanupActiveRegistryEntries() {
+  std::vector<ActiveHandleEntry*> handles;
+  std::vector<ActiveRequestEntry*> requests;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handles.swap(active_handles_);
+    requests.swap(active_requests_);
+  }
+  for (ActiveHandleEntry* entry : handles) {
+    if (entry == nullptr) continue;
+    DeleteRefIfPresent(&entry->keepalive_ref);
+    delete entry;
+  }
+  for (ActiveRequestEntry* entry : requests) {
+    if (entry == nullptr) continue;
+    DeleteRefIfPresent(&entry->owner_ref);
+    delete entry;
+  }
+}
+
 void Environment::RunCleanup() {
   std::vector<CleanupStageEntry> stages;
   {
@@ -823,6 +1209,8 @@ void Environment::RunCleanup() {
     if (cleanup_started_) return;
     cleanup_started_ = true;
     stop_requested_ = true;
+    stopping_ = true;
+    can_call_into_js_ = false;
     stages = cleanup_stages_;
   }
 
@@ -834,6 +1222,13 @@ void Environment::RunCleanup() {
 
   for (size_t guard = 0; guard < 256; ++guard) {
     bool did_work = false;
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      did_work = !active_requests_.empty() || !active_handles_.empty();
+    }
+    CancelActiveRequests();
+    CloseActiveHandles();
 
     if (DrainThreadsafeImmediates() > 0) {
       did_work = true;
@@ -878,6 +1273,7 @@ void Environment::RunCleanup() {
   }
 
   ResetTrackedRefs();
+  CleanupActiveRegistryEntries();
   CloseTrackedUnmanagedFds();
   CloseAndDestroyEventLoop();
 

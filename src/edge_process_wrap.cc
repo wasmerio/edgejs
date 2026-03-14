@@ -437,7 +437,8 @@ napi_value ProcessCtor(napi_env env, napi_callback_info info) {
   }
 
   wrap->handle_wrap.active_handle_token =
-      EdgeRegisterActiveHandle(env, self, "PROCESSWRAP", HasRef, GetActiveOwner, wrap);
+      EdgeRegisterActiveHandle(
+          env, self, "PROCESSWRAP", HasRef, GetActiveOwner, wrap, CloseProcessWrapForCleanup);
 
   SetPidUndefined(env, self);
   EdgeAsyncWrapEmitInit(

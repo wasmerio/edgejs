@@ -11,6 +11,7 @@
 #include <uv.h>
 
 #include "edge_async_wrap.h"
+#include "edge_active_resource.h"
 #include "edge_environment.h"
 #include "edge_env_loop.h"
 #include "edge_runtime.h"
@@ -27,7 +28,11 @@ struct TcpWrap;
 struct ConnectReqWrap {
   uv_connect_t req{};
   napi_env env = nullptr;
-  napi_ref req_obj_ref = nullptr;
+  napi_ref wrapper_ref = nullptr;
+  napi_ref active_ref = nullptr;
+  void* active_request_token = nullptr;
+  int64_t async_id = -1;
+  bool destroy_queued = false;
   TcpWrap* tcp = nullptr;
 };
 
@@ -107,10 +112,72 @@ napi_value GetRefValue(napi_env env, napi_ref ref) {
   return value;
 }
 
+void DeleteRefIfPresent(napi_env env, napi_ref* ref) {
+  if (env == nullptr || ref == nullptr || *ref == nullptr) return;
+  napi_delete_reference(env, *ref);
+  *ref = nullptr;
+}
+
 bool IsFunction(napi_env env, napi_value value) {
   if (env == nullptr || value == nullptr) return false;
   napi_valuetype type = napi_undefined;
   return napi_typeof(env, value, &type) == napi_ok && type == napi_function;
+}
+
+napi_value ConnectReqGetOwner(napi_env env, void* data) {
+  auto* req = static_cast<ConnectReqWrap*>(data);
+  if (req == nullptr) return nullptr;
+  napi_value owner = GetRefValue(env, req->active_ref);
+  if (owner != nullptr) return owner;
+  return GetRefValue(env, req->wrapper_ref);
+}
+
+void CancelConnectReq(void* data) {
+  auto* req = static_cast<ConnectReqWrap*>(data);
+  if (req == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->req));
+}
+
+void QueueConnectReqDestroyIfNeeded(ConnectReqWrap* req) {
+  if (req == nullptr || req->destroy_queued || req->async_id <= 0) return;
+  EdgeAsyncWrapQueueDestroyId(req->env, req->async_id);
+  req->destroy_queued = true;
+}
+
+bool ActivateConnectReq(ConnectReqWrap* req, napi_value req_obj) {
+  if (req == nullptr || req->env == nullptr || req_obj == nullptr) return false;
+  if (req->async_id <= 0 || req->destroy_queued) {
+    req->async_id = EdgeAsyncWrapNextId(req->env);
+    EdgeAsyncWrapEmitInit(
+        req->env, req->async_id, kEdgeProviderTcpConnectWrap, EdgeAsyncWrapExecutionAsyncId(req->env), req_obj);
+  }
+  req->destroy_queued = false;
+  DeleteRefIfPresent(req->env, &req->active_ref);
+  return napi_create_reference(req->env, req_obj, 1, &req->active_ref) == napi_ok && req->active_ref != nullptr;
+}
+
+void ReleaseConnectReqState(ConnectReqWrap* req) {
+  if (req == nullptr) return;
+  if (req->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(req->env, req->active_request_token);
+    req->active_request_token = nullptr;
+  }
+  DeleteRefIfPresent(req->env, &req->active_ref);
+  req->tcp = nullptr;
+  req->req.data = nullptr;
+}
+
+void ConnectReqFinalize(napi_env env, void* data, void* /*hint*/) {
+  auto* req = static_cast<ConnectReqWrap*>(data);
+  if (req == nullptr) return;
+  if (req->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(env, req->active_request_token);
+    req->active_request_token = nullptr;
+  }
+  QueueConnectReqDestroyIfNeeded(req);
+  DeleteRefIfPresent(env, &req->active_ref);
+  DeleteRefIfPresent(env, &req->wrapper_ref);
+  delete req;
 }
 
 napi_value GetThis(napi_env env,
@@ -183,7 +250,7 @@ void OnRead(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
 void OnConnectDone(uv_connect_t* req, int status) {
   auto* cr = static_cast<ConnectReqWrap*>(req->data);
   if (cr == nullptr) return;
-  napi_value req_obj = GetRefValue(cr->env, cr->req_obj_ref);
+  napi_value req_obj = ConnectReqGetOwner(cr->env, cr);
   napi_value tcp_obj = cr->tcp != nullptr ? EdgeStreamBaseGetWrapper(&cr->tcp->base) : nullptr;
   napi_value argv[5] = {
       EdgeStreamBaseMakeInt32(cr->env, status),
@@ -192,9 +259,20 @@ void OnConnectDone(uv_connect_t* req, int status) {
       EdgeStreamBaseMakeBool(cr->env, true),
       EdgeStreamBaseMakeBool(cr->env, true),
   };
-  EdgeStreamBaseInvokeReqOnComplete(cr->env, req_obj, status, argv, 5);
-  if (cr->req_obj_ref != nullptr) napi_delete_reference(cr->env, cr->req_obj_ref);
-  delete cr;
+  if (req_obj != nullptr) {
+    EdgeStreamBaseSetReqError(cr->env, req_obj, status);
+    if (auto* environment = EdgeEnvironmentGet(cr->env);
+        environment == nullptr || environment->can_call_into_js()) {
+      napi_value oncomplete = nullptr;
+      if (napi_get_named_property(cr->env, req_obj, "oncomplete", &oncomplete) == napi_ok && IsFunction(cr->env, oncomplete)) {
+        napi_value ignored = nullptr;
+        (void)EdgeAsyncWrapMakeCallback(
+            cr->env, cr->async_id, req_obj, req_obj, oncomplete, 5, argv, &ignored, kEdgeMakeCallbackNone);
+      }
+    }
+  }
+  QueueConnectReqDestroyIfNeeded(cr);
+  ReleaseConnectReqState(cr);
 }
 
 napi_value TcpCtor(napi_env env, napi_callback_info info) {
@@ -362,11 +440,23 @@ napi_value TcpConnectImpl(napi_env env,
                          const std::string& host,
                          int32_t port,
                          bool ipv6) {
-  auto* cr = new ConnectReqWrap();
+  auto* cr = static_cast<ConnectReqWrap*>(nullptr);
+  if (req_obj == nullptr || napi_unwrap(env, req_obj, reinterpret_cast<void**>(&cr)) != napi_ok || cr == nullptr) {
+    return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
+  }
   cr->env = env;
   cr->tcp = wrap;
+  if (!ActivateConnectReq(cr, req_obj)) {
+    return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
+  }
   cr->req.data = cr;
-  napi_create_reference(env, req_obj, 1, &cr->req_obj_ref);
+  cr->active_request_token =
+      EdgeRegisterActiveRequest(env,
+                                req_obj,
+                                "TCPConnectWrap",
+                                cr,
+                                CancelConnectReq,
+                                ConnectReqGetOwner);
 
   int rc = 0;
   if (ipv6) {
@@ -385,8 +475,8 @@ napi_value TcpConnectImpl(napi_env env,
 
   if (rc != 0) {
     EdgeStreamBaseSetReqError(env, req_obj, rc);
-    if (cr->req_obj_ref != nullptr) napi_delete_reference(env, cr->req_obj_ref);
-    delete cr;
+    QueueConnectReqDestroyIfNeeded(cr);
+    ReleaseConnectReqState(cr);
   }
   return EdgeStreamBaseMakeInt32(env, rc);
 }
@@ -654,6 +744,16 @@ napi_value ConnectWrapCtor(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
   size_t argc = 0;
   napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
+  if (self == nullptr) return nullptr;
+  auto* req = new ConnectReqWrap();
+  req->env = env;
+  req->async_id = EdgeAsyncWrapNextId(env);
+  if (napi_wrap(env, self, req, ConnectReqFinalize, nullptr, &req->wrapper_ref) != napi_ok) {
+    delete req;
+    return nullptr;
+  }
+  EdgeAsyncWrapEmitInit(
+      env, req->async_id, kEdgeProviderTcpConnectWrap, EdgeAsyncWrapExecutionAsyncId(env), self);
   return self;
 }
 

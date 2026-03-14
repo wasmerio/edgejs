@@ -8,6 +8,7 @@
 
 #include <uv.h>
 
+#include "edge_active_resource.h"
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
 #include "edge_env_loop.h"
@@ -52,6 +53,7 @@ struct DirReq {
   DirHandleWrap* handle = nullptr;
   napi_ref req_ref = nullptr;
   napi_ref oncomplete_ref = nullptr;
+  void* active_request_token = nullptr;
   std::string encoding = "utf8";
   std::string path;
   bool req_cleaned = false;
@@ -72,6 +74,27 @@ napi_value GetRefValue(napi_env env, napi_ref ref) {
   napi_value out = nullptr;
   if (napi_get_reference_value(env, ref, &out) != napi_ok || out == nullptr) return nullptr;
   return out;
+}
+
+const char* ResourceNameForDirReq(DirReqKind kind) {
+  switch (kind) {
+    case DirReqKind::kOpen:
+    case DirReqKind::kRead:
+    case DirReqKind::kClose:
+      return "FSReqCallback";
+  }
+  return "FSReqCallback";
+}
+
+void CancelDirReq(void* data) {
+  auto* req = static_cast<DirReq*>(data);
+  if (req == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->req));
+}
+
+napi_value GetDirReqOwner(napi_env env, void* data) {
+  auto* req = static_cast<DirReq*>(data);
+  return req != nullptr ? GetRefValue(env, req->req_ref) : nullptr;
 }
 
 void ResetRef(napi_env env, napi_ref* ref_ptr) {
@@ -321,6 +344,10 @@ void CompleteReq(DirReq* req, napi_value err, napi_value value) {
 
 void DeleteReq(DirReq* req) {
   if (req == nullptr) return;
+  if (req->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(req->env, req->active_request_token);
+    req->active_request_token = nullptr;
+  }
   if (req->handle != nullptr) ReleaseDirHandleRef(req->handle);
   if (!req->req_cleaned) {
     uv_fs_req_cleanup(&req->req);
@@ -340,8 +367,17 @@ bool InitAsyncReq(napi_env env, napi_value req_value, DirReq* req) {
   napi_valuetype type = napi_undefined;
   if (napi_typeof(env, oncomplete, &type) != napi_ok || type != napi_function) return false;
   req->env = env;
-  return napi_create_reference(env, req_value, 1, &req->req_ref) == napi_ok &&
-         napi_create_reference(env, oncomplete, 1, &req->oncomplete_ref) == napi_ok;
+  const bool ok = napi_create_reference(env, req_value, 1, &req->req_ref) == napi_ok &&
+                  napi_create_reference(env, oncomplete, 1, &req->oncomplete_ref) == napi_ok;
+  if (!ok) return false;
+  req->active_request_token =
+      EdgeRegisterActiveRequest(env,
+                                req_value,
+                                ResourceNameForDirReq(req->kind),
+                                req,
+                                CancelDirReq,
+                                GetDirReqOwner);
+  return true;
 }
 
 void AfterOpenDir(uv_fs_t* uv_req) {

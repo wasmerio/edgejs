@@ -980,6 +980,7 @@ struct AsyncFsReq {
   napi_ref req_ref = nullptr;
   napi_ref oncomplete_ref = nullptr;
   napi_ref extra_ref = nullptr;
+  void* active_request_token = nullptr;
   napi_deferred deferred = nullptr;
   uv_fs_t req{};
   AsyncFsResultKind result_kind = AsyncFsResultKind::kUndefined;
@@ -1043,6 +1044,10 @@ napi_value CreateUvExceptionValue(napi_env env, int errorno, const char* syscall
 void DestroyAsyncFsReq(AsyncFsReq* async_req) {
   if (async_req == nullptr) return;
   napi_env env = async_req->env;
+  if (env != nullptr && async_req->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(env, async_req->active_request_token);
+    async_req->active_request_token = nullptr;
+  }
   if (env != nullptr) {
     ResetRef(env, &async_req->req_ref);
     ResetRef(env, &async_req->oncomplete_ref);
@@ -1488,7 +1493,10 @@ void FinishAsyncFsReq(AsyncFsReq* async_req, int result) {
     napi_value req = GetRefValue(env, async_req->req_ref);
     napi_value oncomplete = GetRefValue(env, async_req->oncomplete_ref);
     napi_value extra = GetRefValue(env, async_req->extra_ref);
-    if (req != nullptr) UntrackActiveRequest(env, req);
+    if (async_req->active_request_token != nullptr) {
+      EdgeUnregisterActiveRequestToken(env, async_req->active_request_token);
+      async_req->active_request_token = nullptr;
+    }
     if (req != nullptr && oncomplete != nullptr) {
       napi_value null_value = nullptr;
       napi_get_null(env, &null_value);
@@ -1560,7 +1568,15 @@ AsyncFsReq* CreateAsyncFsReq(napi_env env,
   if (req_kind == ReqKind::kCallback && req != nullptr && oncomplete != nullptr &&
       napi_create_reference(env, req, 1, &async_req->req_ref) == napi_ok &&
       napi_create_reference(env, oncomplete, 1, &async_req->oncomplete_ref) == napi_ok) {
-    TrackActiveRequest(env, req);
+    async_req->active_request_token =
+        EdgeRegisterActiveRequest(env, req, "FSReqCallback", async_req, [](void* data) {
+          auto* fs_req = static_cast<AsyncFsReq*>(data);
+          if (fs_req == nullptr) return;
+          (void)uv_cancel(reinterpret_cast<uv_req_t*>(&fs_req->req));
+        }, [](napi_env env_in, void* data) -> napi_value {
+          auto* fs_req = static_cast<AsyncFsReq*>(data);
+          return fs_req != nullptr ? GetRefValue(env_in, fs_req->req_ref) : nullptr;
+        });
     return async_req;
   }
 
@@ -1950,9 +1966,14 @@ void FileHandleFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<FileHandleWrap*>(data);
   if (wrap == nullptr) return;
   if (wrap->fd >= 0 && !wrap->closed && !wrap->closing) {
-    (void)::close(wrap->fd);
+    const int fd = wrap->fd;
+    const int rc = ::close(fd);
+    if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+      const int close_status = rc == 0 ? 0 : -(errno != 0 ? errno : UV_EIO);
+      environment->QueueFileHandleGcWarning(fd, close_status);
+    }
     wrap->fd = -1;
-    wrap->closed = true;
+    wrap->closed = (rc == 0);
   }
   ResetRef(env, &wrap->closing_promise_ref);
   EdgeStreamBaseFinalize(&wrap->base);
@@ -2250,6 +2271,17 @@ struct StatWatcherWrap {
   int64_t async_id = 0;
 };
 
+bool StatWatcherHasRef(void* data) {
+  auto* wrap = static_cast<StatWatcherWrap*>(data);
+  return wrap != nullptr &&
+         EdgeHandleWrapHasRef(&wrap->handle_wrap, reinterpret_cast<const uv_handle_t*>(&wrap->handle));
+}
+
+napi_value StatWatcherGetActiveOwner(napi_env env, void* data) {
+  auto* wrap = static_cast<StatWatcherWrap*>(data);
+  return wrap != nullptr ? EdgeHandleWrapGetActiveOwner(env, wrap->handle_wrap.wrapper_ref) : nullptr;
+}
+
 StatWatcherWrap* UnwrapStatWatcher(napi_env env, napi_value this_arg) {
   if (env == nullptr || this_arg == nullptr) return nullptr;
   void* data = nullptr;
@@ -2262,6 +2294,10 @@ void OnStatWatcherClosed(uv_handle_t* handle) {
   if (wrap == nullptr) return;
   wrap->handle_wrap.state = kEdgeHandleClosed;
   EdgeHandleWrapDetach(&wrap->handle_wrap);
+  if (wrap->handle_wrap.active_handle_token != nullptr) {
+    EdgeUnregisterActiveHandle(wrap->handle_wrap.env, wrap->handle_wrap.active_handle_token);
+    wrap->handle_wrap.active_handle_token = nullptr;
+  }
   EdgeHandleWrapReleaseWrapperRef(&wrap->handle_wrap);
   EdgeHandleWrapMaybeCallOnClose(&wrap->handle_wrap);
   bool can_delete = wrap->handle_wrap.finalized;
@@ -2319,6 +2355,10 @@ void StatWatcherFinalize(napi_env env, void* data, void* /*hint*/) {
   EdgeHandleWrapDeleteRefIfPresent(env, &wrap->handle_wrap.wrapper_ref);
   if (wrap->handle_wrap.state == kEdgeHandleUninitialized || wrap->handle_wrap.state == kEdgeHandleClosed) {
     EdgeHandleWrapDetach(&wrap->handle_wrap);
+    if (wrap->handle_wrap.active_handle_token != nullptr) {
+      EdgeUnregisterActiveHandle(env, wrap->handle_wrap.active_handle_token);
+      wrap->handle_wrap.active_handle_token = nullptr;
+    }
     delete wrap;
     return;
   }
@@ -2380,6 +2420,16 @@ napi_value StatWatcherStart(napi_env env, napi_callback_info info) {
 
   wrap->handle_wrap.state = kEdgeHandleInitialized;
   EdgeHandleWrapHoldWrapperRef(&wrap->handle_wrap);
+  if (wrap->handle_wrap.active_handle_token == nullptr) {
+    wrap->handle_wrap.active_handle_token =
+        EdgeRegisterActiveHandle(env,
+                                 this_arg,
+                                 "StatWatcher",
+                                 StatWatcherHasRef,
+                                 StatWatcherGetActiveOwner,
+                                 wrap,
+                                 CloseStatWatcherForCleanup);
+  }
   wrap->referenced = true;
   return MakeInt32(env, 0);
 }

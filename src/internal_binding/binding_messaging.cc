@@ -3660,7 +3660,13 @@ napi_value MessagePortConstructorCallback(napi_env env, napi_callback_info info)
       wrap->data->attached_wrap = wrap;
     }
     wrap->handle_wrap.active_handle_token =
-        EdgeRegisterActiveHandle(env, this_arg, "MESSAGEPORT", MessagePortHasRefActive, MessagePortGetActiveOwner, wrap);
+        EdgeRegisterActiveHandle(env,
+                                 this_arg,
+                                 "MESSAGEPORT",
+                                 MessagePortHasRefActive,
+                                 MessagePortGetActiveOwner,
+                                 wrap,
+                                 CloseMessagePortForCleanup);
   }
 
   const napi_value oninit_symbol = GetOnInitSymbol(env);

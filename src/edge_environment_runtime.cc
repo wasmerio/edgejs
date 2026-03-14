@@ -1,9 +1,7 @@
 #include "edge_environment_runtime.h"
 
 #include "edge_cares_wrap.h"
-#include "edge_handle_wrap.h"
 #include "edge_runtime_platform.h"
-#include "edge_stream_base.h"
 #include "edge_timers_host.h"
 #include "edge_worker_control.h"
 
@@ -13,9 +11,6 @@ constexpr int kCleanupStopWorkers = 10;
 constexpr int kCleanupTimers = 20;
 constexpr int kCleanupRuntimePlatform = 30;
 constexpr int kCleanupCares = 35;
-constexpr int kCleanupHandleWrap = 40;
-constexpr int kCleanupStreamBase = 50;
-
 void StopWorkersCleanup(napi_env env, void* /*arg*/) {
   EdgeWorkerStopAllForEnv(env);
 }
@@ -32,14 +27,6 @@ void CaresCleanup(napi_env env, void* /*arg*/) {
   EdgeRunCaresWrapEnvCleanup(env);
 }
 
-void HandleWrapCleanup(napi_env env, void* /*arg*/) {
-  EdgeHandleWrapRunEnvCleanup(env);
-}
-
-void StreamBaseCleanup(napi_env env, void* /*arg*/) {
-  EdgeStreamBaseRunEnvCleanup(env);
-}
-
 }  // namespace
 
 bool EdgeAttachEnvironmentForRuntime(napi_env env, const EdgeEnvironmentConfig* config) {
@@ -50,7 +37,5 @@ bool EdgeAttachEnvironmentForRuntime(napi_env env, const EdgeEnvironmentConfig* 
   EdgeEnvironmentRegisterCleanupStage(
       env, RuntimePlatformCleanup, nullptr, kCleanupRuntimePlatform);
   EdgeEnvironmentRegisterCleanupStage(env, CaresCleanup, nullptr, kCleanupCares);
-  EdgeEnvironmentRegisterCleanupStage(env, HandleWrapCleanup, nullptr, kCleanupHandleWrap);
-  EdgeEnvironmentRegisterCleanupStage(env, StreamBaseCleanup, nullptr, kCleanupStreamBase);
   return true;
 }

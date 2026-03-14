@@ -189,7 +189,8 @@ napi_value SignalCtor(napi_env env, napi_callback_info info) {
   }
   napi_wrap(env, self, wrap, SignalFinalize, nullptr, &wrap->handle_wrap.wrapper_ref);
   wrap->handle_wrap.active_handle_token =
-      EdgeRegisterActiveHandle(env, self, "SIGNALWRAP", SignalWrapHasRef, SignalWrapGetActiveOwner, wrap);
+      EdgeRegisterActiveHandle(
+          env, self, "SIGNALWRAP", SignalWrapHasRef, SignalWrapGetActiveOwner, wrap, CloseSignalWrapForCleanup);
 
   // EdgeAsyncWrapEmitInit(env,
   //                        static_cast<double>(wrap->async_id),

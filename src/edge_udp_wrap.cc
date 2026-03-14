@@ -48,6 +48,7 @@ struct SendWrap final : public EdgeUdpSendWrap {
   napi_ref wrapper_ref = nullptr;
   napi_ref active_ref = nullptr;
   napi_ref chunks_ref = nullptr;
+  void* active_request_token = nullptr;
   int64_t async_id = -1;
   int32_t provider_type = kEdgeProviderUdpSendWrap;
   bool destroy_queued = false;
@@ -164,6 +165,17 @@ napi_value SendWrap::object(napi_env env_in) const {
   return GetRefValue(use_env, wrapper_ref);
 }
 
+napi_value SendWrapGetActiveOwner(napi_env env, void* data) {
+  auto* wrap = static_cast<SendWrap*>(data);
+  return wrap != nullptr ? wrap->object(env) : nullptr;
+}
+
+void CancelSendWrapRequest(void* data) {
+  auto* wrap = static_cast<SendWrap*>(data);
+  if (wrap == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&wrap->req));
+}
+
 bool IsNullOrUndefined(napi_env env, napi_value value) {
   if (value == nullptr) return true;
   napi_valuetype type = napi_undefined;
@@ -247,6 +259,10 @@ bool ExtractArrayBufferViewBytes(napi_env env, napi_value value, const char** sr
 
 void ReleaseSendWrapState(SendWrap* wrap) {
   if (wrap == nullptr) return;
+  if (wrap->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(wrap->env, wrap->active_request_token);
+    wrap->active_request_token = nullptr;
+  }
   DeleteRef(wrap->env, &wrap->active_ref);
   DeleteRef(wrap->env, &wrap->chunks_ref);
   delete[] wrap->bufs;
@@ -365,18 +381,23 @@ void CallOptionalCallback(napi_env env,
                           napi_value self,
                           const char* name,
                           size_t argc,
-                          napi_value* argv) {
+                          napi_value* argv,
+                          int64_t async_id = 0) {
   if (self == nullptr) return;
   napi_value callback = nullptr;
   if (napi_get_named_property(env, self, name, &callback) != napi_ok || !IsFunction(env, callback)) return;
   napi_value ignored = nullptr;
-  EdgeMakeCallback(env, self, callback, argc, argv, &ignored);
+  if (async_id > 0) {
+    (void)EdgeAsyncWrapMakeCallback(env, async_id, self, self, callback, argc, argv, &ignored, kEdgeMakeCallbackNone);
+  } else {
+    EdgeMakeCallback(env, self, callback, argc, argv, &ignored);
+  }
   (void)EdgeHandlePendingExceptionNow(env, nullptr);
 }
 
-void CallOnError(napi_env env, napi_value self, ssize_t nread, napi_value error) {
+void CallOnError(napi_env env, napi_value self, int64_t async_id, ssize_t nread, napi_value error) {
   napi_value argv[3] = {MakeInt32(env, static_cast<int32_t>(nread)), self, error};
-  CallOptionalCallback(env, self, "onerror", 3, argv);
+  CallOptionalCallback(env, self, "onerror", 3, argv, async_id);
 }
 
 void ThrowInvalidUdpReceiver(napi_env env) {
@@ -430,22 +451,25 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
     size_t msg_size = 0;
     for (size_t i = 0; i < count; i++) msg_size += bufs_ptr[i].len;
 
-    int err = uv_udp_try_send(&handle, bufs_ptr, count, addr);
-    if (err == UV_ENOSYS || err == UV_EAGAIN) {
-      err = 0;
-    } else if (err >= 0) {
-      size_t sent = static_cast<size_t>(err);
-      while (count > 0 && bufs_ptr->len <= sent) {
-        sent -= bufs_ptr->len;
-        bufs_ptr++;
-        count--;
+    int err = 0;
+    if (!EdgeExecArgvHasFlag("--test-udp-no-try-send")) {
+      err = uv_udp_try_send(&handle, bufs_ptr, count, addr);
+      if (err == UV_ENOSYS || err == UV_EAGAIN) {
+        err = 0;
+      } else if (err >= 0) {
+        size_t sent = static_cast<size_t>(err);
+        while (count > 0 && bufs_ptr->len <= sent) {
+          sent -= bufs_ptr->len;
+          bufs_ptr++;
+          count--;
+        }
+        if (count == 0) {
+          return static_cast<ssize_t>(msg_size + 1);
+        }
+        bufs_ptr->base += sent;
+        bufs_ptr->len -= sent;
+        err = 0;
       }
-      if (count == 0) {
-        return static_cast<ssize_t>(msg_size + 1);
-      }
-      bufs_ptr->base += sent;
-      bufs_ptr->len -= sent;
-      err = 0;
     }
 
     if (err != 0) return err;
@@ -513,7 +537,8 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
 
     if (nread < 0) {
       napi_value ignored = nullptr;
-      EdgeMakeCallback(handle_wrap.env, self, onmessage, 4, argv, &ignored);
+      (void)EdgeAsyncWrapMakeCallback(
+          handle_wrap.env, async_id, self, self, onmessage, 4, argv, &ignored, kEdgeMakeCallbackNone);
       (void)EdgeHandlePendingExceptionNow(handle_wrap.env, nullptr);
       free(buf.base);
       return;
@@ -522,7 +547,7 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
     napi_value rinfo = BuildRinfoObject(handle_wrap.env, addr, nread);
     if (rinfo == nullptr) {
       napi_value error = CreateErrorValue(handle_wrap.env, "Failed to build UDP remote info");
-      CallOnError(handle_wrap.env, self, nread, error);
+      CallOnError(handle_wrap.env, self, async_id, nread, error);
       free(buf.base);
       return;
     }
@@ -533,7 +558,7 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
       char* trimmed = static_cast<char*>(malloc(static_cast<size_t>(nread)));
       if (trimmed == nullptr) {
         napi_value error = CreateErrorValue(handle_wrap.env, "Failed to trim UDP receive buffer");
-        CallOnError(handle_wrap.env, self, nread, error);
+        CallOnError(handle_wrap.env, self, async_id, nread, error);
         free(owned);
         return;
       }
@@ -545,12 +570,13 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
     argv[2] = CreateExternalBuffer(handle_wrap.env, owned, nread > 0 ? static_cast<size_t>(nread) : 0);
     if (argv[2] == nullptr) {
       napi_value error = CreateErrorValue(handle_wrap.env, "Failed to create UDP buffer");
-      CallOnError(handle_wrap.env, self, nread, error);
+      CallOnError(handle_wrap.env, self, async_id, nread, error);
       return;
     }
 
     napi_value ignored = nullptr;
-    EdgeMakeCallback(handle_wrap.env, self, onmessage, 4, argv, &ignored);
+    (void)EdgeAsyncWrapMakeCallback(
+        handle_wrap.env, async_id, self, self, onmessage, 4, argv, &ignored, kEdgeMakeCallbackNone);
     (void)EdgeHandlePendingExceptionNow(handle_wrap.env, nullptr);
   }
 
@@ -570,10 +596,22 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
     req_wrap->msg_size = msg_size;
     req_wrap->have_callback = current_send_has_callback;
     req_wrap->provider_type = kEdgeProviderUdpSendWrap;
-    if (req_wrap->async_id <= 0 || req_wrap->destroy_queued) {
+    if (req_wrap->async_id <= 0) {
       req_wrap->async_id = EdgeAsyncWrapNextId(handle_wrap.env);
-    } else {
-      EdgeAsyncWrapReset(handle_wrap.env, &req_wrap->async_id);
+      EdgeAsyncWrapEmitInit(
+          handle_wrap.env,
+          req_wrap->async_id,
+          req_wrap->provider_type,
+          EdgeAsyncWrapExecutionAsyncId(handle_wrap.env),
+          current_send_req_obj);
+    } else if (req_wrap->destroy_queued) {
+      req_wrap->async_id = EdgeAsyncWrapNextId(handle_wrap.env);
+      EdgeAsyncWrapEmitInit(
+          handle_wrap.env,
+          req_wrap->async_id,
+          req_wrap->provider_type,
+          EdgeAsyncWrapExecutionAsyncId(handle_wrap.env),
+          current_send_req_obj);
     }
     req_wrap->destroy_queued = false;
     req_wrap->active = true;
@@ -582,6 +620,13 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
       ReleaseSendWrapState(req_wrap);
       return nullptr;
     }
+    req_wrap->active_request_token =
+        EdgeRegisterActiveRequest(handle_wrap.env,
+                                  current_send_req_obj,
+                                  "SendWrap",
+                                  req_wrap,
+                                  CancelSendWrapRequest,
+                                  SendWrapGetActiveOwner);
     if (current_send_chunks_obj != nullptr &&
         !CreateStrongRef(handle_wrap.env, current_send_chunks_obj, &req_wrap->chunks_ref)) {
       ReleaseSendWrapState(req_wrap);
@@ -598,7 +643,7 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
           MakeInt32(req_wrap->env, status),
           MakeInt32(req_wrap->env, static_cast<int32_t>(req_wrap->msg_size)),
       };
-      CallOptionalCallback(req_wrap->env, req_obj, "oncomplete", 2, argv);
+      CallOptionalCallback(req_wrap->env, req_obj, "oncomplete", 2, argv, req_wrap->async_id);
     }
     QueueSendWrapDestroyIfNeeded(req_wrap);
     ReleaseSendWrapState(req_wrap);
@@ -736,7 +781,10 @@ napi_value SendWrapCtor(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
   auto* wrap = new SendWrap();
   wrap->env = env;
+  wrap->async_id = EdgeAsyncWrapNextId(env);
   napi_wrap(env, self, wrap, SendWrapFinalize, nullptr, &wrap->wrapper_ref);
+  EdgeAsyncWrapEmitInit(
+      env, wrap->async_id, wrap->provider_type, EdgeAsyncWrapExecutionAsyncId(env), self);
   return self;
 }
 
@@ -750,7 +798,9 @@ napi_value UdpCtor(napi_env env, napi_callback_info info) {
     EdgeHandleWrapHoldWrapperRef(&wrap->handle_wrap);
   }
   wrap->handle_wrap.active_handle_token =
-      EdgeRegisterActiveHandle(env, self, "UDPWRAP", UdpHandleHasRef, UdpGetActiveOwner, wrap);
+      EdgeRegisterActiveHandle(
+          env, self, "UDPWRAP", UdpHandleHasRef, UdpGetActiveOwner, wrap, CloseUdpWrapForCleanup);
+  EdgeAsyncWrapEmitInit(env, wrap->async_id, wrap->provider_type, EdgeAsyncWrapExecutionAsyncId(env), self);
 
   // Match Node's dgram handle aliasing for udp6 sockets.
   const char* mutable_methods[] = {"bind", "bind6", "connect", "connect6", "send", "send6"};
@@ -1064,9 +1114,15 @@ napi_value UdpGetAsyncId(napi_env env, napi_callback_info info) {
 }
 
 napi_value UdpAsyncReset(napi_env env, napi_callback_info info) {
+  napi_value self = nullptr;
   UdpWrap* wrap = nullptr;
   GetThis(env, info, nullptr, nullptr, &wrap);
-  if (wrap != nullptr) EdgeAsyncWrapReset(env, &wrap->async_id);
+  size_t argc = 0;
+  napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
+  if (wrap != nullptr) {
+    EdgeAsyncWrapReset(env, &wrap->async_id);
+    EdgeAsyncWrapEmitInit(env, wrap->async_id, wrap->provider_type, EdgeAsyncWrapExecutionAsyncId(env), self);
+  }
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   return undefined;
@@ -1356,6 +1412,7 @@ napi_value SendWrapAsyncReset(napi_env env, napi_callback_info info) {
   if (wrap != nullptr) {
     EdgeAsyncWrapReset(env, &wrap->async_id);
     wrap->destroy_queued = false;
+    EdgeAsyncWrapEmitInit(env, wrap->async_id, wrap->provider_type, EdgeAsyncWrapExecutionAsyncId(env), self);
   }
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);

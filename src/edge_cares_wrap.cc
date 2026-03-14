@@ -20,6 +20,8 @@
 #include "cares/include/ares_dns.h"
 #include "cares/include/ares_dns_record.h"
 #include "cares/include/ares_nameser.h"
+#include "edge_active_resource.h"
+#include "edge_async_wrap.h"
 #include "edge_environment.h"
 #include "edge_env_loop.h"
 #include "edge_runtime.h"
@@ -63,6 +65,9 @@ enum class QueryKind {
 struct CaresReqWrap {
   napi_env env = nullptr;
   napi_ref req_obj_ref = nullptr;
+  void* active_request_token = nullptr;
+  int64_t async_id = -1;
+  bool destroy_queued = false;
   uv_getaddrinfo_t ga{};
   uv_getnameinfo_t gn{};
   bool used_ga = false;
@@ -76,6 +81,7 @@ struct CaresReqWrap {
   bool ttl = false;
   std::string hostname;
   std::string binding_name;
+  std::string async_wrap_name = "QUERYWRAP";
   QueryKind query_kind = QueryKind::kA;
   ChannelWrap* channel = nullptr;
 };
@@ -149,6 +155,11 @@ CaresEnvState& EnsureCaresState(napi_env env) {
       env, kEdgeEnvironmentSlotCaresChannelSet);
 }
 
+napi_value GetRefValue(napi_env env, napi_ref ref);
+napi_value GetCaresReqOwner(napi_env env, void* data);
+void CancelCaresReq(void* data);
+void EnsureReqAsyncWrap(CaresReqWrap* req, napi_value req_obj);
+
 bool EnvCleanupInProgress(napi_env env) {
   CaresEnvState* state = GetCaresState(env);
   return state != nullptr && state->cleanup_in_progress;
@@ -170,10 +181,62 @@ void UnregisterChannelForEnv(ChannelWrap* channel) {
 void TrackPendingReq(napi_env env, CaresReqWrap* req) {
   if (env == nullptr || req == nullptr) return;
   (void)EnsureCaresState(env);
+  if (req->active_request_token != nullptr) return;
+  napi_value req_obj = GetRefValue(env, req->req_obj_ref);
+  EnsureReqAsyncWrap(req, req_obj);
+  const char* resource_name = "QueryReqWrap";
+  if (req->used_ga) {
+    resource_name = "GetAddrInfoReqWrap";
+  } else if (req->used_gn) {
+    resource_name = "GetNameInfoReqWrap";
+  } else if (!req->binding_name.empty()) {
+    resource_name = req->binding_name.c_str();
+  }
+  req->active_request_token =
+      EdgeRegisterActiveRequest(env, req_obj, resource_name, req, CancelCaresReq, GetCaresReqOwner);
 }
 
 void UntrackPendingReq(CaresReqWrap* req) {
-  (void)req;
+  if (req == nullptr || req->active_request_token == nullptr) return;
+  EdgeUnregisterActiveRequestToken(req->env, req->active_request_token);
+  req->active_request_token = nullptr;
+}
+
+void QueueReqDestroyIfNeeded(CaresReqWrap* req) {
+  if (req == nullptr || req->destroy_queued || req->async_id <= 0) return;
+  EdgeAsyncWrapQueueDestroyId(req->env, req->async_id);
+  req->destroy_queued = true;
+}
+
+void EnsureReqAsyncWrap(CaresReqWrap* req, napi_value req_obj) {
+  if (req == nullptr || req->env == nullptr || req_obj == nullptr) return;
+  if (req->async_id <= 0 || req->destroy_queued) {
+    req->async_id = EdgeAsyncWrapNextId(req->env);
+    EdgeAsyncWrapEmitInitString(
+        req->env, req->async_id, req->async_wrap_name.c_str(), EdgeAsyncWrapExecutionAsyncId(req->env), req_obj);
+  }
+  req->destroy_queued = false;
+}
+
+napi_value GetCaresReqOwner(napi_env env, void* data) {
+  auto* req = static_cast<CaresReqWrap*>(data);
+  return req != nullptr ? GetRefValue(env, req->req_obj_ref) : nullptr;
+}
+
+void CancelCaresReq(void* data) {
+  auto* req = static_cast<CaresReqWrap*>(data);
+  if (req == nullptr) return;
+  if (req->used_ga) {
+    (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->ga));
+    return;
+  }
+  if (req->used_gn) {
+    (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->gn));
+    return;
+  }
+  if (req->used_query && req->channel != nullptr && req->channel->channel != nullptr) {
+    ares_cancel(req->channel->channel);
+  }
 }
 
 void PinReqObject(CaresReqWrap* req) {
@@ -194,6 +257,7 @@ void UnpinReqObject(CaresReqWrap* req) {
 
 void MarkReqComplete(CaresReqWrap* req) {
   if (req == nullptr) return;
+  QueueReqDestroyIfNeeded(req);
   req->in_flight = false;
   req->used_ga = false;
   req->used_gn = false;
@@ -357,7 +421,8 @@ void InvokeOnComplete(napi_env env, CaresReqWrap* req, size_t argc, napi_value* 
   napi_valuetype type = napi_undefined;
   if (napi_typeof(env, oncomplete, &type) != napi_ok || type != napi_function) return;
   napi_value ignored = nullptr;
-  EdgeMakeCallback(env, req_obj, oncomplete, argc, argv, &ignored);
+  (void)EdgeAsyncWrapMakeCallback(
+      env, req->async_id, req_obj, req_obj, oncomplete, argc, argv, &ignored, kEdgeMakeCallbackNone);
 }
 
 void CallOnCompleteError(CaresReqWrap* req, int status) {
@@ -1502,6 +1567,8 @@ void ReqFinalize(napi_env env, void* data, void* /*hint*/) {
   if (req == nullptr) return;
 
   req->finalized = true;
+  UntrackPendingReq(req);
+  QueueReqDestroyIfNeeded(req);
   if (req->pinned_ref && req->req_obj_ref != nullptr) {
     uint32_t ref_count = 0;
     (void)napi_reference_unref(env, req->req_obj_ref, &ref_count);
@@ -1537,11 +1604,18 @@ void ChannelFinalize(napi_env env, void* data, void* /*hint*/) {
 napi_value ReqCtor(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
   size_t argc = 0;
-  napi_get_cb_info(env, info, &argc, nullptr, &self, nullptr);
+  void* data = nullptr;
+  napi_get_cb_info(env, info, &argc, nullptr, &self, &data);
 
   auto* req = new CaresReqWrap();
   req->env = env;
+  if (const char* wrap_name = static_cast<const char*>(data); wrap_name != nullptr) {
+    req->async_wrap_name = wrap_name;
+  }
+  req->async_id = EdgeAsyncWrapNextId(env);
   napi_wrap(env, self, req, ReqFinalize, nullptr, &req->req_obj_ref);
+  EdgeAsyncWrapEmitInitString(
+      env, req->async_id, req->async_wrap_name.c_str(), EdgeAsyncWrapExecutionAsyncId(env), self);
   return self;
 }
 
@@ -2159,16 +2233,37 @@ napi_value EdgeInstallCaresWrapBinding(napi_env env) {
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
 
   napi_value req_ctor = nullptr;
-  if (napi_define_class(env, "QueryReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req_ctor) != napi_ok) {
+  if (napi_define_class(env,
+                        "QueryReqWrap",
+                        NAPI_AUTO_LENGTH,
+                        ReqCtor,
+                        const_cast<char*>("QUERYWRAP"),
+                        0,
+                        nullptr,
+                        &req_ctor) != napi_ok) {
     return nullptr;
   }
   napi_value req2_ctor = nullptr;
-  if (napi_define_class(env, "GetAddrInfoReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req2_ctor) !=
+  if (napi_define_class(env,
+                        "GetAddrInfoReqWrap",
+                        NAPI_AUTO_LENGTH,
+                        ReqCtor,
+                        const_cast<char*>("GETADDRINFOREQWRAP"),
+                        0,
+                        nullptr,
+                        &req2_ctor) !=
       napi_ok) {
     return nullptr;
   }
   napi_value req3_ctor = nullptr;
-  if (napi_define_class(env, "GetNameInfoReqWrap", NAPI_AUTO_LENGTH, ReqCtor, nullptr, 0, nullptr, &req3_ctor) !=
+  if (napi_define_class(env,
+                        "GetNameInfoReqWrap",
+                        NAPI_AUTO_LENGTH,
+                        ReqCtor,
+                        const_cast<char*>("GETNAMEINFOREQWRAP"),
+                        0,
+                        nullptr,
+                        &req3_ctor) !=
       napi_ok) {
     return nullptr;
   }
