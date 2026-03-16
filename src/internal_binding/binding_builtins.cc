@@ -1,4 +1,5 @@
 #include "internal_binding/dispatch.h"
+#include "builtin_catalog.h"
 
 #include <string>
 #include <vector>
@@ -14,18 +15,6 @@ void DefineMethod(napi_env env, napi_value obj, const char* name, napi_callback 
   if (napi_create_function(env, name, NAPI_AUTO_LENGTH, cb, nullptr, &fn) == napi_ok && fn != nullptr) {
     napi_set_named_property(env, obj, name, fn);
   }
-}
-
-bool ValueToUtf8(napi_env env, napi_value value, std::string* out) {
-  if (value == nullptr || out == nullptr) return false;
-  size_t len = 0;
-  if (napi_get_value_string_utf8(env, value, nullptr, 0, &len) != napi_ok) return false;
-  std::string buffer(len + 1, '\0');
-  size_t copied = 0;
-  if (napi_get_value_string_utf8(env, value, buffer.data(), buffer.size(), &copied) != napi_ok) return false;
-  buffer.resize(copied);
-  *out = std::move(buffer);
-  return true;
 }
 
 napi_value CreateSet(napi_env env) {
@@ -44,30 +33,55 @@ napi_value CreateSet(napi_env env) {
   return set_obj;
 }
 
-napi_value CloneArray(napi_env env, napi_value input) {
-  bool is_array = false;
-  if (input == nullptr || napi_is_array(env, input, &is_array) != napi_ok || !is_array) {
-    napi_value empty = nullptr;
-    napi_create_array_with_length(env, 0, &empty);
-    return empty;
+napi_value GetNamedPropertyIfPresent(napi_env env, napi_value object, const char* name) {
+  bool has_property = false;
+  if (object == nullptr || napi_has_named_property(env, object, name, &has_property) != napi_ok || !has_property) {
+    return nullptr;
   }
+  napi_value value = nullptr;
+  if (napi_get_named_property(env, object, name, &value) != napi_ok) return nullptr;
+  return value;
+}
+
+napi_value AppendArrayItemsToSet(napi_env env, napi_value set_obj, napi_value input) {
+  bool is_array = false;
+  if (set_obj == nullptr || input == nullptr || napi_is_array(env, input, &is_array) != napi_ok || !is_array) {
+    return set_obj;
+  }
+  napi_value add_fn = GetNamedPropertyIfPresent(env, set_obj, "add");
+  if (add_fn == nullptr) return set_obj;
+
   uint32_t len = 0;
   napi_get_array_length(env, input, &len);
-  napi_value out = nullptr;
-  if (napi_create_array_with_length(env, len, &out) != napi_ok || out == nullptr) return nullptr;
   for (uint32_t i = 0; i < len; ++i) {
     napi_value item = nullptr;
-    if (napi_get_element(env, input, i, &item) == napi_ok && item != nullptr) {
-      napi_set_element(env, out, i, item);
+    if (napi_get_element(env, input, i, &item) != napi_ok || item == nullptr) continue;
+    napi_value ignored = nullptr;
+    napi_call_function(env, set_obj, add_fn, 1, &item, &ignored);
+  }
+  return set_obj;
+}
+
+napi_value CreateStringArray(napi_env env, const std::vector<std::string>& values) {
+  napi_value out = nullptr;
+  if (napi_create_array_with_length(env, values.size(), &out) != napi_ok || out == nullptr) {
+    return nullptr;
+  }
+  for (size_t i = 0; i < values.size(); ++i) {
+    napi_value value = nullptr;
+    if (napi_create_string_utf8(env, values[i].c_str(), NAPI_AUTO_LENGTH, &value) != napi_ok ||
+        value == nullptr) {
+      return nullptr;
+    }
+    if (napi_set_element(env, out, static_cast<uint32_t>(i), value) != napi_ok) {
+      return nullptr;
     }
   }
   return out;
 }
 
 napi_value BuiltinsGetCacheUsage(napi_env env, napi_callback_info info) {
-  napi_value this_arg = nullptr;
-  size_t argc = 0;
-  napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
+  (void)info;
 
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
@@ -77,12 +91,11 @@ napi_value BuiltinsGetCacheUsage(napi_env env, napi_callback_info info) {
   napi_value without_cache = CreateSet(env);
   if (without_cache != nullptr) napi_set_named_property(env, out, "compiledWithoutCache", without_cache);
 
-  napi_value builtin_ids = nullptr;
-  if (this_arg != nullptr &&
-      napi_get_named_property(env, this_arg, "builtinIds", &builtin_ids) == napi_ok &&
-      builtin_ids != nullptr) {
-    napi_value snapshot = CloneArray(env, builtin_ids);
-    if (snapshot != nullptr) napi_set_named_property(env, out, "compiledInSnapshot", snapshot);
+  const std::vector<std::string>& builtin_ids = builtin_catalog::AllBuiltinIds();
+  napi_value builtin_ids_array = CreateStringArray(env, builtin_ids);
+  if (builtin_ids_array != nullptr) {
+    napi_set_named_property(env, out, "compiledInSnapshot", builtin_ids_array);
+    AppendArrayItemsToSet(env, without_cache, builtin_ids_array);
   } else {
     napi_value empty = nullptr;
     napi_create_array_with_length(env, 0, &empty);
@@ -99,45 +112,20 @@ void EnsureBuiltinCategories(napi_env env, napi_value binding) {
 
   napi_value builtin_ids = nullptr;
   if (napi_get_named_property(env, binding, "builtinIds", &builtin_ids) != napi_ok || builtin_ids == nullptr) return;
-  bool is_array = false;
-  if (napi_is_array(env, builtin_ids, &is_array) != napi_ok || !is_array) return;
-
-  uint32_t len = 0;
-  napi_get_array_length(env, builtin_ids, &len);
-  std::vector<napi_value> can_be_required;
-  std::vector<napi_value> cannot_be_required;
-  can_be_required.reserve(len);
-  cannot_be_required.reserve(len);
-
-  for (uint32_t i = 0; i < len; ++i) {
-    napi_value id_value = nullptr;
-    if (napi_get_element(env, builtin_ids, i, &id_value) != napi_ok || id_value == nullptr) continue;
-    std::string id;
-    if (!ValueToUtf8(env, id_value, &id)) continue;
-    if (id.rfind("internal/", 0) == 0) {
-      cannot_be_required.push_back(id_value);
-    } else {
-      can_be_required.push_back(id_value);
-    }
-  }
 
   napi_value categories = nullptr;
   if (napi_create_object(env, &categories) != napi_ok || categories == nullptr) return;
 
-  napi_value can_array = nullptr;
-  if (napi_create_array_with_length(env, can_be_required.size(), &can_array) == napi_ok && can_array != nullptr) {
-    for (size_t i = 0; i < can_be_required.size(); ++i) {
-      napi_set_element(env, can_array, static_cast<uint32_t>(i), can_be_required[i]);
-    }
+  const builtin_catalog::BuiltinCategories& builtin_categories =
+      builtin_catalog::GetBuiltinCategories();
+
+  napi_value can_array = CreateStringArray(env, builtin_categories.can_be_required);
+  if (can_array != nullptr) {
     napi_set_named_property(env, categories, "canBeRequired", can_array);
   }
 
-  napi_value cannot_array = nullptr;
-  if (napi_create_array_with_length(env, cannot_be_required.size(), &cannot_array) == napi_ok &&
-      cannot_array != nullptr) {
-    for (size_t i = 0; i < cannot_be_required.size(); ++i) {
-      napi_set_element(env, cannot_array, static_cast<uint32_t>(i), cannot_be_required[i]);
-    }
+  napi_value cannot_array = CreateStringArray(env, builtin_categories.cannot_be_required);
+  if (cannot_array != nullptr) {
     napi_set_named_property(env, categories, "cannotBeRequired", cannot_array);
   }
 

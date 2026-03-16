@@ -353,6 +353,7 @@ std::string LoadBuiltinsConfigJson(bool has_intl) {
     // Edge does not yet implement Amaro/type-stripping, so process.config
     // must not advertise it or Node's own tests will take unsupported paths.
     ReplaceJsonBooleanOrNumber(&body, "node_use_amaro", false);
+    ReplaceJsonBooleanOrNumber(&body, "node_use_node_code_cache", false);
     // Edge ships its own ICU-backed encoding support and should advertise that
     // in the serialized config consumed by bootstrap/node.
     ReplaceJsonBooleanOrNumber(&body, "v8_enable_i18n_support", has_intl);
@@ -385,6 +386,7 @@ std::string LoadBuiltinsConfigJson(bool has_intl) {
 #endif
                  +
                  "\"node_use_amaro\":false," +
+                 "\"node_use_node_code_cache\":false," +
                  "\"node_builtin_shareable_builtins\":[" +
                  "\"deps/cjs-module-lexer/lexer.js\"," +
                  "\"deps/cjs-module-lexer/dist/lexer.js\"," +
@@ -901,11 +903,6 @@ std::string ModuleSourceUrlForResolvedPath(const fs::path& resolved_path) {
   return resolved_path.string();
 }
 
-// Directory used for builtins compileFunction lookup.
-static std::string GetBuiltinsDirForBootstrap() {
-  return builtin_catalog::NodeLibRoot().string();
-}
-
 static bool IsPerContextBuiltinId(const std::string& id);
 static napi_value GetStatePrimordials(napi_env env, ModuleLoaderState* state);
 static napi_value GetStatePrivateSymbols(napi_env env, ModuleLoaderState* state);
@@ -963,12 +960,6 @@ static napi_value ReturnFirstArgCallback(napi_env env, napi_callback_info info) 
   return undefined;
 }
 
-static napi_value ReturnTrueCallback(napi_env env, napi_callback_info /*info*/) {
-  napi_value out = nullptr;
-  napi_get_boolean(env, true, &out);
-  return out;
-}
-
 static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -986,16 +977,8 @@ static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_in
     return nullptr;
   }
 
-  fs::path resolved;
-  const std::string builtins_dir = GetBuiltinsDirForBootstrap();
-  if (!ResolveBuiltinPath(id, builtins_dir, &resolved)) {
-    const std::string msg = "No such built-in module: " + id;
-    napi_throw_error(env, nullptr, msg.c_str());
-    return nullptr;
-  }
-
   std::string source;
-  if (!ReadTextFileWithBuiltinCache(resolved, &source)) {
+  if (!builtin_catalog::TryReadBuiltinSource(id, &source)) {
     const std::string msg = "No such built-in module: " + id;
     napi_throw_error(env, nullptr, msg.c_str());
     return nullptr;
@@ -1057,15 +1040,8 @@ static napi_value BuiltinsNativesSourceGetter(napi_env env, napi_callback_info i
   }
 
   const std::string* id = static_cast<const std::string*>(data);
-  fs::path resolved;
-  if (!builtin_catalog::ResolveBuiltinId(*id, &resolved)) {
-    napi_value undefined = nullptr;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-  }
-
   std::string source;
-  if (!ReadTextFileWithBuiltinCache(resolved, &source)) {
+  if (!builtin_catalog::TryReadBuiltinSource(*id, &source)) {
     napi_value undefined = nullptr;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -1462,13 +1438,8 @@ static bool ExecuteBuiltinFromNative(napi_env env, ModuleLoaderState* state, con
   if (out != nullptr) *out = nullptr;
   if (env == nullptr || state == nullptr || id.empty()) return false;
 
-  fs::path resolved;
-  if (!builtin_catalog::ResolveBuiltinId(id, &resolved)) {
-    return ThrowNativeBuiltinExecutionError(env, id, "builtin source was not found");
-  }
-
   std::string source;
-  if (!ReadTextFileWithBuiltinCache(resolved, &source)) {
+  if (!builtin_catalog::TryReadBuiltinSource(id, &source)) {
     return ThrowNativeBuiltinExecutionError(env, id, "builtin source could not be read");
   }
 
@@ -3327,7 +3298,7 @@ static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderSta
   }
 
   napi_value has_cached_builtins_fn = nullptr;
-  if (napi_create_function(env, "hasCachedBuiltins", NAPI_AUTO_LENGTH, ReturnTrueCallback, nullptr,
+  if (napi_create_function(env, "hasCachedBuiltins", NAPI_AUTO_LENGTH, ReturnFalseCallback, nullptr,
                            &has_cached_builtins_fn) != napi_ok ||
       has_cached_builtins_fn == nullptr ||
       napi_set_named_property(env, binding, "hasCachedBuiltins", has_cached_builtins_fn) != napi_ok) {

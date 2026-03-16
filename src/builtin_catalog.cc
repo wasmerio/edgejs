@@ -1,14 +1,15 @@
 #include "builtin_catalog.h"
+
+#include "edge_builtin_catalog_data.h"
 #include "edge_process.h"
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <mutex>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace builtin_catalog {
@@ -17,82 +18,12 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char* kNodePrefix = "node:";
-constexpr const char* kInternalDepsPrefix = "internal/deps/";
-
-const std::vector<std::string> kNodeDepsBuiltinRoots = {
-    "undici",
-    "acorn",
-    "minimatch",
-    "cjs-module-lexer",
-    "amaro",
-    "v8/tools",
-};
-
-std::mutex g_builtin_source_cache_mutex;
-std::unordered_map<std::string, std::string> g_builtin_source_cache;
-
-bool PathExistsRegularFile(const fs::path& path) {
-  std::error_code ec;
-  return fs::exists(path, ec) && fs::is_regular_file(path, ec);
-}
+constexpr std::string_view kNodePrefix = "node:";
+constexpr std::string_view kInternalDepsPrefix = "internal/deps/";
 
 bool PathExistsDirectory(const fs::path& path) {
   std::error_code ec;
   return fs::exists(path, ec) && fs::is_directory(path, ec);
-}
-
-bool ResolveAsFile(const fs::path& candidate, fs::path* out) {
-  if (out == nullptr) return false;
-  if (PathExistsRegularFile(candidate)) {
-    *out = fs::absolute(candidate).lexically_normal();
-    return true;
-  }
-  if (candidate.has_extension()) return false;
-  const fs::path js_candidate = candidate.string() + ".js";
-  if (PathExistsRegularFile(js_candidate)) {
-    *out = fs::absolute(js_candidate).lexically_normal();
-    return true;
-  }
-  const fs::path mjs_candidate = candidate.string() + ".mjs";
-  if (PathExistsRegularFile(mjs_candidate)) {
-    *out = fs::absolute(mjs_candidate).lexically_normal();
-    return true;
-  }
-  return false;
-}
-
-bool IsInsideRoot(const fs::path& path, const fs::path& root) {
-  const fs::path normalized_path = fs::absolute(path).lexically_normal();
-  const fs::path normalized_root = fs::absolute(root).lexically_normal();
-  const fs::path rel = normalized_path.lexically_relative(normalized_root);
-  const std::string rel_text = rel.generic_string();
-  return !rel_text.empty() && rel_text != "." && rel_text.rfind("..", 0) != 0;
-}
-
-std::string StripBuiltinExtension(const fs::path& relative_path) {
-  std::string text = relative_path.generic_string();
-  if (text.size() >= 4 && text.compare(text.size() - 3, 3, ".js") == 0) {
-    text.resize(text.size() - 3);
-    return text;
-  }
-  if (text.size() >= 5 && text.compare(text.size() - 4, 4, ".mjs") == 0) {
-    text.resize(text.size() - 4);
-    return text;
-  }
-  return "";
-}
-
-bool IsAllowedNodeDepsRelativePath(const fs::path& rel) {
-  const std::string rel_text = rel.generic_string();
-  for (const std::string& root : kNodeDepsBuiltinRoots) {
-    if (rel_text == root || rel_text.rfind(root + "/", 0) == 0) return true;
-  }
-  return false;
-}
-
-bool IsBuiltinPath(const fs::path& path) {
-  return IsInsideRoot(path, NodeLibRoot()) || IsInsideRoot(path, NodeDepsRoot());
 }
 
 void AppendPathCandidate(std::vector<fs::path>* out, const fs::path& candidate) {
@@ -101,7 +32,8 @@ void AppendPathCandidate(std::vector<fs::path>* out, const fs::path& candidate) 
 }
 
 std::vector<fs::path> NodeLibRootCandidates() {
-  const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
+  const fs::path source_root =
+      fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
   std::vector<fs::path> candidates;
 
   AppendPathCandidate(&candidates, fs::path("/node-lib"));
@@ -125,7 +57,8 @@ std::vector<fs::path> NodeLibRootCandidates() {
 }
 
 std::vector<fs::path> NodeDepsRootCandidates() {
-  const fs::path source_root = fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
+  const fs::path source_root =
+      fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
   std::vector<fs::path> candidates;
 
   const fs::path exec_path = fs::path(EdgeGetProcessExecPath()).lexically_normal();
@@ -146,43 +79,125 @@ std::vector<fs::path> NodeDepsRootCandidates() {
   return candidates;
 }
 
-void AppendNodeLibIds(const fs::path& node_lib_root, std::vector<std::string>* ids) {
-  if (ids == nullptr || !PathExistsDirectory(node_lib_root)) return;
+std::string NormalizePathKey(const fs::path& path) {
   std::error_code ec;
-  for (fs::recursive_directory_iterator it(node_lib_root, ec), end; it != end && !ec; it.increment(ec)) {
-    if (!it->is_regular_file(ec)) continue;
-    const fs::path path = it->path();
-    if (path.extension() != ".js") continue;
-    const fs::path rel = path.lexically_relative(node_lib_root);
-    const std::string id = StripBuiltinExtension(rel);
-    if (!id.empty()) ids->push_back(id);
-  }
+  return fs::absolute(path, ec).lexically_normal().string();
 }
 
-void AppendNodeDepsIds(const fs::path& node_deps_root, std::vector<std::string>* ids) {
-  if (ids == nullptr || !PathExistsDirectory(node_deps_root)) return;
-  std::error_code ec;
-  for (const std::string& dep_root : kNodeDepsBuiltinRoots) {
-    const fs::path root = node_deps_root / dep_root;
-    if (!PathExistsDirectory(root) && !PathExistsRegularFile(root)) continue;
-    if (PathExistsRegularFile(root)) {
-      if (root.extension() == ".js" || root.extension() == ".mjs") {
-        const fs::path rel = root.lexically_relative(node_deps_root);
-        const std::string dep_id = StripBuiltinExtension(rel);
-        if (!dep_id.empty()) ids->push_back(std::string(kInternalDepsPrefix) + dep_id);
+struct BuiltinIndex {
+  std::vector<std::string> all_ids;
+  std::unordered_map<std::string, const generated::BuiltinEntry*> by_id;
+  std::unordered_map<std::string, const generated::BuiltinEntry*> by_path;
+  BuiltinCategories categories;
+};
+
+BuiltinCategories BuildBuiltinCategories(const std::vector<std::string>& ids) {
+  std::unordered_set<std::string> can_be_required = {
+      "internal/deps/cjs-module-lexer/lexer",
+  };
+  std::unordered_set<std::string> cannot_be_required = {
+      "quic",
+      "sqlite",
+      "sys",
+      "wasi",
+      "internal/quic/quic",
+      "internal/quic/symbols",
+      "internal/quic/stats",
+      "internal/quic/state",
+      "internal/test/binding",
+      "internal/v8_prof_polyfill",
+      "internal/v8_prof_processor",
+      "internal/webstorage",
+  };
+
+  std::vector<std::string_view> internal_prefixes = {
+      "internal/bootstrap/",
+      "internal/per_context/",
+      "internal/deps/",
+      "internal/main/",
+  };
+
+  cannot_be_required.insert("inspector");
+  cannot_be_required.insert("inspector/promises");
+  cannot_be_required.insert("internal/util/inspector");
+  cannot_be_required.insert("internal/inspector/network");
+  cannot_be_required.insert("internal/inspector/network_http");
+  cannot_be_required.insert("internal/inspector/network_http2");
+  cannot_be_required.insert("internal/inspector/network_resources");
+  cannot_be_required.insert("internal/inspector/network_undici");
+  cannot_be_required.insert("internal/inspector_async_hook");
+  cannot_be_required.insert("internal/inspector_network_tracking");
+
+#if !defined(EDGE_BUNDLED_NAPI_V8) || !defined(EDGE_HAS_ICU)
+  cannot_be_required.insert("trace_events");
+#endif
+
+  for (const std::string& id : ids) {
+    for (std::string_view prefix : internal_prefixes) {
+      if (id.starts_with(prefix) && can_be_required.count(id) == 0) {
+        cannot_be_required.insert(id);
       }
-      continue;
-    }
-    for (fs::recursive_directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec)) {
-      if (!it->is_regular_file(ec)) continue;
-      const fs::path path = it->path();
-      if (path.extension() != ".js" && path.extension() != ".mjs") continue;
-      const fs::path rel = path.lexically_relative(node_deps_root);
-      const std::string dep_id = StripBuiltinExtension(rel);
-      if (dep_id.empty()) continue;
-      ids->push_back(std::string(kInternalDepsPrefix) + dep_id);
     }
   }
+
+  BuiltinCategories categories;
+  categories.can_be_required.reserve(ids.size());
+  categories.cannot_be_required.reserve(ids.size());
+  for (const std::string& id : ids) {
+    if (cannot_be_required.count(id) != 0) {
+      categories.cannot_be_required.push_back(id);
+    } else {
+      categories.can_be_required.push_back(id);
+    }
+  }
+
+  std::sort(categories.can_be_required.begin(), categories.can_be_required.end());
+  std::sort(categories.cannot_be_required.begin(), categories.cannot_be_required.end());
+  return categories;
+}
+
+const BuiltinIndex& GetBuiltinIndex() {
+  static const BuiltinIndex index = []() {
+    BuiltinIndex out;
+    out.all_ids.reserve(generated::kBuiltinEntries.size());
+    out.by_id.reserve(generated::kBuiltinEntries.size());
+    out.by_path.reserve(generated::kBuiltinEntries.size());
+
+    for (const generated::BuiltinEntry& entry : generated::kBuiltinEntries) {
+      out.all_ids.emplace_back(entry.id);
+      out.by_id.emplace(out.all_ids.back(), &entry);
+
+      const fs::path root = entry.is_internal_dep ? NodeDepsRoot() : NodeLibRoot();
+      const fs::path full_path = root / fs::path(std::string(entry.relative_path));
+      out.by_path.emplace(NormalizePathKey(full_path), &entry);
+    }
+
+    out.categories = BuildBuiltinCategories(out.all_ids);
+    return out;
+  }();
+  return index;
+}
+
+bool NormalizeBuiltinSpecifier(const std::string& specifier, std::string* out) {
+  if (out == nullptr) return false;
+
+  std::string id = specifier;
+  if (id.starts_with(kNodePrefix)) {
+    id.erase(0, kNodePrefix.size());
+  }
+  if (id.empty() || id.front() == '.') return false;
+
+  const auto& index = GetBuiltinIndex();
+  if (index.by_id.find(id) == index.by_id.end()) return false;
+  *out = std::move(id);
+  return true;
+}
+
+const generated::BuiltinEntry* LookupBuiltinByPath(const fs::path& resolved_path) {
+  const auto& index = GetBuiltinIndex();
+  const auto it = index.by_path.find(NormalizePathKey(resolved_path));
+  if (it == index.by_path.end()) return nullptr;
+  return it->second;
 }
 
 }  // namespace
@@ -213,99 +228,60 @@ const fs::path& NodeDepsRoot() {
 
 bool ResolveBuiltinId(const std::string& specifier, fs::path* out_path) {
   if (out_path == nullptr) return false;
-  std::string id = specifier;
-  if (id.size() > 5 && id.compare(0, 5, kNodePrefix) == 0) {
-    id = id.substr(5);
-  }
-  if (id.empty() || id.rfind(".", 0) == 0) return false;
 
-  fs::path resolved;
-  if (id.rfind(kInternalDepsPrefix, 0) == 0) {
-    const std::string rel = id.substr(std::string(kInternalDepsPrefix).size());
-    if (rel.empty()) return false;
-    const fs::path candidate = NodeDepsRoot() / rel;
-    if (ResolveAsFile(candidate, &resolved)) {
-      const fs::path relative = resolved.lexically_relative(NodeDepsRoot());
-      if (!IsAllowedNodeDepsRelativePath(relative)) return false;
-      *out_path = resolved;
-      return true;
-    }
-    return false;
-  }
+  std::string id;
+  if (!NormalizeBuiltinSpecifier(specifier, &id)) return false;
 
-  const fs::path candidate = NodeLibRoot() / id;
-  if (!ResolveAsFile(candidate, &resolved)) return false;
-  if (resolved.extension() != ".js") return false;
-  *out_path = resolved;
+  const auto& index = GetBuiltinIndex();
+  const auto it = index.by_id.find(id);
+  if (it == index.by_id.end()) return false;
+
+  const generated::BuiltinEntry* entry = it->second;
+  const fs::path root = entry->is_internal_dep ? NodeDepsRoot() : NodeLibRoot();
+  *out_path = fs::absolute(root / fs::path(std::string(entry->relative_path))).lexically_normal();
   return true;
 }
 
 bool TryGetBuiltinIdForPath(const fs::path& resolved_path, std::string* out_id) {
   if (out_id == nullptr) return false;
-  const fs::path normalized = fs::absolute(resolved_path).lexically_normal();
-  if (normalized.extension() != ".js" && normalized.extension() != ".mjs") return false;
 
-  if (IsInsideRoot(normalized, NodeLibRoot())) {
-    const fs::path rel = normalized.lexically_relative(NodeLibRoot());
-    const std::string id = StripBuiltinExtension(rel);
-    if (id.empty()) return false;
-    *out_id = id;
-    return true;
-  }
+  const generated::BuiltinEntry* entry = LookupBuiltinByPath(resolved_path);
+  if (entry == nullptr) return false;
 
-  if (IsInsideRoot(normalized, NodeDepsRoot())) {
-    const fs::path rel = normalized.lexically_relative(NodeDepsRoot());
-    if (!IsAllowedNodeDepsRelativePath(rel)) return false;
-    const std::string dep_id = StripBuiltinExtension(rel);
-    if (dep_id.empty()) return false;
-    *out_id = std::string(kInternalDepsPrefix) + dep_id;
-    return true;
-  }
-
-  return false;
+  *out_id = std::string(entry->id);
+  return true;
 }
 
 bool TryReadBuiltinSource(const fs::path& resolved_path, std::string* out_source) {
   if (out_source == nullptr) return false;
-  const fs::path normalized = fs::absolute(resolved_path).lexically_normal();
-  if (!IsBuiltinPath(normalized)) return false;
 
-  const std::string cache_key = normalized.string();
-  std::lock_guard<std::mutex> lock(g_builtin_source_cache_mutex);
-  auto it = g_builtin_source_cache.find(cache_key);
-  if (it != g_builtin_source_cache.end()) {
-    *out_source = it->second;
-    return true;
-  }
+  const generated::BuiltinEntry* entry = LookupBuiltinByPath(resolved_path);
+  if (entry == nullptr) return false;
 
-  std::ifstream in(normalized, std::ios::binary);
-  if (!in.is_open()) return false;
-
-  std::ostringstream ss;
-  ss << in.rdbuf();
-  auto [inserted_it, inserted] =
-      g_builtin_source_cache.emplace(cache_key, ss.str());
-  (void)inserted;
-  *out_source = inserted_it->second;
+  *out_source = std::string(entry->source);
   return true;
 }
 
 bool TryReadBuiltinSource(const std::string& specifier, std::string* out_source) {
-  fs::path resolved;
-  if (!ResolveBuiltinId(specifier, &resolved)) return false;
-  return TryReadBuiltinSource(resolved, out_source);
+  if (out_source == nullptr) return false;
+
+  std::string id;
+  if (!NormalizeBuiltinSpecifier(specifier, &id)) return false;
+
+  const auto& index = GetBuiltinIndex();
+  const auto it = index.by_id.find(id);
+  if (it == index.by_id.end()) return false;
+
+  *out_source = std::string(it->second->source);
+  return true;
 }
 
 const std::vector<std::string>& AllBuiltinIds() {
-  static const std::vector<std::string> ids = []() {
-    std::vector<std::string> out;
-    AppendNodeLibIds(NodeLibRoot(), &out);
-    AppendNodeDepsIds(NodeDepsRoot(), &out);
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
-    return out;
-  }();
-  return ids;
+  return GetBuiltinIndex().all_ids;
+}
+
+const BuiltinCategories& GetBuiltinCategories() {
+  return GetBuiltinIndex().categories;
 }
 
 }  // namespace builtin_catalog

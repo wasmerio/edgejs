@@ -9,6 +9,7 @@ set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(EDGE_ROOT "${PROJECT_ROOT}")
 set(NAPI_V8_ROOT "${PROJECT_ROOT}/napi/v8")
 set(NAPI_INCLUDE_ROOT "${PROJECT_ROOT}/napi/include")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 include("${PROJECT_ROOT}/napi/v8/cmake/NapiBuildCache.cmake")
 napi_enable_sccache_if_available()
@@ -427,8 +428,6 @@ else()
 
     edge_detect_native_openssl_target_os(EDGE_OPENSSL_TARGET_OS)
     edge_detect_native_openssl_target_arch(EDGE_OPENSSL_TARGET_ARCH)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
       set(_edge_openssl_compiler_family "clang")
     elseif(MSVC)
@@ -861,6 +860,31 @@ add_library(edge_runtime STATIC
   src/crypto/edge_crypto_binding.cc
   src/edge_crypto.cc
 )
+
+file(GLOB_RECURSE EDGE_BUILTIN_LIB_SOURCES CONFIGURE_DEPENDS
+  "${PROJECT_ROOT}/node/lib/*.js"
+)
+file(GLOB_RECURSE EDGE_BUILTIN_DEP_SOURCES CONFIGURE_DEPENDS
+  "${PROJECT_ROOT}/node/deps/*.js"
+  "${PROJECT_ROOT}/node/deps/*.mjs"
+)
+set(EDGE_BUILTIN_CATALOG_HEADER "${CMAKE_CURRENT_BINARY_DIR}/edge_builtin_catalog_data.h")
+add_custom_command(
+  OUTPUT "${EDGE_BUILTIN_CATALOG_HEADER}"
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${PROJECT_ROOT}/scripts/generate_builtin_catalog_header.py"
+    --project-root "${PROJECT_ROOT}"
+    --output "${EDGE_BUILTIN_CATALOG_HEADER}"
+  DEPENDS
+    "${PROJECT_ROOT}/scripts/generate_builtin_catalog_header.py"
+    ${EDGE_BUILTIN_LIB_SOURCES}
+    ${EDGE_BUILTIN_DEP_SOURCES}
+  COMMENT "Generating Edge builtin catalog"
+  VERBATIM
+)
+add_custom_target(edge_builtin_catalog_gen DEPENDS "${EDGE_BUILTIN_CATALOG_HEADER}")
+add_dependencies(edge_runtime edge_builtin_catalog_gen)
 target_include_directories(edge_runtime
   PUBLIC
     "${EDGE_ROOT}/src"
