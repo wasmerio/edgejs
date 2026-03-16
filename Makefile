@@ -1,4 +1,4 @@
-.PHONY: build test test-only check-portability clean-dist dist dist-only
+.PHONY: build test test-only check-portability clean-dist dist dist-only framework-test framework-test-reset
 
 UNAME_S := $(shell uname -s)
 BUILD_NAPI_DIR ?= build-v8-napi
@@ -16,6 +16,8 @@ EDGEENV_BINARY ?= $(BUILD_DIR)/edgeenv
 CMAKE_ARGS ?=
 BUILD_ENV ?= env
 EXTRA_CMAKE_ARGS ?=
+FRAMEWORK_TEST_SCRIPT := $(CURDIR)/scripts/framework-test.js
+FRAMEWORK_TEST_SELECTOR := $(filter js-%,$(MAKECMDGOALS))
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS
@@ -33,6 +35,9 @@ test-napi-only:
 build:
 	$(BUILD_ENV) cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) $(EXTRA_CMAKE_ARGS) $(CMAKE_ARGS)
 	$(BUILD_ENV) cmake --build $(BUILD_DIR) -j$(JOBS)
+
+$(EDGE_BINARY):
+	$(MAKE) build
 
 test: build test-only
 
@@ -111,3 +116,19 @@ dist-only:
 		done; \
 	fi
 	cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md lib
+
+framework-test: $(EDGE_BINARY)
+	@"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" setup $(FRAMEWORK_TEST_SELECTOR)
+
+framework-test-reset:
+	@if [ -x "$(EDGE_BINARY)" ]; then \
+		"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" reset $(FRAMEWORK_TEST_SELECTOR); \
+	elif command -v node >/dev/null 2>&1; then \
+		node "$(FRAMEWORK_TEST_SCRIPT)" reset $(FRAMEWORK_TEST_SELECTOR); \
+	else \
+		echo "error: $(EDGE_BINARY) is missing and no node fallback is available for framework-test-reset" >&2; \
+		exit 1; \
+	fi
+
+js-%:
+	@:
