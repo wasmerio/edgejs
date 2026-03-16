@@ -90,7 +90,7 @@ def render_header(entries: list[dict[str, object]]) -> str:
         "  bool is_internal_dep;",
         "};",
         "",
-        f"inline constexpr std::array<BuiltinEntry, {len(entries)}> kBuiltinEntries = {{",
+        f"inline const std::array<BuiltinEntry, {len(entries)}> kBuiltinEntries = {{",
     ]
 
     for entry in entries:
