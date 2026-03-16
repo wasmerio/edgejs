@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -12,6 +13,13 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <uv.h>
+
+#if !defined(_WIN32)
+#include <pthread.h>
+#include <signal.h>
+#endif
 
 #include "internal/napi_v8_env.h"
 #include "internal/unofficial_napi_bridge.h"
@@ -157,6 +165,316 @@ void ResetRef(napi_env env, napi_ref* ref_ptr) {
   napi_delete_reference(env, *ref_ptr);
   *ref_ptr = nullptr;
 }
+
+void CloseUvLoop(uv_loop_t* loop) {
+  if (loop == nullptr) return;
+  while (uv_loop_close(loop) == UV_EBUSY) {
+    uv_run(loop, UV_RUN_NOWAIT);
+  }
+}
+
+enum class SignalPropagation {
+  kContinuePropagation,
+  kStopPropagation,
+};
+
+class Watchdog {
+ public:
+  Watchdog(v8::Isolate* isolate, uint64_t timeout_ms, bool* timed_out)
+      : isolate_(isolate), timed_out_(timed_out) {
+    int rc = uv_loop_init(&loop_);
+    if (rc != 0) {
+      std::abort();
+    }
+
+    rc = uv_async_init(&loop_, &async_, [](uv_async_t* signal) {
+      Watchdog* watchdog = reinterpret_cast<Watchdog*>(signal->data);
+      uv_stop(&watchdog->loop_);
+    });
+    if (rc != 0) std::abort();
+    async_.data = this;
+
+    rc = uv_timer_init(&loop_, &timer_);
+    if (rc != 0) std::abort();
+    timer_.data = this;
+
+    rc = uv_timer_start(&timer_, &Watchdog::Timer, timeout_ms, 0);
+    if (rc != 0) std::abort();
+
+    rc = uv_thread_create(&thread_, &Watchdog::Run, this);
+    if (rc != 0) std::abort();
+  }
+
+  ~Watchdog() {
+    uv_async_send(&async_);
+    uv_thread_join(&thread_);
+
+    uv_close(reinterpret_cast<uv_handle_t*>(&async_), nullptr);
+    uv_run(&loop_, UV_RUN_DEFAULT);
+    CloseUvLoop(&loop_);
+  }
+
+ private:
+  static void Run(void* arg) {
+    Watchdog* watchdog = static_cast<Watchdog*>(arg);
+    uv_run(&watchdog->loop_, UV_RUN_DEFAULT);
+    uv_close(reinterpret_cast<uv_handle_t*>(&watchdog->timer_), nullptr);
+  }
+
+  static void Timer(uv_timer_t* timer) {
+    Watchdog* watchdog = static_cast<Watchdog*>(timer->data);
+    if (watchdog->timed_out_ != nullptr) {
+      *watchdog->timed_out_ = true;
+    }
+    watchdog->isolate_->TerminateExecution();
+    uv_stop(&watchdog->loop_);
+  }
+
+  v8::Isolate* isolate_ = nullptr;
+  uv_thread_t thread_{};
+  uv_loop_t loop_{};
+  uv_async_t async_{};
+  uv_timer_t timer_{};
+  bool* timed_out_ = nullptr;
+};
+
+class SigintWatchdogBase {
+ public:
+  virtual ~SigintWatchdogBase() = default;
+  virtual SignalPropagation HandleSigint() = 0;
+};
+
+class SigintWatchdogHelper {
+ public:
+  static SigintWatchdogHelper& GetInstance() {
+    static SigintWatchdogHelper instance;
+    return instance;
+  }
+
+  static std::mutex& GetActionMutex() {
+    static std::mutex action_mutex;
+    return action_mutex;
+  }
+
+  void Register(SigintWatchdogBase* watchdog) {
+    std::lock_guard<std::mutex> lock(list_mutex_);
+    watchdogs_.push_back(watchdog);
+  }
+
+  void Unregister(SigintWatchdogBase* watchdog) {
+    std::lock_guard<std::mutex> lock(list_mutex_);
+    auto it = std::find(watchdogs_.begin(), watchdogs_.end(), watchdog);
+    if (it != watchdogs_.end()) {
+      watchdogs_.erase(it);
+    }
+  }
+
+  bool HasPendingSignal() {
+    std::lock_guard<std::mutex> lock(list_mutex_);
+    return has_pending_signal_;
+  }
+
+  int Start() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (start_stop_count_++ > 0) {
+      return 0;
+    }
+
+#if !defined(_WIN32)
+    if (!sem_initialized_) {
+      if (uv_sem_init(&sem_, 0) != 0) {
+        start_stop_count_--;
+        return -1;
+      }
+      sem_initialized_ = true;
+    }
+
+    {
+      std::lock_guard<std::mutex> list_lock(list_mutex_);
+      has_pending_signal_ = false;
+      stopping_ = false;
+    }
+
+    sigset_t sigmask;
+    sigfillset(&sigmask);
+    sigset_t savemask;
+    if (pthread_sigmask(SIG_SETMASK, &sigmask, &savemask) != 0) {
+      start_stop_count_--;
+      return -1;
+    }
+    sigmask = savemask;
+
+    const int rc = pthread_create(&thread_, nullptr, &SigintWatchdogHelper::Run, this);
+    const int restore_rc = pthread_sigmask(SIG_SETMASK, &sigmask, nullptr);
+    if (restore_rc != 0) {
+      start_stop_count_--;
+      return -1;
+    }
+    if (rc != 0) {
+      start_stop_count_--;
+      return rc;
+    }
+    has_running_thread_ = true;
+
+    struct sigaction action;
+    std::memset(&action, 0, sizeof(action));
+    sigfillset(&action.sa_mask);
+    action.sa_sigaction = &SigintWatchdogHelper::HandleSignal;
+    action.sa_flags = SA_SIGINFO;
+    if (sigaction(SIGINT, &action, &previous_sigint_action_) != 0) {
+      uv_sem_post(&sem_);
+      (void)pthread_join(thread_, nullptr);
+      has_running_thread_ = false;
+      start_stop_count_--;
+      return -1;
+    }
+    has_previous_sigint_action_ = true;
+#else
+    has_pending_signal_ = false;
+#endif
+
+    return 0;
+  }
+
+  bool Stop() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (start_stop_count_ <= 0) {
+      has_pending_signal_ = false;
+      return false;
+    }
+
+    bool had_pending_signal;
+    {
+      std::lock_guard<std::mutex> list_lock(list_mutex_);
+      had_pending_signal = has_pending_signal_;
+      if (--start_stop_count_ > 0) {
+        has_pending_signal_ = false;
+        return had_pending_signal;
+      }
+#if !defined(_WIN32)
+      stopping_ = true;
+#endif
+      watchdogs_.clear();
+    }
+
+#if !defined(_WIN32)
+    if (has_running_thread_) {
+      uv_sem_post(&sem_);
+      (void)pthread_join(thread_, nullptr);
+      has_running_thread_ = false;
+    }
+    if (has_previous_sigint_action_) {
+      (void)sigaction(SIGINT, &previous_sigint_action_, nullptr);
+      has_previous_sigint_action_ = false;
+    }
+#endif
+
+    had_pending_signal = has_pending_signal_;
+    has_pending_signal_ = false;
+    return had_pending_signal;
+  }
+
+ private:
+  SigintWatchdogHelper() = default;
+
+  ~SigintWatchdogHelper() {
+#if !defined(_WIN32)
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      start_stop_count_ = 1;
+    }
+    (void)Stop();
+    if (sem_initialized_) {
+      uv_sem_destroy(&sem_);
+    }
+#endif
+  }
+
+  static bool InformWatchdogsAboutSignal() {
+    SigintWatchdogHelper& helper = GetInstance();
+
+    std::lock_guard<std::mutex> list_lock(helper.list_mutex_);
+    bool is_stopping = false;
+#if !defined(_WIN32)
+    is_stopping = helper.stopping_;
+#endif
+
+    if (helper.watchdogs_.empty() && !is_stopping) {
+      helper.has_pending_signal_ = true;
+    }
+
+    for (auto it = helper.watchdogs_.rbegin(); it != helper.watchdogs_.rend(); ++it) {
+      if ((*it)->HandleSigint() == SignalPropagation::kStopPropagation) {
+        break;
+      }
+    }
+
+    return is_stopping;
+  }
+
+#if !defined(_WIN32)
+  static void* Run(void* arg) {
+    SigintWatchdogHelper* helper = static_cast<SigintWatchdogHelper*>(arg);
+    bool stopping = false;
+    do {
+      uv_sem_wait(&helper->sem_);
+      stopping = InformWatchdogsAboutSignal();
+    } while (!stopping);
+    return nullptr;
+  }
+
+  static void HandleSignal(int /*signal*/, siginfo_t* /*info*/, void* /*ucontext*/) {
+    SigintWatchdogHelper& helper = GetInstance();
+    if (helper.sem_initialized_) {
+      uv_sem_post(&helper.sem_);
+    }
+  }
+#endif
+
+  std::mutex mutex_;
+  std::mutex list_mutex_;
+  std::vector<SigintWatchdogBase*> watchdogs_;
+  int start_stop_count_ = 0;
+  bool has_pending_signal_ = false;
+
+#if !defined(_WIN32)
+  bool sem_initialized_ = false;
+  bool has_running_thread_ = false;
+  bool stopping_ = false;
+  bool has_previous_sigint_action_ = false;
+  pthread_t thread_{};
+  uv_sem_t sem_{};
+  struct sigaction previous_sigint_action_{};
+#endif
+};
+
+class SigintWatchdog : public SigintWatchdogBase {
+ public:
+  explicit SigintWatchdog(v8::Isolate* isolate, bool* received_signal)
+      : isolate_(isolate), received_signal_(received_signal) {
+    std::lock_guard<std::mutex> action_lock(SigintWatchdogHelper::GetActionMutex());
+    SigintWatchdogHelper::GetInstance().Register(this);
+    (void)SigintWatchdogHelper::GetInstance().Start();
+  }
+
+  ~SigintWatchdog() override {
+    std::lock_guard<std::mutex> action_lock(SigintWatchdogHelper::GetActionMutex());
+    SigintWatchdogHelper::GetInstance().Unregister(this);
+    (void)SigintWatchdogHelper::GetInstance().Stop();
+  }
+
+  SignalPropagation HandleSigint() override {
+    if (received_signal_ != nullptr) {
+      *received_signal_ = true;
+    }
+    isolate_->TerminateExecution();
+    return SignalPropagation::kStopPropagation;
+  }
+
+ private:
+  v8::Isolate* isolate_ = nullptr;
+  bool* received_signal_ = nullptr;
+};
 
 std::string V8ValueToUtf8(v8::Isolate* isolate, v8::Local<v8::Value> value) {
   if (value.IsEmpty()) return {};
@@ -1230,8 +1548,6 @@ napi_status NAPI_CDECL unofficial_napi_contextify_run_script(
   if (env == nullptr || source == nullptr || filename == nullptr || result_out == nullptr) {
     return napi_invalid_arg;
   }
-  (void)timeout;
-  (void)break_on_sigint;
   (void)break_on_first_line;
 
   v8::Isolate* isolate = env->isolate;
@@ -1272,26 +1588,80 @@ napi_status NAPI_CDECL unofficial_napi_contextify_run_script(
                           false,
                           false,
                           HostDefinedOptions(isolate, host_id_symbol));
-  v8::Local<v8::Script> script;
-  if (!v8::Script::Compile(target_context, code, &origin).ToLocal(&script)) {
+  v8::ScriptCompiler::Source source_obj(code, origin);
+  v8::Local<v8::UnboundScript> unbound_script;
+  if (!v8::ScriptCompiler::CompileUnboundScript(isolate,
+                                                &source_obj,
+                                                v8::ScriptCompiler::kNoCompileOptions,
+                                                v8::ScriptCompiler::NoCacheReason::kNoCacheNoReason)
+           .ToLocal(&unbound_script)) {
     if (try_catch.HasCaught() && !try_catch.HasTerminated()) {
+      if (display_errors && !try_catch.Message().IsEmpty()) {
+        unofficial_napi_internal::AttachSyntaxArrowMessage(
+            isolate, target_context, try_catch.Exception(), try_catch.Message());
+      }
       try_catch.ReThrow();
       return napi_pending_exception;
     }
     return napi_generic_failure;
+  }
+
+  v8::Local<v8::Script> script = unbound_script->BindToCurrentContext();
+  bool timed_out = false;
+  bool received_signal = false;
+  v8::MaybeLocal<v8::Value> maybe_result;
+  {
+    std::unique_ptr<Watchdog> timeout_watchdog;
+    if (timeout != -1) {
+      timeout_watchdog = std::make_unique<Watchdog>(isolate, static_cast<uint64_t>(timeout), &timed_out);
+    }
+
+    std::unique_ptr<SigintWatchdog> sigint_watchdog;
+    if (break_on_sigint) {
+      sigint_watchdog = std::make_unique<SigintWatchdog>(isolate, &received_signal);
+    }
+
+    maybe_result = script->Run(target_context);
+    if (!maybe_result.IsEmpty() && target_queue != nullptr) {
+      target_queue->PerformCheckpoint(isolate);
+    }
+  }
+
+  if (timed_out || received_signal) {
+    isolate->CancelTerminateExecution();
+
+    napi_value error = nullptr;
+    if (timed_out) {
+      CreateCodeError(env,
+                      "ERR_SCRIPT_EXECUTION_TIMEOUT",
+                      "Script execution timed out after " + std::to_string(timeout) + "ms",
+                      &error);
+    } else {
+      CreateCodeError(
+          env, "ERR_SCRIPT_EXECUTION_INTERRUPTED", "Script execution was interrupted by `SIGINT`", &error);
+    }
+
+    if (error != nullptr) {
+      return napi_throw(env, error);
+    }
+    return napi_generic_failure;
+  }
+
+  if (try_catch.HasCaught()) {
+    if (display_errors && !try_catch.HasTerminated() && !try_catch.Message().IsEmpty()) {
+      unofficial_napi_internal::AttachSyntaxArrowMessage(
+          isolate, target_context, try_catch.Exception(), try_catch.Message());
+    }
+    if (!try_catch.HasTerminated()) {
+      try_catch.ReThrow();
+      return napi_pending_exception;
+    }
+    return napi_pending_exception;
   }
 
   v8::Local<v8::Value> result;
-  if (!script->Run(target_context).ToLocal(&result)) {
-    if (try_catch.HasCaught() && !try_catch.HasTerminated()) {
-      try_catch.ReThrow();
-      return napi_pending_exception;
-    }
+  if (!maybe_result.ToLocal(&result)) {
     return napi_generic_failure;
-  }
-
-  if (target_queue != nullptr) {
-    target_queue->PerformCheckpoint(isolate);
   }
 
   *result_out = napi_v8_wrap_value(env, result);
@@ -1444,6 +1814,10 @@ napi_status NAPI_CDECL unofficial_napi_contextify_compile_function(
   v8::Local<v8::Function> fn;
   if (!maybe_fn.ToLocal(&fn)) {
     if (try_catch.HasCaught() && !try_catch.HasTerminated()) {
+      if (!try_catch.Message().IsEmpty()) {
+        unofficial_napi_internal::AttachSyntaxArrowMessage(
+            isolate, parsing_context, try_catch.Exception(), try_catch.Message());
+      }
       try_catch.ReThrow();
       return napi_pending_exception;
     }
@@ -1663,6 +2037,10 @@ napi_status NAPI_CDECL unofficial_napi_contextify_create_cached_data(
   v8::Local<v8::UnboundScript> script;
   if (!maybe_script.ToLocal(&script)) {
     if (try_catch.HasCaught() && !try_catch.HasTerminated()) {
+      if (!try_catch.Message().IsEmpty()) {
+        unofficial_napi_internal::AttachSyntaxArrowMessage(
+            isolate, context, try_catch.Exception(), try_catch.Message());
+      }
       try_catch.ReThrow();
       return napi_pending_exception;
     }
@@ -1676,6 +2054,32 @@ napi_status NAPI_CDECL unofficial_napi_contextify_create_cached_data(
   if (!CreateNodeBufferFromBytes(env, bytes, size, cached_data_buffer_out) || *cached_data_buffer_out == nullptr) {
     return napi_generic_failure;
   }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_contextify_start_sigint_watchdog(
+    napi_env env,
+    bool* result_out) {
+  if (env == nullptr || result_out == nullptr) return napi_invalid_arg;
+  std::lock_guard<std::mutex> action_lock(SigintWatchdogHelper::GetActionMutex());
+  *result_out = SigintWatchdogHelper::GetInstance().Start() == 0;
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_contextify_stop_sigint_watchdog(
+    napi_env env,
+    bool* had_pending_signal_out) {
+  if (env == nullptr || had_pending_signal_out == nullptr) return napi_invalid_arg;
+  std::lock_guard<std::mutex> action_lock(SigintWatchdogHelper::GetActionMutex());
+  *had_pending_signal_out = SigintWatchdogHelper::GetInstance().Stop();
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL unofficial_napi_contextify_watchdog_has_pending_sigint(
+    napi_env env,
+    bool* result_out) {
+  if (env == nullptr || result_out == nullptr) return napi_invalid_arg;
+  *result_out = SigintWatchdogHelper::GetInstance().HasPendingSignal();
   return napi_ok;
 }
 

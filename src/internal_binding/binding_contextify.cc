@@ -57,25 +57,6 @@ napi_value ContextifyMeasureMemoryFallback(napi_env env, napi_callback_info info
   return promise;
 }
 
-napi_value ContextifyStartSigintWatchdogFallback(napi_env env, napi_callback_info info) {
-  (void)info;
-  napi_value out = nullptr;
-  napi_get_boolean(env, true, &out);
-  return out != nullptr ? out : Undefined(env);
-}
-
-napi_value ContextifyStopSigintWatchdogFallback(napi_env env, napi_callback_info info) {
-  (void)info;
-  return Undefined(env);
-}
-
-napi_value ContextifyWatchdogHasPendingSigintFallback(napi_env env, napi_callback_info info) {
-  (void)info;
-  napi_value out = nullptr;
-  napi_get_boolean(env, false, &out);
-  return out != nullptr ? out : Undefined(env);
-}
-
 void EnsureMethod(napi_env env, napi_value binding, const char* name, napi_callback cb) {
   bool has = false;
   if (napi_has_named_property(env, binding, name, &has) != napi_ok || has) return;
@@ -94,9 +75,6 @@ napi_value ResolveContextify(napi_env env, const ResolveOptions& options) {
 
   EnsureMeasureMemoryConstants(env, out);
   EnsureMethod(env, out, "measureMemory", ContextifyMeasureMemoryFallback);
-  EnsureMethod(env, out, "startSigintWatchdog", ContextifyStartSigintWatchdogFallback);
-  EnsureMethod(env, out, "stopSigintWatchdog", ContextifyStopSigintWatchdogFallback);
-  EnsureMethod(env, out, "watchdogHasPendingSigint", ContextifyWatchdogHasPendingSigintFallback);
   return out;
 }
 

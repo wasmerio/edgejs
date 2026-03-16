@@ -344,6 +344,7 @@ bool IsBooleanOptionForNegation(const std::string& option) {
       "--experimental-network-inspection",
       "--experimental-print-required-tla",
       "--experimental-quic",
+      "--experimental-repl-await",
       "--experimental-require-module",
       "--experimental-report",
       "--experimental-strip-types",

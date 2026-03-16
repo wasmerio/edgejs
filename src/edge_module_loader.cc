@@ -1850,6 +1850,7 @@ static bool LooksLikeCliOptionToken(const std::string& token) {
       "--experimental-global-webcrypto",
       "--experimental-import-meta-resolve",
       "--experimental-loader",
+      "--experimental-repl-await",
       "--experimental-report",
       "--experimental-strip-types",
       "--experimental-transform-types",
@@ -1946,6 +1947,7 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
       "--experimental-print-required-tla",
       "--experimental-quic",
       "--no-experimental-quic",
+      "--no-experimental-repl-await",
       "--experimental-report",
       "--experimental-strip-types",
       "--experimental-sqlite",
@@ -2007,6 +2009,7 @@ static napi_value OptionsGetCLIOptionsValuesCallback(napi_env env, napi_callback
       "--async-context-frame",
       "--experimental-detect-module",
       "--experimental-require-module",
+      "--experimental-repl-await",
       "--network-family-autoselection",
       "--warnings",
   };
@@ -2325,6 +2328,7 @@ static napi_value OptionsGetCLIOptionsInfoCallback(napi_env env, napi_callback_i
       "--experimental-global-customevent",
       "--experimental-global-webcrypto",
       "--experimental-report",
+      "--experimental-repl-await",
       "--experimental-strip-types",
       "--no-experimental-strip-types",
       "--experimental-worker",
@@ -3060,6 +3064,36 @@ static napi_value ContextifyScriptCreateCachedDataCallback(napi_env env, napi_ca
       out == nullptr) {
     return nullptr;
   }
+  return out;
+}
+
+static napi_value ContextifyStartSigintWatchdogCallback(napi_env env, napi_callback_info /*info*/) {
+  bool started = false;
+  if (unofficial_napi_contextify_start_sigint_watchdog(env, &started) != napi_ok) {
+    return nullptr;
+  }
+  napi_value out = nullptr;
+  napi_get_boolean(env, started, &out);
+  return out;
+}
+
+static napi_value ContextifyStopSigintWatchdogCallback(napi_env env, napi_callback_info /*info*/) {
+  bool had_pending_signal = false;
+  if (unofficial_napi_contextify_stop_sigint_watchdog(env, &had_pending_signal) != napi_ok) {
+    return nullptr;
+  }
+  napi_value out = nullptr;
+  napi_get_boolean(env, had_pending_signal, &out);
+  return out;
+}
+
+static napi_value ContextifyWatchdogHasPendingSigintCallback(napi_env env, napi_callback_info /*info*/) {
+  bool has_pending_signal = false;
+  if (unofficial_napi_contextify_watchdog_has_pending_sigint(env, &has_pending_signal) != napi_ok) {
+    return nullptr;
+  }
+  napi_value out = nullptr;
+  napi_get_boolean(env, has_pending_signal, &out);
   return out;
 }
 
@@ -3839,10 +3873,43 @@ static napi_value ResolveContextifyBinding(napi_env env) {
                                nullptr,
                                &create_cached_data) == napi_ok &&
           create_cached_data != nullptr) {
-        napi_set_named_property(env, proto, "createCachedData", create_cached_data);
+      napi_set_named_property(env, proto, "createCachedData", create_cached_data);
       }
     }
     napi_set_named_property(env, out, "ContextifyScript", contextify_script_ctor);
+  }
+
+  napi_value start_sigint_watchdog = nullptr;
+  if (napi_create_function(env,
+                           "startSigintWatchdog",
+                           NAPI_AUTO_LENGTH,
+                           ContextifyStartSigintWatchdogCallback,
+                           nullptr,
+                           &start_sigint_watchdog) == napi_ok &&
+      start_sigint_watchdog != nullptr) {
+    napi_set_named_property(env, out, "startSigintWatchdog", start_sigint_watchdog);
+  }
+
+  napi_value stop_sigint_watchdog = nullptr;
+  if (napi_create_function(env,
+                           "stopSigintWatchdog",
+                           NAPI_AUTO_LENGTH,
+                           ContextifyStopSigintWatchdogCallback,
+                           nullptr,
+                           &stop_sigint_watchdog) == napi_ok &&
+      stop_sigint_watchdog != nullptr) {
+    napi_set_named_property(env, out, "stopSigintWatchdog", stop_sigint_watchdog);
+  }
+
+  napi_value watchdog_has_pending_sigint = nullptr;
+  if (napi_create_function(env,
+                           "watchdogHasPendingSigint",
+                           NAPI_AUTO_LENGTH,
+                           ContextifyWatchdogHasPendingSigintCallback,
+                           nullptr,
+                           &watchdog_has_pending_sigint) == napi_ok &&
+      watchdog_has_pending_sigint != nullptr) {
+    napi_set_named_property(env, out, "watchdogHasPendingSigint", watchdog_has_pending_sigint);
   }
 
   napi_value compile_function = nullptr;

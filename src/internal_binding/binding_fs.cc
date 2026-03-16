@@ -199,6 +199,8 @@ bool CaptureRawMethod(napi_env env, FsBindingState* st, napi_value binding, cons
   return true;
 }
 
+napi_value NormalizeThrownUvError(napi_env env, napi_value error);
+
 bool CallRaw(napi_env env,
              const char* method,
              size_t argc,
@@ -221,7 +223,7 @@ bool CallRaw(napi_env env,
   if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
     napi_value err = nullptr;
     napi_get_and_clear_last_exception(env, &err);
-    if (error != nullptr) *error = err;
+    if (error != nullptr) *error = NormalizeThrownUvError(env, err);
   }
   return false;
 }
@@ -232,6 +234,60 @@ bool ErrorCodeEquals(napi_env env, napi_value error, const char* code) {
   if (napi_get_named_property(env, error, "code", &value) != napi_ok || value == nullptr) return false;
   std::string text;
   return ValueToUtf8(env, value, &text) && text == code;
+}
+
+napi_value NormalizeThrownUvError(napi_env env, napi_value error) {
+  if (error == nullptr || IsUndefined(env, error)) return error;
+
+  bool has_errno = false;
+  bool has_code = false;
+  if (napi_has_named_property(env, error, "errno", &has_errno) != napi_ok || !has_errno ||
+      napi_has_named_property(env, error, "code", &has_code) != napi_ok || !has_code) {
+    return error;
+  }
+
+  napi_value errno_value = nullptr;
+  napi_value code_value = nullptr;
+  napi_value syscall_value = nullptr;
+  napi_value path_value = nullptr;
+  napi_value dest_value = nullptr;
+
+  napi_get_named_property(env, error, "errno", &errno_value);
+  napi_get_named_property(env, error, "code", &code_value);
+
+  bool has_syscall = false;
+  bool has_path = false;
+  bool has_dest = false;
+  if (napi_has_named_property(env, error, "syscall", &has_syscall) == napi_ok && has_syscall) {
+    napi_get_named_property(env, error, "syscall", &syscall_value);
+  }
+  if (napi_has_named_property(env, error, "path", &has_path) == napi_ok && has_path) {
+    napi_get_named_property(env, error, "path", &path_value);
+  }
+  if (napi_has_named_property(env, error, "dest", &has_dest) == napi_ok && has_dest) {
+    napi_get_named_property(env, error, "dest", &dest_value);
+  }
+
+  auto delete_named = [&](const char* key) {
+    napi_value name = nullptr;
+    if (napi_create_string_utf8(env, key, NAPI_AUTO_LENGTH, &name) == napi_ok && name != nullptr) {
+      bool ignored = false;
+      napi_delete_property(env, error, name, &ignored);
+    }
+  };
+
+  delete_named("errno");
+  delete_named("code");
+  delete_named("syscall");
+  delete_named("path");
+  delete_named("dest");
+
+  if (errno_value != nullptr) napi_set_named_property(env, error, "errno", errno_value);
+  if (code_value != nullptr) napi_set_named_property(env, error, "code", code_value);
+  if (syscall_value != nullptr) napi_set_named_property(env, error, "syscall", syscall_value);
+  if (path_value != nullptr) napi_set_named_property(env, error, "path", path_value);
+  if (dest_value != nullptr) napi_set_named_property(env, error, "dest", dest_value);
+  return error;
 }
 
 napi_value CreateTypedStatsArray(napi_env env, size_t length, bool as_bigint, napi_value source) {
@@ -1623,12 +1679,6 @@ void SetSyncCtxUvError(napi_env env, napi_value ctx, int errorno, const char* sy
     napi_set_named_property(env, ctx, "errno", errno_value);
   }
 
-  napi_value code_value = nullptr;
-  if (napi_create_string_utf8(env, uv_err_name(errorno), NAPI_AUTO_LENGTH, &code_value) == napi_ok &&
-      code_value != nullptr) {
-    napi_set_named_property(env, ctx, "code", code_value);
-  }
-
   if (syscall != nullptr) {
     napi_value syscall_value = nullptr;
     if (napi_create_string_utf8(env, syscall, NAPI_AUTO_LENGTH, &syscall_value) == napi_ok &&
@@ -1682,7 +1732,18 @@ napi_value CreateUvExceptionValue(napi_env env, int errorno, const char* syscall
   napi_value message_value = nullptr;
   napi_value error = nullptr;
   napi_create_string_utf8(env, full_message.c_str(), NAPI_AUTO_LENGTH, &message_value);
-  napi_create_error(env, nullptr, message_value, &error);
+  napi_value global = nullptr;
+  napi_value error_ctor = nullptr;
+  napi_get_global(env, &global);
+  if (global != nullptr) {
+    napi_get_named_property(env, global, "Error", &error_ctor);
+  }
+  if (error_ctor != nullptr) {
+    napi_new_instance(env, error_ctor, 1, &message_value, &error);
+  }
+  if (error == nullptr) {
+    napi_create_error(env, nullptr, message_value, &error);
+  }
   if (error == nullptr) return Undefined(env);
 
   napi_value errno_value = nullptr;

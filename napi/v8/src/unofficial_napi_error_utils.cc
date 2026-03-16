@@ -272,7 +272,7 @@ std::string BuildSyntaxArrowMessage(v8::Isolate* isolate,
 
   return filename + ":" + std::to_string(line_number) + "\n" +
          source_line + "\n" +
-         underline + "\n";
+         underline + "\n\n";
 }
 
 void AttachSyntaxArrowMessage(v8::Isolate* isolate,

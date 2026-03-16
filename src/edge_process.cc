@@ -811,6 +811,22 @@ void ThrowRangeErrorWithCode(napi_env env, const char* code, const char* message
 bool SetNamedString(napi_env env, napi_value obj, const char* name, const std::string& value);
 bool SetNamedInt32(napi_env env, napi_value obj, const char* name, int32_t value);
 
+bool CreateJsErrorObject(napi_env env, napi_value message_value, napi_value* error_out) {
+  if (error_out == nullptr) return false;
+  *error_out = nullptr;
+  napi_value global = nullptr;
+  napi_value error_ctor = nullptr;
+  if (napi_get_global(env, &global) == napi_ok && global != nullptr &&
+      napi_get_named_property(env, global, "Error", &error_ctor) == napi_ok &&
+      error_ctor != nullptr) {
+    napi_new_instance(env, error_ctor, 1, &message_value, error_out);
+  }
+  if (*error_out == nullptr) {
+    napi_create_error(env, nullptr, message_value, error_out);
+  }
+  return *error_out != nullptr;
+}
+
 void ThrowSystemError(napi_env env, int err, const char* syscall, const std::string& path = std::string()) {
   int uv_err = err;
   if (uv_err > 0) uv_err = uv_translate_sys_error(uv_err);
@@ -837,12 +853,12 @@ void ThrowSystemError(napi_env env, int err, const char* syscall, const std::str
   napi_value error_value = nullptr;
   if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_value) != napi_ok ||
       napi_create_string_utf8(env, message.c_str(), NAPI_AUTO_LENGTH, &message_value) != napi_ok ||
-      napi_create_error(env, code_value, message_value, &error_value) != napi_ok ||
+      !CreateJsErrorObject(env, message_value, &error_value) ||
       error_value == nullptr) {
     return;
   }
-  napi_set_named_property(env, error_value, "code", code_value);
   SetNamedInt32(env, error_value, "errno", uv_err);
+  napi_set_named_property(env, error_value, "code", code_value);
   if (syscall != nullptr && syscall[0] != '\0') {
     SetNamedString(env, error_value, "syscall", syscall);
   }
@@ -873,12 +889,12 @@ void ThrowUvCwdError(napi_env env, int err) {
   napi_value error_value = nullptr;
   if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_value) != napi_ok ||
       napi_create_string_utf8(env, message.c_str(), NAPI_AUTO_LENGTH, &message_value) != napi_ok ||
-      napi_create_error(env, code_value, message_value, &error_value) != napi_ok ||
+      !CreateJsErrorObject(env, message_value, &error_value) ||
       error_value == nullptr) {
     return;
   }
-  napi_set_named_property(env, error_value, "code", code_value);
   SetNamedInt32(env, error_value, "errno", uv_err);
+  napi_set_named_property(env, error_value, "code", code_value);
   SetNamedString(env, error_value, "syscall", "uv_cwd");
   napi_throw(env, error_value);
 }
@@ -3473,12 +3489,12 @@ napi_value ProcessChdirCallback(napi_env env, napi_callback_info info) {
     napi_value error_value = nullptr;
     if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_value) != napi_ok ||
         napi_create_string_utf8(env, msg.c_str(), NAPI_AUTO_LENGTH, &message_value) != napi_ok ||
-        napi_create_error(env, code_value, message_value, &error_value) != napi_ok ||
+        !CreateJsErrorObject(env, message_value, &error_value) ||
         error_value == nullptr) {
       return nullptr;
     }
-    napi_set_named_property(env, error_value, "code", code_value);
     SetNamedInt32(env, error_value, "errno", rc);
+    napi_set_named_property(env, error_value, "code", code_value);
     SetNamedString(env, error_value, "syscall", "chdir");
     SetNamedString(env, error_value, "path", oldcwd);
     SetNamedString(env, error_value, "dest", dest);

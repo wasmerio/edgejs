@@ -467,6 +467,18 @@ NAPI_EXTERN napi_status unofficial_napi_contextify_create_cached_data(
     napi_value host_defined_option_id,
     napi_value* cached_data_buffer_out);
 
+NAPI_EXTERN napi_status unofficial_napi_contextify_start_sigint_watchdog(
+    napi_env env,
+    bool* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_contextify_stop_sigint_watchdog(
+    napi_env env,
+    bool* had_pending_signal_out);
+
+NAPI_EXTERN napi_status unofficial_napi_contextify_watchdog_has_pending_sigint(
+    napi_env env,
+    bool* result_out);
+
 // Unofficial helpers for implementing internalBinding('module_wrap') on embedders.
 // These keep V8 module objects behind an opaque native handle so bindings stay N-API only.
 NAPI_EXTERN napi_status unofficial_napi_module_wrap_create_source_text(
