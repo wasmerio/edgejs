@@ -1,9 +1,6 @@
 #include "edge_timers_host.h"
 
-#include <cstdarg>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 
 #include <uv.h>
 
@@ -56,25 +53,6 @@ bool TimersHostStateIsUnavailable(const TimersHostState* st) {
 constexpr int kImmediateCount = 0;
 constexpr int kImmediateRefCount = 1;
 constexpr int kImmediateHasOutstanding = 2;
-
-bool TimersDebugEnabled() {
-  static int enabled = -1;
-  if (enabled < 0) {
-    const char* env = std::getenv("EDGE_DEBUG_TIMERS");
-    enabled = (env != nullptr && env[0] != '\0' && env[0] != '0') ? 1 : 0;
-  }
-  return enabled == 1;
-}
-
-void DebugLog(const char* fmt, ...) {
-  if (!TimersDebugEnabled()) return;
-  std::fprintf(stderr, "[edge-timers] ");
-  va_list args;
-  va_start(args, fmt);
-  std::vfprintf(stderr, fmt, args);
-  va_end(args);
-  std::fprintf(stderr, "\n");
-}
 
 uv_loop_t* GetLoop(TimersHostState* st) {
   if (st == nullptr || st->env == nullptr) return nullptr;
@@ -276,7 +254,6 @@ void EnsureTimerHandle(TimersHostState* st) {
     st->timer_handle.data = st;
     uv_unref(reinterpret_cast<uv_handle_t*>(&st->timer_handle));
     st->timer_initialized = true;
-    DebugLog("timer handle initialized");
   }
 }
 
@@ -322,7 +299,6 @@ void EnsureCheckHandle(TimersHostState* st) {
   }
   st->check_initialized = true;
   st->check_running = true;
-  DebugLog("check handle initialized and started (unref)");
 }
 
 void EnsureIdleHandle(TimersHostState* st) {
@@ -331,18 +307,13 @@ void EnsureIdleHandle(TimersHostState* st) {
   if (loop == nullptr) return;
   if (uv_idle_init(loop, &st->idle_handle) == 0) {
     st->idle_handle.data = st;
+    uv_unref(reinterpret_cast<uv_handle_t*>(&st->idle_handle));
     st->idle_initialized = true;
-    DebugLog("idle handle initialized");
   }
 }
 
 bool CallImmediateCallback(TimersHostState* st) {
   if (st == nullptr || st->cleanup_started || st->immediate_callback_ref == nullptr) return true;
-  static unsigned long long immediate_calls = 0;
-  immediate_calls++;
-  if (TimersDebugEnabled() && (immediate_calls <= 10 || (immediate_calls % 1000) == 0)) {
-    DebugLog("CallImmediateCallback(#%llu)", immediate_calls);
-  }
 
   napi_value cb = nullptr;
   if (napi_get_reference_value(st->env, st->immediate_callback_ref, &cb) != napi_ok || cb == nullptr) return true;
@@ -351,7 +322,6 @@ bool CallImmediateCallback(TimersHostState* st) {
   napi_value ignored = nullptr;
   const napi_status status = EdgeMakeCallback(st->env, recv, cb, 0, nullptr, &ignored);
   if (status != napi_ok) {
-    DebugLog("CallImmediateCallback JS error (status=%d), stopping loop turn", static_cast<int>(status));
     StopLoopOnJsError(st);
     return false;
   }
@@ -360,7 +330,6 @@ bool CallImmediateCallback(TimersHostState* st) {
 
 double CallTimersCallback(TimersHostState* st, double now) {
   if (st == nullptr || st->cleanup_started || st->timers_callback_ref == nullptr) return 0;
-  DebugLog("CallTimersCallback(now=%.3f)", now);
 
   napi_value cb = nullptr;
   if (napi_get_reference_value(st->env, st->timers_callback_ref, &cb) != napi_ok || cb == nullptr) return 0;
@@ -393,7 +362,6 @@ double CallTimersCallback(TimersHostState* st, double now) {
 
   if (result == nullptr) {
     if (call_status != napi_ok) {
-      DebugLog("CallTimersCallback JS error (status=%d), stopping loop turn", static_cast<int>(call_status));
       StopLoopOnJsError(st);
     }
     return 0;
@@ -401,7 +369,6 @@ double CallTimersCallback(TimersHostState* st, double now) {
 
   double next = 0;
   if (napi_get_value_double(st->env, result, &next) != napi_ok || !std::isfinite(next)) return 0;
-  DebugLog("CallTimersCallback => next=%.3f", next);
   return next;
 }
 
@@ -456,7 +423,6 @@ void ApplyTimerRefState(TimersHostState* st, bool ref) {
   } else {
     uv_unref(reinterpret_cast<uv_handle_t*>(&st->timer_handle));
   }
-  DebugLog("toggleTimerRef(%s)", ref ? "true" : "false");
 }
 
 void ApplyImmediateRefState(TimersHostState* st, bool ref) {
@@ -465,6 +431,11 @@ void ApplyImmediateRefState(TimersHostState* st, bool ref) {
   EnsureIdleHandle(st);
   if (!st->idle_initialized) return;
   const bool should_ref = ref || ImmediateRefCount(st) != 0 || HasRefedNativeImmediateTasks(st);
+  if (should_ref) {
+    uv_ref(reinterpret_cast<uv_handle_t*>(&st->idle_handle));
+  } else {
+    uv_unref(reinterpret_cast<uv_handle_t*>(&st->idle_handle));
+  }
   if (should_ref) {
     if (!st->idle_running && uv_idle_start(&st->idle_handle, [](uv_idle_t* /*handle*/) {}) == 0) {
       st->idle_running = true;
@@ -475,7 +446,6 @@ void ApplyImmediateRefState(TimersHostState* st, bool ref) {
       st->idle_running = false;
     }
   }
-  DebugLog("toggleImmediateRef(%s)", ref ? "true" : "false");
 }
 
 void ScheduleFromNextExpiry(TimersHostState* st, double next_expiry, double now);
@@ -498,7 +468,6 @@ void ScheduleFromNextExpiry(TimersHostState* st, double next_expiry, double now)
   if (next_expiry == 0 || !std::isfinite(next_expiry)) {
     uv_timer_stop(&st->timer_handle);
     ApplyTimerRefState(st, false);
-    DebugLog("scheduleFromNextExpiry(next=%.3f, now=%.3f) => stop", next_expiry, now);
     return;
   }
 
@@ -506,11 +475,6 @@ void ScheduleFromNextExpiry(TimersHostState* st, double next_expiry, double now)
   const double abs_expiry = std::abs(next_expiry);
   const double delta = abs_expiry - now;
   const uint64_t timeout = static_cast<uint64_t>(delta > 1 ? delta : 1);
-  DebugLog("scheduleFromNextExpiry(next=%.3f, now=%.3f, delay=%llu, ref=%s)",
-           next_expiry,
-           now,
-           static_cast<unsigned long long>(timeout),
-           ref ? "true" : "false");
   uv_timer_start(&st->timer_handle, RunTimersCallback, timeout, 0);
   ApplyTimerRefState(st, ref);
 }
@@ -528,9 +492,6 @@ napi_value SetupTimers(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (argc >= 1) SetFunctionRef(env, argv[0], &st->immediate_callback_ref);
   if (argc >= 2) SetFunctionRef(env, argv[1], &st->timers_callback_ref);
-  DebugLog("setupTimers(immediate=%s, timers=%s)",
-           st->immediate_callback_ref ? "set" : "unset",
-           st->timers_callback_ref ? "set" : "unset");
 
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
@@ -554,7 +515,6 @@ napi_value ScheduleTimer(napi_env env, napi_callback_info info) {
     napi_get_value_int64(env, argv[0], &duration);
   }
   if (duration < 1) duration = 1;
-  DebugLog("scheduleTimer(duration=%lld)", static_cast<long long>(duration));
 
   EnsureTimerHandle(st);
   if (st->timer_initialized) {
@@ -675,7 +635,6 @@ napi_value EdgeInstallTimersHostBinding(napi_env env) {
   if (EdgeInitializeTimersHost(env) != napi_ok) return nullptr;
   TimersHostState* st = GetState(env);
   if (st == nullptr) return nullptr;
-  DebugLog("install timers host binding");
 
   napi_value binding = nullptr;
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) {
@@ -734,11 +693,4 @@ void EdgeToggleImmediateRefFromNative(napi_env env, bool ref) {
 void EdgeRunTimersHostEnvCleanup(napi_env env) {
   if (env == nullptr) return;
   OnTimersEnvCleanup(env);
-  uv_loop_t* loop = EdgeGetExistingEnvLoop(env);
-  TimersHostState* st = GetState(env);
-  for (size_t guard = 0; loop != nullptr && st != nullptr && st->pending_handle_closes != 0 && guard < 1024;
-       ++guard) {
-    (void)uv_run(loop, UV_RUN_NOWAIT);
-    st = GetState(env);
-  }
 }

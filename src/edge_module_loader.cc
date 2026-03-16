@@ -230,6 +230,19 @@ std::string ReadTextFile(const fs::path& path) {
   return ss.str();
 }
 
+bool ReadTextFileWithBuiltinCache(const fs::path& path, std::string* out) {
+  if (out == nullptr) return false;
+  if (builtin_catalog::TryReadBuiltinSource(path, out)) {
+    return true;
+  }
+
+  *out = ReadTextFile(path);
+  if (!out->empty()) return true;
+
+  std::ifstream probe(path, std::ios::binary);
+  return probe.is_open();
+}
+
 void ReplaceAll(std::string* text, const std::string& from, const std::string& to) {
   if (text == nullptr || from.empty()) return;
   size_t pos = 0;
@@ -959,11 +972,13 @@ static napi_value ReturnTrueCallback(napi_env env, napi_callback_info /*info*/) 
 static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
-  void* data = nullptr;
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, &data) != napi_ok || argc < 1 || argv[0] == nullptr) {
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1 || argv[0] == nullptr) {
     return nullptr;
   }
-  auto* state = static_cast<ModuleLoaderState*>(data);
+  ModuleLoaderState* state = GetModuleLoaderState(env);
+  if (state == nullptr || state->finalized) {
+    return nullptr;
+  }
 
   const std::string id = ValueToUtf8(env, argv[0]);
   if (id.empty()) {
@@ -979,7 +994,12 @@ static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_in
     return nullptr;
   }
 
-  const std::string source = ReadTextFile(resolved);
+  std::string source;
+  if (!ReadTextFileWithBuiltinCache(resolved, &source)) {
+    const std::string msg = "No such built-in module: " + id;
+    napi_throw_error(env, nullptr, msg.c_str());
+    return nullptr;
+  }
   std::string wrapped;
   const bool is_per_context = IsPerContextBuiltinId(id);
   if (is_per_context) {
@@ -1044,7 +1064,12 @@ static napi_value BuiltinsNativesSourceGetter(napi_env env, napi_callback_info i
     return undefined;
   }
 
-  const std::string source = ReadTextFile(resolved);
+  std::string source;
+  if (!ReadTextFileWithBuiltinCache(resolved, &source)) {
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+  }
   napi_value source_value = nullptr;
   if (napi_create_string_utf8(env, source.c_str(), source.size(), &source_value) != napi_ok ||
       source_value == nullptr) {
@@ -1083,10 +1108,9 @@ static napi_value CreateBuiltinsNativesObject(napi_env env, const std::vector<st
 static napi_value BuiltinsSetInternalLoadersCallback(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
-  void* data = nullptr;
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, &data) != napi_ok) return nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
 
-  auto* state = static_cast<ModuleLoaderState*>(data);
+  ModuleLoaderState* state = GetModuleLoaderState(env);
   if (state != nullptr) {
     auto set_loader_ref = [&](napi_ref* slot, napi_value fn) {
       if (slot == nullptr) return;
@@ -1443,12 +1467,9 @@ static bool ExecuteBuiltinFromNative(napi_env env, ModuleLoaderState* state, con
     return ThrowNativeBuiltinExecutionError(env, id, "builtin source was not found");
   }
 
-  const std::string source = ReadTextFile(resolved);
-  if (source.empty()) {
-    std::ifstream probe(resolved);
-    if (!probe.is_open()) {
-      return ThrowNativeBuiltinExecutionError(env, id, "builtin source could not be read");
-    }
+  std::string source;
+  if (!ReadTextFileWithBuiltinCache(resolved, &source)) {
+    return ThrowNativeBuiltinExecutionError(env, id, "builtin source could not be read");
   }
 
   napi_value params = nullptr;
@@ -4064,8 +4085,7 @@ static napi_value DispatchGetOrCreateTraceEvents(napi_env env) {
 static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
-  void* data = nullptr;
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, &data) != napi_ok || data == nullptr) {
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) {
     return nullptr;
   }
   napi_value undefined = nullptr;
@@ -4073,7 +4093,10 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
   if (argc < 1 || argv[0] == nullptr) {
     return undefined;
   }
-  auto* state = static_cast<ModuleLoaderState*>(data);
+  ModuleLoaderState* state = GetModuleLoaderState(env);
+  if (state == nullptr || state->finalized) {
+    return undefined;
+  }
   const std::string name = ValueToUtf8(env, argv[0]);
   if (!name.empty() && ShouldCacheInternalBinding(name)) {
     napi_value cached = GetCachedInternalBinding(state, env, name.c_str());
@@ -4288,14 +4311,9 @@ bool EvaluateJsModule(napi_env env,
                       napi_value module_obj,
                       napi_value exports_obj,
                       napi_value require_fn) {
-  const std::string source = ReadTextFile(resolved_path);
-  if (source.empty()) {
-    std::ifstream probe(resolved_path);
-    if (probe.is_open()) {
-      // Empty source is valid JavaScript and should load as a no-op module.
-    } else {
-      return ThrowLoaderError(env, ("Failed to read module source: " + resolved_path.string()).c_str());
-    }
+  std::string source;
+  if (!ReadTextFileWithBuiltinCache(resolved_path, &source)) {
+    return ThrowLoaderError(env, ("Failed to read module source: " + resolved_path.string()).c_str());
   }
   const std::string source_url = ModuleSourceUrlForResolvedPath(resolved_path);
 
@@ -4382,12 +4400,9 @@ bool EvaluateJsModule(napi_env env,
 }
 
 bool ParseJsonModule(napi_env env, const fs::path& resolved_path, napi_value module_obj) {
-  const std::string source = ReadTextFile(resolved_path);
-  if (source.empty()) {
-    std::ifstream probe(resolved_path);
-    if (!probe.is_open()) {
-      return ThrowLoaderError(env, "Failed to read JSON module");
-    }
+  std::string source;
+  if (!ReadTextFileWithBuiltinCache(resolved_path, &source)) {
+    return ThrowLoaderError(env, "Failed to read JSON module");
   }
 
   const std::string parse_source = "(function(__text){ return JSON.parse(__text); })";

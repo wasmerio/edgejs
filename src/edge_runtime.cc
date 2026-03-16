@@ -729,6 +729,9 @@ int GetProcessExitCode(napi_env env, bool* has_exit_code) {
   if (napi_get_value_int32(env, exit_code_value, &exit_code) != napi_ok) {
     return 0;
   }
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->set_exit_code(static_cast<int>(exit_code));
+  }
   if (has_exit_code != nullptr) *has_exit_code = true;
   return static_cast<int>(exit_code);
 }
@@ -740,6 +743,9 @@ int GetProcessExitCodeOrZero(napi_env env) {
 }
 
 bool IsProcessExiting(napi_env env) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->exiting();
+  }
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) {
     return false;
@@ -797,6 +803,12 @@ bool SetProcessExitCodeIfNeeded(napi_env env, int exit_code, bool only_if_unset)
           napi_typeof(env, existing, &type) == napi_ok &&
           type != napi_undefined &&
           type != napi_null) {
+        int32_t existing_exit_code = 0;
+        if (napi_get_value_int32(env, existing, &existing_exit_code) == napi_ok) {
+          if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+            environment->set_exit_code(static_cast<int>(existing_exit_code));
+          }
+        }
         return true;
       }
     }
@@ -807,7 +819,13 @@ bool SetProcessExitCodeIfNeeded(napi_env env, int exit_code, bool only_if_unset)
       exit_code_value == nullptr) {
     return false;
   }
-  return napi_set_named_property(env, process_obj, "exitCode", exit_code_value) == napi_ok;
+  if (napi_set_named_property(env, process_obj, "exitCode", exit_code_value) != napi_ok) {
+    return false;
+  }
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->set_exit_code(exit_code);
+  }
+  return true;
 }
 
 bool EmitProcessLifecycleEvent(napi_env env, const char* event_name, int exit_code, bool skip_task_queues = false) {
@@ -824,6 +842,10 @@ bool EmitProcessLifecycleEvent(napi_env env, const char* event_name, int exit_co
     return false;
   }
   if (std::strcmp(event_name, "exit") == 0) {
+    if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+      environment->set_exiting(true);
+      environment->set_exit_code(exit_code);
+    }
     napi_value exiting_value = nullptr;
     if (napi_get_boolean(env, true, &exiting_value) == napi_ok && exiting_value != nullptr) {
       (void)napi_set_named_property(env, process_obj, "_exiting", exiting_value);
@@ -1180,15 +1202,13 @@ int HandleExtractedException(napi_env env,
 }
 
 int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
-  if (ShouldSuppressExceptionsForExit(env)) {
-    PendingExceptionInfo ignored = {};
-    (void)TakePendingExceptionInfo(env, &ignored);
-    (void)unofficial_napi_cancel_terminate_execution(env);
+  PendingExceptionInfo pending = {};
+  if (!TakePendingExceptionInfo(env, &pending) || !pending.has_exception) {
     return -1;
   }
 
-  PendingExceptionInfo pending = {};
-  if (!TakePendingExceptionInfo(env, &pending) || !pending.has_exception) {
+  if (ShouldSuppressExceptionsForExit(env)) {
+    (void)unofficial_napi_cancel_terminate_execution(env);
     return -1;
   }
 
@@ -1681,8 +1701,6 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
       if (uv_loop_alive(loop) != 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
-    } else if (!EdgeWorkerEnvOwnsProcessState(env)) {
-      uv_run(loop, UV_RUN_ONCE);
     } else {
       uv_run(loop, UV_RUN_DEFAULT);
     }
@@ -2414,18 +2432,23 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  auto should_abort_worker_bootstrap = [&]() -> bool {
+    return !EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env);
+  };
   if (EdgeRuntimePlatformInstallHooks(env) != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to attach runtime platform hooks";
     }
     return 1;
   }
+  if (should_abort_worker_bootstrap()) return 1;
   if (EdgeInitializeTimersHost(env) != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to initialize timers host";
     }
     return 1;
   }
+  if (should_abort_worker_bootstrap()) return 1;
   if (source_text == nullptr || source_text[0] == '\0') {
     if (error_out != nullptr) {
       *error_out = "Empty script source";
@@ -2445,6 +2468,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  if (should_abort_worker_bootstrap()) return 1;
 
   status = EdgeInstallModuleLoader(env, entry_script_path);
   if (status != napi_ok) {
@@ -2453,6 +2477,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  if (should_abort_worker_bootstrap()) return 1;
 
   // Create empty primordials container on the native side first (Node-aligned).
   napi_value primordials_container = nullptr;
@@ -2491,7 +2516,11 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  if (should_abort_worker_bootstrap()) return 1;
   auto execute_bootstrapper = [&](const char* id, napi_value* out_result) -> bool {
+    if (should_abort_worker_bootstrap()) {
+      return false;
+    }
     napi_value result = nullptr;
     if (EdgeExecuteBuiltin(env, id, &result)) {
       if (out_result != nullptr) *out_result = result;
@@ -2570,12 +2599,15 @@ int RunScriptWithGlobals(napi_env env,
     define_hidden_global("getLinkedBinding", get_linked_binding);
   }
   if (!execute_bootstrapper("internal/per_context/primordials", nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
   if (!execute_bootstrapper("internal/per_context/domexception", nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
   if (!execute_bootstrapper("internal/per_context/messageport", nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
   if (napi_set_named_property(env, global, "primordials", primordials_container) != napi_ok) {
@@ -2586,6 +2618,7 @@ int RunScriptWithGlobals(napi_env env,
   }
 
   if (!execute_bootstrapper("internal/bootstrap/realm", nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
 
@@ -2690,6 +2723,7 @@ int RunScriptWithGlobals(napi_env env,
       !execute_bootstrapper("internal/bootstrap/web/exposed-window-or-worker", nullptr) ||
       !execute_bootstrapper(thread_switch_module, nullptr) ||
       !execute_bootstrapper(process_state_switch_module, nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
 

@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -33,28 +32,33 @@ namespace internal_binding {
 napi_value EdgeCryptoCreateNativeKeyObjectCloneData(napi_env env, napi_value value);
 napi_value EdgeCryptoCreateKeyObjectFromCloneData(napi_env env, napi_value data);
 
-struct MessagePortWrap;
+struct MessagePort;
 struct BroadcastChannelGroup;
 
-struct QueuedMessage {
+struct Message {
   void* payload_data = nullptr;
   bool is_close = false;
-  MessagePortWrap* close_source_wrap = nullptr;
-  struct TransferredPortEntry {
+  MessagePort* close_source = nullptr;
+  struct TransferredPortData {
     napi_ref source_port_ref = nullptr;
-    EdgeMessagePortDataPtr data;
+    MessagePortDataPtr data;
   };
-  std::vector<TransferredPortEntry> transferred_ports;
+  using TransferredPortEntry = TransferredPortData;
+  std::vector<TransferredPortData> transferred_ports;
+
+  bool IsCloseMessage() const { return is_close; }
 };
 
-struct EdgeMessagePortData {
+using QueuedMessage = Message;
+
+struct MessagePortData {
   std::mutex mutex;
-  std::weak_ptr<EdgeMessagePortData> sibling;
+  std::weak_ptr<MessagePortData> sibling;
   std::shared_ptr<BroadcastChannelGroup> broadcast_group;
   std::deque<QueuedMessage> queued_messages;
   bool close_message_enqueued = false;
   bool closed = false;
-  MessagePortWrap* attached_wrap = nullptr;
+  MessagePort* attached_port = nullptr;
 };
 
 struct BroadcastChannelGroup {
@@ -62,32 +66,21 @@ struct BroadcastChannelGroup {
 
   std::mutex mutex;
   std::string name;
-  std::vector<std::weak_ptr<EdgeMessagePortData>> members;
+  std::vector<std::weak_ptr<MessagePortData>> members;
 };
 
-struct MessagePortWrap {
+struct MessagePort {
   EdgeHandleWrap handle_wrap{};
-  EdgeMessagePortDataPtr data;
+  MessagePortDataPtr data;
   uv_async_t async{};
   int64_t async_id = 0;
   bool closing_has_ref = false;
   bool receiving_messages = false;
 };
 
+using MessagePortWrap = MessagePort;
+
 namespace {
-
-bool DebugMessagingEnabled() {
-  static const bool enabled = []() {
-    const char* value = std::getenv("EDGE_DEBUG_MESSAGING");
-    return value != nullptr && value[0] != '\0' && value[0] != '0';
-  }();
-  return enabled;
-}
-
-void DebugMessagingLog(const std::string& message) {
-  if (!DebugMessagingEnabled()) return;
-  std::cerr << "[edge-messaging] " << message << std::endl;
-}
 
 void DeleteRefIfPresent(napi_env env, napi_ref* ref);
 
@@ -138,7 +131,6 @@ MessagePortWrap* UnwrapMessagePort(napi_env env, napi_value value);
 MessagePortWrap* UnwrapMessagePortThisOrThrow(napi_env env, napi_value value);
 napi_value MoveMessagePortPostMessageBridgeCallback(napi_env env, napi_callback_info info);
 napi_value GetTransferListValue(napi_env env, napi_value value);
-bool ApplyArrayBufferTransfers(napi_env env, napi_value options);
 napi_value TryRequireModule(napi_env env, const char* module_name);
 napi_value CreateInternalMessagePortInstance(napi_env env);
 napi_value MoveMessagePortToContextCallback(napi_env env, napi_callback_info info);
@@ -334,9 +326,6 @@ void ThrowTypeErrorWithCode(napi_env env, const char* code, const char* message)
 }
 
 napi_value CreateDataCloneError(napi_env env, const char* message) {
-  if (DebugMessagingEnabled()) {
-    DebugMessagingLog(std::string("CreateDataCloneError: ") + (message != nullptr ? message : "<null>"));
-  }
   napi_value dom_exception = ResolveDOMExceptionValue(env);
   if (IsFunction(env, dom_exception)) {
     napi_value argv[2] = {nullptr, nullptr};
@@ -357,11 +346,23 @@ napi_value CreateDataCloneError(napi_env env, const char* message) {
 
   napi_value code = nullptr;
   napi_create_int32(env, 25, &code);
-  if (code != nullptr) napi_set_named_property(env, err, "code", code);
+  if (code != nullptr) {
+    napi_property_descriptor code_desc = {};
+    code_desc.utf8name = "code";
+    code_desc.value = code;
+    code_desc.attributes = static_cast<napi_property_attributes>(napi_writable | napi_configurable);
+    (void)napi_define_properties(env, err, 1, &code_desc);
+  }
 
   napi_value name = nullptr;
   napi_create_string_utf8(env, "DataCloneError", NAPI_AUTO_LENGTH, &name);
-  if (name != nullptr) napi_set_named_property(env, err, "name", name);
+  if (name != nullptr) {
+    napi_property_descriptor name_desc = {};
+    name_desc.utf8name = "name";
+    name_desc.value = name;
+    name_desc.attributes = static_cast<napi_property_attributes>(napi_writable | napi_configurable);
+    (void)napi_define_properties(env, err, 1, &name_desc);
+  }
   return err;
 }
 
@@ -522,47 +523,62 @@ std::string DescribeCloneFailureValue(napi_env env, napi_value value) {
   return rendered + " could not be cloned.";
 }
 
-std::string TryGetStructuredCloneErrorMessage(napi_env env, napi_value value) {
-  if (env == nullptr || value == nullptr) return {};
+napi_value CreateArrayBufferTransferList(napi_env env, napi_value value) {
+  napi_value transfer_list = GetTransferListValue(env, value);
+  if (transfer_list == nullptr) return nullptr;
 
-  napi_value global = GetGlobal(env);
-  napi_value structured_clone = GetNamed(env, global, "structuredClone");
-  if (!IsFunction(env, structured_clone)) return {};
-
-  napi_value cloned = nullptr;
-  napi_value argv[1] = {value};
-  if (napi_call_function(env, global, structured_clone, 1, argv, &cloned) == napi_ok) {
-    return {};
-  }
-
-  bool has_pending = false;
-  if (napi_is_exception_pending(env, &has_pending) != napi_ok || !has_pending) {
-    return {};
-  }
-
-  napi_value err = nullptr;
-  if (napi_get_and_clear_last_exception(env, &err) != napi_ok || err == nullptr) {
-    return {};
-  }
-
-  napi_value message = GetNamed(env, err, "message");
-  return message != nullptr ? ValueToUtf8(env, message) : std::string();
-}
-
-napi_value CallStructuredClone(napi_env env, napi_value value) {
-  if (env == nullptr || value == nullptr) return nullptr;
-
-  napi_value global = GetGlobal(env);
-  napi_value structured_clone = GetNamed(env, global, "structuredClone");
-  if (!IsFunction(env, structured_clone)) return nullptr;
-
-  napi_value cloned = nullptr;
-  napi_value argv[1] = {value};
-  if (napi_call_function(env, global, structured_clone, 1, argv, &cloned) != napi_ok || cloned == nullptr) {
+  bool is_array = false;
+  if (napi_is_array(env, transfer_list, &is_array) != napi_ok || !is_array) {
     return nullptr;
   }
 
-  return cloned;
+  uint32_t length = 0;
+  if (napi_get_array_length(env, transfer_list, &length) != napi_ok || length == 0) {
+    return nullptr;
+  }
+
+  napi_value filtered = nullptr;
+  if (napi_create_array(env, &filtered) != napi_ok || filtered == nullptr) {
+    return nullptr;
+  }
+
+  uint32_t filtered_length = 0;
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_value item = nullptr;
+    if (napi_get_element(env, transfer_list, i, &item) != napi_ok || item == nullptr) {
+      continue;
+    }
+    bool is_arraybuffer = false;
+    if (napi_is_arraybuffer(env, item, &is_arraybuffer) != napi_ok || !is_arraybuffer) {
+      continue;
+    }
+    if (napi_set_element(env, filtered, filtered_length++, item) != napi_ok) {
+      return nullptr;
+    }
+  }
+
+  if (filtered_length == 0) return nullptr;
+  return filtered;
+}
+
+napi_value ReadPendingCloneErrorMessage(napi_env env, napi_value fallback_value) {
+  napi_value pending = TakePendingException(env);
+  std::string message = DescribeCloneFailureValue(env, fallback_value);
+  if (message.empty() && pending != nullptr) {
+    napi_value pending_message = GetNamed(env, pending, "message");
+    if (pending_message != nullptr) {
+      message = ValueToUtf8(env, pending_message);
+    }
+  }
+  if (message.empty()) {
+    message = "The object could not be cloned.";
+  }
+
+  napi_value err = CreateDataCloneError(env, message.c_str());
+  if (err != nullptr) {
+    napi_throw(env, err);
+  }
+  return nullptr;
 }
 
 bool ThrowDirectCloneFailureIfDetected(napi_env env, napi_value value) {
@@ -1426,10 +1442,8 @@ bool CreateTransferredJSTransferableMarkerForQueue(
           env, value, &transfer_data, &deserialize_info, &nested_transfer_list) ||
       transfer_data == nullptr ||
       deserialize_info == nullptr) {
-    DebugMessagingLog("PrepareJSTransferableTransferData failed");
     return false;
   }
-  DebugMessagingLog("Prepared nested transferable marker");
 
   std::vector<QueuedMessage::TransferredPortEntry> nested_ports;
   if (!CollectTransferredPorts(env, nested_transfer_list, &nested_ports)) {
@@ -1441,21 +1455,18 @@ bool CreateTransferredJSTransferableMarkerForQueue(
   napi_value transformed_data =
       TransformTransferredPortsForQueue(env, transfer_data, nested_ports, &nested_seen_pairs);
   if (transformed_data == nullptr) {
-    DebugMessagingLog("TransformTransferredPortsForQueue failed for nested transferable");
     DeleteTransferredPortRefs(env, &nested_ports);
     return false;
   }
 
   napi_value prepared_data = PrepareTransferableDataForStructuredClone(env, transformed_data, true);
   if (prepared_data == nullptr) {
-    DebugMessagingLog("PrepareTransferableDataForStructuredClone failed for nested transferable");
     DeleteTransferredPortRefs(env, &nested_ports);
     return false;
   }
 
   napi_value marker = nullptr;
   if (napi_create_object(env, &marker) != napi_ok || marker == nullptr) {
-    DebugMessagingLog("Failed to create nested transferable marker object");
     DeleteTransferredPortRefs(env, &nested_ports);
     return false;
   }
@@ -1465,24 +1476,20 @@ bool CreateTransferredJSTransferableMarkerForQueue(
       napi_set_named_property(env, marker, "__ubiJSTransferableCloneMarker", true_value) != napi_ok ||
       napi_set_named_property(env, marker, "data", prepared_data) != napi_ok ||
       napi_set_named_property(env, marker, "deserializeInfo", deserialize_info) != napi_ok) {
-    DebugMessagingLog("Failed to populate nested transferable marker object");
     DeleteTransferredPortRefs(env, &nested_ports);
     return false;
   }
 
   if (!AppendTransferredPortsForQueue(env, transferred_ports_out, &nested_ports)) {
-    DebugMessagingLog("Failed to append nested transferred ports");
     DeleteTransferredPortRefs(env, &nested_ports);
     return false;
   }
 
   napi_value cloned_marker = nullptr;
   if (unofficial_napi_structured_clone(env, marker, &cloned_marker) != napi_ok || cloned_marker == nullptr) {
-    DebugMessagingLog("Failed to structured-clone nested transferable marker");
     return false;
   }
 
-  DebugMessagingLog("Created nested transferable marker successfully");
   if (marker_out != nullptr) *marker_out = cloned_marker;
   return true;
 }
@@ -1495,13 +1502,10 @@ napi_value TransformTransferredValuesForQueue(
     std::vector<ValueTransformPair>* seen_pairs) {
   if (transfer_list != nullptr &&
       IsTransferableValue(env, value)) {
-    DebugMessagingLog("TransformTransferredValuesForQueue: found transferable value");
     napi_value marker = nullptr;
     if (CreateTransferredJSTransferableMarkerForQueue(env, value, &marker, transferred_ports) && marker != nullptr) {
-      DebugMessagingLog("TransformTransferredValuesForQueue: replaced transferable value with marker");
       return marker;
     }
-    DebugMessagingLog("TransformTransferredValuesForQueue: failed to replace transferable value");
     return nullptr;
   }
 
@@ -2476,34 +2480,9 @@ void TriggerPortAsync(const EdgeMessagePortDataPtr& data) {
   MessagePortWrap* wrap = nullptr;
   {
     std::lock_guard<std::mutex> lock(data->mutex);
-    wrap = data->attached_wrap;
+    wrap = data->attached_port;
   }
   TriggerPortAsync(wrap);
-}
-
-napi_value CreateStructuredCloneOptions(napi_env env, napi_value value) {
-  if (value == nullptr || IsUndefinedValue(env, value) || IsNullOrUndefinedValue(env, value)) return nullptr;
-  bool is_array = false;
-  if (napi_is_array(env, value, &is_array) == napi_ok && is_array) {
-    napi_value options = nullptr;
-    if (napi_create_object(env, &options) != napi_ok || options == nullptr) return nullptr;
-    napi_set_named_property(env, options, "transfer", value);
-    return options;
-  }
-
-  napi_valuetype type = napi_undefined;
-  if (napi_typeof(env, value, &type) == napi_ok && type == napi_object) {
-    bool has_transfer = false;
-    if (napi_has_named_property(env, value, "transfer", &has_transfer) == napi_ok && has_transfer) {
-      return value;
-    }
-    return nullptr;
-  }
-
-  napi_value options = nullptr;
-  if (napi_create_object(env, &options) != napi_ok || options == nullptr) return nullptr;
-  napi_set_named_property(env, options, "transfer", value);
-  return options;
 }
 
 napi_value GetTransferListValue(napi_env env, napi_value value) {
@@ -2643,7 +2622,6 @@ bool NormalizePostMessageTransferArg(napi_env env,
 }
 
 napi_value CloneMessageValue(napi_env env, napi_value value, napi_value transfer_arg) {
-  (void)transfer_arg;
   napi_value clone_input = value;
   if (IsProcessEnvValue(env, clone_input)) {
     clone_input = CloneObjectPropertiesForStructuredClone(env, clone_input, false);
@@ -2652,36 +2630,19 @@ napi_value CloneMessageValue(napi_env env, napi_value value, napi_value transfer
   clone_input = PrepareTransferableDataForStructuredClone(env, clone_input, false);
   if (clone_input == nullptr) return nullptr;
 
-  napi_value cloned = StructuredCloneJSTransferableValue(env, clone_input);
-  napi_status clone_status = napi_generic_failure;
-  if (cloned != nullptr) {
-    clone_status = napi_ok;
-  } else {
-    cloned = CallStructuredClone(env, clone_input);
-    clone_status = cloned != nullptr ? napi_ok : napi_generic_failure;
-  }
-  if (clone_status != napi_ok || cloned == nullptr) {
-    bool had_pending = false;
-    if (napi_is_exception_pending(env, &had_pending) == napi_ok && had_pending) {
-      ClearPendingException(env);
-    }
-    clone_status = unofficial_napi_structured_clone(env, clone_input, &cloned);
-  }
+  napi_value arraybuffer_transfer_list = CreateArrayBufferTransferList(env, transfer_arg);
+  napi_value cloned = nullptr;
+  const napi_status clone_status =
+      arraybuffer_transfer_list != nullptr
+          ? unofficial_napi_structured_clone_with_transfer(
+                env, clone_input, arraybuffer_transfer_list, &cloned)
+          : unofficial_napi_structured_clone(env, clone_input, &cloned);
   if (clone_status != napi_ok || cloned == nullptr) {
     bool has_pending = false;
     if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
-      const std::string message = DescribeCloneFailureValue(env, clone_input);
-      if (!message.empty()) {
-        ClearPendingException(env);
-        napi_value err = CreateDataCloneError(env, message.c_str());
-        if (err != nullptr) napi_throw(env, err);
-      }
-      return nullptr;
+      return ReadPendingCloneErrorMessage(env, clone_input);
     }
     std::string message = DescribeCloneFailureValue(env, clone_input);
-    if (message.empty() && transfer_arg == nullptr) {
-      message = TryGetStructuredCloneErrorMessage(env, clone_input);
-    }
     napi_value err = CreateDataCloneError(
         env, message.empty() ? "The object could not be cloned." : message.c_str());
     if (err != nullptr) napi_throw(env, err);
@@ -2711,6 +2672,17 @@ void ThrowClosedMessagePortError(napi_env env) {
 }
 
 void OnMessagePortClosed(uv_handle_t* handle);
+
+bool SerializeMessageValueForQueue(napi_env env, napi_value payload, void** payload_out) {
+  if (payload_out == nullptr) return false;
+  *payload_out = nullptr;
+  if (payload == nullptr) return true;
+
+  napi_value queue_payload = PrepareTransferableDataForStructuredClone(env, payload, false);
+  if (queue_payload == nullptr) return false;
+  return unofficial_napi_serialize_value(env, queue_payload, payload_out) == napi_ok &&
+         *payload_out != nullptr;
+}
 
 bool IsCloneByReferenceValue(napi_env env, napi_value value) {
   if (value == nullptr || IsNullOrUndefinedValue(env, value)) return true;
@@ -3064,8 +3036,8 @@ bool DetachTransferredPort(napi_env env, MessagePortWrap* wrap) {
   RemoveFromBroadcastChannelGroup(wrap->data);
   {
     std::lock_guard<std::mutex> lock(wrap->data->mutex);
-    if (wrap->data->attached_wrap == wrap) {
-      wrap->data->attached_wrap = nullptr;
+    if (wrap->data->attached_port == wrap) {
+      wrap->data->attached_port = nullptr;
     }
   }
   wrap->closing_has_ref =
@@ -3244,8 +3216,11 @@ napi_value RestoreTransferredPortsInValue(napi_env env,
 napi_value BuildTransferredPortsArray(napi_env env,
                                       const QueuedMessage& message,
                                       ReceivedTransferredPortState* state) {
+  if (message.transferred_ports.empty()) return nullptr;
+
   napi_value out = nullptr;
-  if (napi_create_array_with_length(env, message.transferred_ports.size(), &out) != napi_ok || out == nullptr) {
+  if (napi_create_array_with_length(env, message.transferred_ports.size(), &out) != napi_ok ||
+      out == nullptr) {
     return nullptr;
   }
   for (uint32_t i = 0; i < message.transferred_ports.size(); ++i) {
@@ -3255,30 +3230,13 @@ napi_value BuildTransferredPortsArray(napi_env env,
   return out;
 }
 
-void EnqueueMessageToPort(napi_env env,
+void EnqueueQueuedMessage(napi_env env,
                           const EdgeMessagePortDataPtr& target,
-                          napi_value payload,
-                          bool is_close,
-                          MessagePortWrap* close_source_wrap = nullptr,
-                          std::vector<QueuedMessage::TransferredPortEntry> transferred_ports = {}) {
+                          QueuedMessage queued) {
   if (!target) return;
-  QueuedMessage queued;
-  queued.is_close = is_close;
-  queued.close_source_wrap = close_source_wrap;
-  queued.transferred_ports = std::move(transferred_ports);
-  if (!is_close && payload != nullptr) {
-    if (unofficial_napi_serialize_value(env, payload, &queued.payload_data) != napi_ok ||
-        queued.payload_data == nullptr) {
-      ClearPendingException(env);
-      for (auto& entry : queued.transferred_ports) {
-        DeleteRefIfPresent(env, &entry.source_port_ref);
-      }
-      return;
-    }
-  }
   {
     std::lock_guard<std::mutex> lock(target->mutex);
-    if (is_close) {
+    if (queued.is_close) {
       if (target->closed || target->close_message_enqueued) {
         if (queued.payload_data != nullptr) {
           unofficial_napi_release_serialized_value(queued.payload_data);
@@ -3298,9 +3256,56 @@ void EnqueueMessageToPort(napi_env env,
       }
       return;
     }
-    target->queued_messages.push_back(queued);
+    target->queued_messages.push_back(std::move(queued));
   }
   TriggerPortAsync(target);
+}
+
+void EnqueueMessageToPort(napi_env env,
+                          const EdgeMessagePortDataPtr& target,
+                          napi_value payload,
+                          bool is_close,
+                          MessagePortWrap* close_source_wrap = nullptr,
+                          std::vector<QueuedMessage::TransferredPortEntry> transferred_ports = {}) {
+  if (!target) return;
+  QueuedMessage queued;
+  queued.is_close = is_close;
+  queued.close_source = close_source_wrap;
+  queued.transferred_ports = std::move(transferred_ports);
+  if (!is_close && payload != nullptr) {
+    if (!SerializeMessageValueForQueue(env, payload, &queued.payload_data)) {
+      ClearPendingException(env);
+      for (auto& entry : queued.transferred_ports) {
+        DeleteRefIfPresent(env, &entry.source_port_ref);
+      }
+      return;
+    }
+  }
+  EnqueueQueuedMessage(env, target, std::move(queued));
+}
+
+void EnqueueSerializedMessageToPort(
+    napi_env env,
+    const EdgeMessagePortDataPtr& target,
+    void* payload_data,
+    bool is_close,
+    MessagePortWrap* close_source_wrap = nullptr,
+    std::vector<QueuedMessage::TransferredPortEntry> transferred_ports = {}) {
+  if (!target) {
+    if (payload_data != nullptr) {
+      unofficial_napi_release_serialized_value(payload_data);
+    }
+    for (auto& entry : transferred_ports) {
+      DeleteRefIfPresent(env, &entry.source_port_ref);
+    }
+    return;
+  }
+  QueuedMessage queued;
+  queued.payload_data = payload_data;
+  queued.is_close = is_close;
+  queued.close_source = close_source_wrap;
+  queued.transferred_ports = std::move(transferred_ports);
+  EnqueueQueuedMessage(env, target, std::move(queued));
 }
 
 void BeginClosePort(napi_env env, MessagePortWrap* wrap, bool notify_peer);
@@ -3357,15 +3362,21 @@ void ProcessQueuedMessages(MessagePortWrap* wrap, bool force, size_t processing_
       next.payload_data = nullptr;
     }
     if (self != nullptr && message_error == nullptr) {
-      ReceivedTransferredPortState received_ports;
-      std::vector<ValueTransformPair> seen_pairs;
-      payload = RestoreTransferredPortsInValue(
-          wrap->handle_wrap.env,
-          payload != nullptr ? payload : Undefined(wrap->handle_wrap.env),
-          next,
-          &received_ports,
-          &seen_pairs);
-      message_error = TakePendingException(wrap->handle_wrap.env);
+      napi_value ports = nullptr;
+      if (!next.transferred_ports.empty()) {
+        ReceivedTransferredPortState received_ports;
+        std::vector<ValueTransformPair> seen_pairs;
+        payload = RestoreTransferredPortsInValue(
+            wrap->handle_wrap.env,
+            payload != nullptr ? payload : Undefined(wrap->handle_wrap.env),
+            next,
+            &received_ports,
+            &seen_pairs);
+        message_error = TakePendingException(wrap->handle_wrap.env);
+        if (message_error == nullptr) {
+          ports = BuildTransferredPortsArray(wrap->handle_wrap.env, next, &received_ports);
+        }
+      }
       if (message_error == nullptr) {
         payload = RestoreTransferableDataAfterStructuredClone(
             wrap->handle_wrap.env,
@@ -3373,7 +3384,6 @@ void ProcessQueuedMessages(MessagePortWrap* wrap, bool force, size_t processing_
         message_error = TakePendingException(wrap->handle_wrap.env);
       }
       if (message_error == nullptr) {
-        napi_value ports = BuildTransferredPortsArray(wrap->handle_wrap.env, next, &received_ports);
         DeleteTransferredPortRefs(wrap->handle_wrap.env, &next.transferred_ports);
         EmitMessageToPort(wrap->handle_wrap.env,
                           self,
@@ -3421,8 +3431,8 @@ void OnMessagePortClosed(uv_handle_t* handle) {
   EdgeHandleWrapMaybeCallOnClose(&wrap->handle_wrap);
   if (wrap->data) {
     std::lock_guard<std::mutex> lock(wrap->data->mutex);
-    if (wrap->data->attached_wrap == wrap) {
-      wrap->data->attached_wrap = nullptr;
+    if (wrap->data->attached_port == wrap) {
+      wrap->data->attached_port = nullptr;
     }
   }
   bool can_delete = wrap->handle_wrap.finalized;
@@ -3535,6 +3545,24 @@ void InvokePortSymbolHook(napi_env env, napi_value port, napi_value symbol) {
 void EmitMessageToPort(napi_env env, napi_value port, napi_value payload, const char* type, napi_value ports) {
   if (port == nullptr) return;
 
+  napi_value emit_message = ResolveEmitMessageValue(env);
+  napi_value undefined = Undefined(env);
+  napi_value type_value = nullptr;
+  if (emit_message != nullptr &&
+      napi_create_string_utf8(env, type != nullptr ? type : "message", NAPI_AUTO_LENGTH, &type_value) == napi_ok &&
+      type_value != nullptr) {
+    napi_value argv[3] = {
+        payload != nullptr ? payload : undefined,
+        ports != nullptr ? ports : undefined,
+        type_value,
+    };
+    napi_value ignored = nullptr;
+    if (EdgeMakeCallback(env, port, emit_message, 3, argv, &ignored) == napi_ok) {
+      return;
+    }
+    ClearPendingException(env);
+  }
+
   if (TryHybridDispatchMessageToPort(env, port, payload, type, ports)) {
     return;
   }
@@ -3547,7 +3575,7 @@ void EmitMessageToPort(napi_env env, napi_value port, napi_value payload, const 
   napi_set_named_property(env, event, "data", payload != nullptr ? payload : Undefined(env));
   napi_set_named_property(env, event, "target", port);
   napi_set_named_property(env, event, "ports", ports != nullptr ? ports : Undefined(env));
-  napi_value type_value = nullptr;
+  type_value = nullptr;
   if (napi_create_string_utf8(env, type != nullptr ? type : "message", NAPI_AUTO_LENGTH, &type_value) == napi_ok &&
       type_value != nullptr) {
     napi_set_named_property(env, event, "type", type_value);
@@ -3657,7 +3685,7 @@ napi_value MessagePortConstructorCallback(napi_env env, napi_callback_info info)
         env, wrap->async_id, kEdgeProviderMessagePort, EdgeAsyncWrapExecutionAsyncId(env), this_arg);
     {
       std::lock_guard<std::mutex> lock(wrap->data->mutex);
-      wrap->data->attached_wrap = wrap;
+      wrap->data->attached_port = wrap;
     }
     wrap->handle_wrap.active_handle_token =
         EdgeRegisterActiveHandle(env,
@@ -3730,6 +3758,7 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
   }
   std::vector<QueuedMessage::TransferredPortEntry> transferred_ports;
   napi_value cloned_payload = nullptr;
+  void* serialized_payload = nullptr;
   if (transfer_list != nullptr &&
       TransferListContainsValue(env, transfer_list, payload) &&
       IsTransferableValue(env, payload)) {
@@ -3753,24 +3782,42 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
     std::vector<ValueTransformPair> seen_pairs;
     napi_value transformed_payload =
         TransformTransferredPortsForQueue(env, transferred_payload, transferred_ports, &seen_pairs);
-
-    if (IsCloneableTransferableValue(env, transformed_payload)) {
-      cloned_payload = CloneRootJSTransferableValueForQueue(env, transformed_payload);
-    } else {
-      cloned_payload = PrepareTransferableDataForStructuredClone(env, transformed_payload, true);
-    }
-    if (cloned_payload == nullptr) {
+    if (transformed_payload == nullptr) {
       DeleteTransferredPortRefs(env, &transferred_ports);
       return nullptr;
     }
+
+    EdgeMessagePortDataPtr fast_path_peer;
+    if (wrap != nullptr && wrap->handle_wrap.state == kEdgeHandleInitialized && wrap->data) {
+      std::lock_guard<std::mutex> lock(wrap->data->mutex);
+      fast_path_peer = wrap->data->sibling.lock();
+    }
+
+    napi_value arraybuffer_transfer_list = CreateArrayBufferTransferList(env, normalized_transfer_arg);
+    if (fast_path_peer != nullptr && arraybuffer_transfer_list == nullptr) {
+      if (!SerializeMessageValueForQueue(env, transformed_payload, &serialized_payload)) {
+        DeleteTransferredPortRefs(env, &transferred_ports);
+        if (serialized_payload != nullptr) {
+          unofficial_napi_release_serialized_value(serialized_payload);
+          serialized_payload = nullptr;
+        }
+        return ReadPendingCloneErrorMessage(env, transformed_payload);
+      }
+    } else {
+      cloned_payload = CloneMessageValue(env, transformed_payload, normalized_transfer_arg);
+      if (cloned_payload == nullptr) {
+        DeleteTransferredPortRefs(env, &transferred_ports);
+        return nullptr;
+      }
+    }
   }
   ClearPendingException(env);
-  if (normalized_transfer_arg != nullptr && !ApplyArrayBufferTransfers(env, normalized_transfer_arg)) {
-    DeleteTransferredPortRefs(env, &transferred_ports);
-    return nullptr;
-  }
 
   if (wrap == nullptr || wrap->handle_wrap.state != kEdgeHandleInitialized || !wrap->data) {
+    if (serialized_payload != nullptr) {
+      unofficial_napi_release_serialized_value(serialized_payload);
+      serialized_payload = nullptr;
+    }
     DetachTransferredPorts(env, &transferred_ports);
     return Undefined(env);
   }
@@ -3789,6 +3836,10 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
       }
     }
     if (target_in_transfer_list) {
+      if (serialized_payload != nullptr) {
+        unofficial_napi_release_serialized_value(serialized_payload);
+        serialized_payload = nullptr;
+      }
       DetachTransferredPorts(env, &transferred_ports);
       EmitProcessWarning(env, "The target port was posted to itself, and the communication channel was lost");
       BeginClosePort(env, wrap, false);
@@ -3798,7 +3849,13 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
     }
 
     DetachTransferredPorts(env, &transferred_ports);
-    EnqueueMessageToPort(env, peer, cloned_payload, false, nullptr, std::move(transferred_ports));
+    if (serialized_payload != nullptr) {
+      EnqueueSerializedMessageToPort(
+          env, peer, serialized_payload, false, nullptr, std::move(transferred_ports));
+      serialized_payload = nullptr;
+    } else {
+      EnqueueMessageToPort(env, peer, cloned_payload, false, nullptr, std::move(transferred_ports));
+    }
     napi_value true_value = nullptr;
     napi_get_boolean(env, true, &true_value);
     return true_value;
@@ -3829,6 +3886,10 @@ napi_value MessagePortPostMessageCallback(napi_env env, napi_callback_info info)
 
   if (!transferred_ports.empty()) {
     DetachTransferredPorts(env, &transferred_ports);
+  }
+  if (serialized_payload != nullptr) {
+    unofficial_napi_release_serialized_value(serialized_payload);
+    serialized_payload = nullptr;
   }
   napi_value false_value = nullptr;
   napi_get_boolean(env, false, &false_value);
@@ -3986,36 +4047,6 @@ napi_value SetDeserializerCreateObjectFunctionCallback(napi_env env, napi_callba
   return Undefined(env);
 }
 
-bool ApplyArrayBufferTransfers(napi_env env, napi_value options) {
-  if (options == nullptr || IsUndefined(env, options)) return true;
-  napi_value transfer = options;
-  bool is_array = false;
-  if (napi_is_array(env, transfer, &is_array) != napi_ok || !is_array) {
-    napi_valuetype options_type = napi_undefined;
-    if (napi_typeof(env, options, &options_type) != napi_ok || options_type != napi_object) return true;
-    transfer = GetNamed(env, options, "transfer");
-    if (transfer == nullptr || napi_is_array(env, transfer, &is_array) != napi_ok || !is_array) return true;
-  }
-
-  uint32_t length = 0;
-  if (napi_get_array_length(env, transfer, &length) != napi_ok) return true;
-
-  for (uint32_t i = 0; i < length; ++i) {
-    napi_value item = nullptr;
-    if (napi_get_element(env, transfer, i, &item) != napi_ok || item == nullptr) continue;
-    bool is_arraybuffer = false;
-    if (napi_is_arraybuffer(env, item, &is_arraybuffer) != napi_ok || !is_arraybuffer) continue;
-    const napi_status detach_status = napi_detach_arraybuffer(env, item);
-    if (detach_status == napi_ok) continue;
-    bool already_detached = false;
-    if (napi_is_detached_arraybuffer(env, item, &already_detached) == napi_ok && already_detached) continue;
-    napi_throw_error(env, "ERR_INVALID_STATE", "Failed to transfer detached ArrayBuffer");
-    return false;
-  }
-
-  return true;
-}
-
 napi_value StructuredCloneCallback(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
@@ -4031,43 +4062,7 @@ napi_value StructuredCloneCallback(napi_env env, napi_callback_info info) {
   if (ThrowDirectCloneFailureIfDetected(env, argv[0])) {
     return nullptr;
   }
-
-  napi_value clone_input = argv[0];
-  if (IsProcessEnvValue(env, clone_input)) {
-    clone_input = CloneObjectPropertiesForStructuredClone(env, clone_input, false);
-    if (clone_input == nullptr) return nullptr;
-  }
-  clone_input = PrepareTransferableDataForStructuredClone(env, clone_input, false);
-  if (clone_input == nullptr) return nullptr;
-
-  napi_value out = StructuredCloneJSTransferableValue(env, clone_input);
-  const napi_status clone_status =
-      out != nullptr ? napi_ok : unofficial_napi_structured_clone(env, clone_input, &out);
-  if (clone_status != napi_ok || out == nullptr) {
-    bool has_pending = false;
-    if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
-      const std::string message = DescribeCloneFailureValue(env, clone_input);
-      if (!message.empty()) {
-        ClearPendingException(env);
-        napi_value err = CreateDataCloneError(env, message.c_str());
-        if (err != nullptr) napi_throw(env, err);
-      }
-      return nullptr;
-    }
-    std::string message = DescribeCloneFailureValue(env, clone_input);
-    if (message.empty() && (argc < 2 || argv[1] == nullptr || IsUndefined(env, argv[1]))) {
-      message = TryGetStructuredCloneErrorMessage(env, clone_input);
-    }
-    napi_value err = CreateDataCloneError(
-        env, message.empty() ? "The object could not be cloned." : message.c_str());
-    if (err != nullptr) napi_throw(env, err);
-    return nullptr;
-  }
-
-  if (argc >= 2 && !ApplyArrayBufferTransfers(env, argv[1])) {
-    return nullptr;
-  }
-  return RestoreTransferableDataAfterStructuredClone(env, out);
+  return CloneMessageValue(env, argv[0], argc >= 2 ? argv[1] : nullptr);
 }
 
 napi_value BroadcastChannelCallback(napi_env env, napi_callback_info info) {
@@ -4712,15 +4707,27 @@ napi_value ReceiveMessageOnPortCallback(napi_env env, napi_callback_info info) {
     if (exception != nullptr) napi_throw(env, exception);
     return nullptr;
   }
-  ReceivedTransferredPortState received_ports;
-  std::vector<ValueTransformPair> seen_pairs;
-  value = RestoreTransferredPortsInValue(
+  napi_value exception = nullptr;
+  if (!next.transferred_ports.empty()) {
+    ReceivedTransferredPortState received_ports;
+    std::vector<ValueTransformPair> seen_pairs;
+    value = RestoreTransferredPortsInValue(
+        env,
+        value != nullptr ? value : Undefined(env),
+        next,
+        &received_ports,
+        &seen_pairs);
+    exception = TakePendingException(env);
+    if (exception != nullptr) {
+      DeleteTransferredPortRefs(env, &next.transferred_ports);
+      napi_throw(env, exception);
+      return nullptr;
+    }
+  }
+  value = RestoreTransferableDataAfterStructuredClone(
       env,
-      value != nullptr ? value : Undefined(env),
-      next,
-      &received_ports,
-      &seen_pairs);
-  napi_value exception = TakePendingException(env);
+      value != nullptr ? value : Undefined(env));
+  exception = TakePendingException(env);
   if (exception != nullptr) {
     DeleteTransferredPortRefs(env, &next.transferred_ports);
     napi_throw(env, exception);
@@ -4805,8 +4812,8 @@ napi_value EdgeCreateMessagePortForData(napi_env env, const EdgeMessagePortDataP
 
   if (wrap->data) {
     std::lock_guard<std::mutex> old_lock(wrap->data->mutex);
-    if (wrap->data->attached_wrap == wrap) {
-      wrap->data->attached_wrap = nullptr;
+    if (wrap->data->attached_port == wrap) {
+      wrap->data->attached_port = nullptr;
     }
   }
 
@@ -4814,7 +4821,7 @@ napi_value EdgeCreateMessagePortForData(napi_env env, const EdgeMessagePortDataP
   bool has_queued_messages = false;
   {
     std::lock_guard<std::mutex> lock(data->mutex);
-    data->attached_wrap = wrap;
+    data->attached_port = wrap;
     data->closed = false;
     has_queued_messages = !data->queued_messages.empty();
   }
@@ -4822,6 +4829,12 @@ napi_value EdgeCreateMessagePortForData(napi_env env, const EdgeMessagePortDataP
     TriggerPortAsync(wrap);
   }
   return port;
+}
+
+void EdgeCloseMessagePortForValue(napi_env env, napi_value value) {
+  MessagePortWrap* wrap = UnwrapMessagePort(env, value);
+  if (wrap == nullptr) return;
+  BeginClosePort(env, wrap, false);
 }
 
 napi_value ResolveMessaging(napi_env env, const ResolveOptions& options) {

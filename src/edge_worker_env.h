@@ -27,6 +27,9 @@ void EdgeWorkerEnvUnsetLocalEnvVar(napi_env env, const std::string& key);
 void EdgeWorkerEnvRequestStop(napi_env env);
 void EdgeWorkerEnvForget(napi_env env);
 void EdgeWorkerEnvRunCleanup(napi_env env);
+void EdgeWorkerEnvRunCleanupPreserveLoop(napi_env env);
+uv_loop_t* EdgeWorkerEnvReleaseEventLoop(napi_env env);
+void EdgeWorkerEnvDestroyReleasedEventLoop(uv_loop_t* loop);
 
 napi_value EdgeWorkerEnvGetBinding(napi_env env);
 void EdgeWorkerEnvSetBinding(napi_env env, napi_value binding);

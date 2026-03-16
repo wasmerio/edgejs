@@ -91,6 +91,11 @@ struct LazyPropertyData {
   bool enumerable = true;
 };
 
+struct LazyPropertyStore {
+  explicit LazyPropertyStore(napi_env) {}
+  std::vector<std::unique_ptr<LazyPropertyData>> entries;
+};
+
 void DeleteRefIfPresent(napi_env env, napi_ref* ref);
 
 struct TypesBindingState {
@@ -103,7 +108,11 @@ struct TypesBindingState {
   napi_ref binding_ref = nullptr;
 };
 
-std::vector<std::unique_ptr<LazyPropertyData>> g_lazy_property_data;
+LazyPropertyStore& GetLazyPropertyStore(napi_env env) {
+  return EdgeEnvironmentGetOrCreateSlotData<LazyPropertyStore>(
+      env,
+      kEdgeEnvironmentSlotLazyPropertyStore);
+}
 
 void DeleteRefIfPresent(napi_env env, napi_ref* ref) {
   if (env == nullptr || ref == nullptr || *ref == nullptr) return;
@@ -619,6 +628,7 @@ napi_value DefineLazyPropertiesCallback(napi_env env, napi_callback_info info) {
   }
 
   const std::string module_id = ToUtf8(env, id);
+  LazyPropertyStore& store = GetLazyPropertyStore(env);
 
   uint32_t key_count = 0;
   if (napi_get_array_length(env, keys, &key_count) != napi_ok) return Undefined(env);
@@ -633,7 +643,7 @@ napi_value DefineLazyPropertiesCallback(napi_env env, napi_callback_info info) {
     data->key = key;
     data->enumerable = enumerable;
     LazyPropertyData* raw_data = data.get();
-    g_lazy_property_data.emplace_back(std::move(data));
+    store.entries.emplace_back(std::move(data));
 
     napi_property_descriptor descriptor = {
         .utf8name = raw_data->key.c_str(),

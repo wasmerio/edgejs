@@ -127,6 +127,7 @@ struct EdgeEnvironmentConfig {
   std::string local_process_title;
   uint32_t local_debug_port = 0;
   uint64_t flags = edge::EnvironmentFlags::kDefaultFlags;
+  uv_loop_t* external_event_loop = nullptr;
 };
 
 using EdgeWorkerEnvConfig = EdgeEnvironmentConfig;
@@ -177,6 +178,7 @@ enum EdgeEnvironmentSlotId : size_t {
   kEdgeEnvironmentSlotContextifyModuleWrapBindingState,
   kEdgeEnvironmentSlotPrepareStackTraceState,
   kEdgeEnvironmentSlotProfilerState,
+  kEdgeEnvironmentSlotLazyPropertyStore,
 };
 
 namespace edge {
@@ -208,6 +210,12 @@ class Environment {
   bool shares_environment() const;
   bool tracks_unmanaged_fds() const;
   bool stop_requested() const;
+  bool exiting() const;
+  void set_exiting(bool exiting);
+  bool has_exit_code() const;
+  int exit_code(int default_code = 0) const;
+  void set_exit_code(int code);
+  void clear_exit_code();
   int32_t thread_id() const;
   std::string thread_name() const;
   std::array<double, 4> resource_limits() const;
@@ -229,6 +237,8 @@ class Environment {
   napi_status EnsureEventLoop(uv_loop_t** loop_out = nullptr);
   uv_loop_t* event_loop();
   uv_loop_t* GetExistingEventLoop() const;
+  uv_loop_t* ReleaseEventLoop();
+  static void DestroyReleasedEventLoop(uv_loop_t* loop);
   void CloseAndDestroyEventLoop();
 
   void AddCleanupHook(CleanupHookCallback callback, void* arg);
@@ -237,7 +247,7 @@ class Environment {
   void RemoveCleanupStage(CleanupStageCallback callback, void* arg);
   void AtExit(AtExitCallback callback, void* arg);
   void RunAtExitCallbacks();
-  void RunCleanup();
+  void RunCleanup(bool close_event_loop = true);
   bool cleanup_started() const;
   bool can_call_into_js() const;
   void set_can_call_into_js(bool can_call_into_js);
@@ -293,6 +303,7 @@ class Environment {
                                      void* data,
                                      bool refed);
   napi_status RequestInterrupt(InterruptCallback callback, void* data);
+  size_t DrainInterrupts();
   size_t DrainThreadsafeImmediates();
 
   TickInfo* tick_info();
@@ -311,11 +322,13 @@ class Environment {
 
  private:
   static void OnThreadsafeImmediate(uv_async_t* handle);
+  static void OnThreadsafeImmediateClosed(uv_handle_t* handle);
 
   void ResetTrackedRefs();
   void DeleteRefIfPresent(napi_ref* ref);
   bool EnsureThreadsafeImmediateHandleLocked();
   void CloseThreadsafeImmediateHandleLocked();
+  static void OnInterruptFromV8(napi_env env, void* data);
   void CleanupActiveRegistryEntries();
   void EmitProcessWarning(const std::string& message,
                           const char* type = nullptr,
@@ -329,6 +342,9 @@ class Environment {
   bool cleanup_started_ = false;
   bool at_exit_ran_ = false;
   bool stop_requested_ = false;
+  bool exiting_ = false;
+  bool has_exit_code_ = false;
+  int exit_code_ = 0;
   bool can_call_into_js_ = true;
   bool stopping_ = false;
   bool emit_filehandle_warning_ = true;
@@ -355,7 +371,8 @@ class Environment {
   std::unordered_map<size_t, SlotEntry> slots_;
   uv_async_t threadsafe_immediate_async_{};
   bool threadsafe_immediate_async_initialized_ = false;
-  size_t threadsafe_immediate_ref_count_ = 0;
+  bool threadsafe_immediate_async_closed_ = true;
+  std::deque<ThreadsafeImmediateEntry> interrupts_;
   std::deque<ThreadsafeImmediateEntry> threadsafe_immediates_;
 };
 
@@ -365,7 +382,10 @@ edge::Environment* EdgeEnvironmentGet(napi_env env);
 bool EdgeEnvironmentAttach(napi_env env, const EdgeEnvironmentConfig* config = nullptr);
 void EdgeEnvironmentDetach(napi_env env);
 bool EdgeEnvironmentGetConfig(napi_env env, EdgeEnvironmentConfig* out);
+uv_loop_t* EdgeEnvironmentReleaseEventLoop(napi_env env);
+void EdgeEnvironmentDestroyReleasedEventLoop(uv_loop_t* loop);
 void EdgeEnvironmentRunCleanup(napi_env env);
+void EdgeEnvironmentRunCleanupPreserveLoop(napi_env env);
 void EdgeEnvironmentRunAtExitCallbacks(napi_env env);
 bool EdgeEnvironmentCleanupStarted(napi_env env);
 edge::SlotEntry EdgeEnvironmentGetOpaqueSlot(napi_env env, size_t slot_id);

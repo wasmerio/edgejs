@@ -3,8 +3,12 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <sstream>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace builtin_catalog {
@@ -24,6 +28,9 @@ const std::vector<std::string> kNodeDepsBuiltinRoots = {
     "amaro",
     "v8/tools",
 };
+
+std::mutex g_builtin_source_cache_mutex;
+std::unordered_map<std::string, std::string> g_builtin_source_cache;
 
 bool PathExistsRegularFile(const fs::path& path) {
   std::error_code ec;
@@ -82,6 +89,10 @@ bool IsAllowedNodeDepsRelativePath(const fs::path& rel) {
     if (rel_text == root || rel_text.rfind(root + "/", 0) == 0) return true;
   }
   return false;
+}
+
+bool IsBuiltinPath(const fs::path& path) {
+  return IsInsideRoot(path, NodeLibRoot()) || IsInsideRoot(path, NodeDepsRoot());
 }
 
 void AppendPathCandidate(std::vector<fs::path>* out, const fs::path& candidate) {
@@ -252,6 +263,37 @@ bool TryGetBuiltinIdForPath(const fs::path& resolved_path, std::string* out_id) 
   }
 
   return false;
+}
+
+bool TryReadBuiltinSource(const fs::path& resolved_path, std::string* out_source) {
+  if (out_source == nullptr) return false;
+  const fs::path normalized = fs::absolute(resolved_path).lexically_normal();
+  if (!IsBuiltinPath(normalized)) return false;
+
+  const std::string cache_key = normalized.string();
+  std::lock_guard<std::mutex> lock(g_builtin_source_cache_mutex);
+  auto it = g_builtin_source_cache.find(cache_key);
+  if (it != g_builtin_source_cache.end()) {
+    *out_source = it->second;
+    return true;
+  }
+
+  std::ifstream in(normalized, std::ios::binary);
+  if (!in.is_open()) return false;
+
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  auto [inserted_it, inserted] =
+      g_builtin_source_cache.emplace(cache_key, ss.str());
+  (void)inserted;
+  *out_source = inserted_it->second;
+  return true;
+}
+
+bool TryReadBuiltinSource(const std::string& specifier, std::string* out_source) {
+  fs::path resolved;
+  if (!ResolveBuiltinId(specifier, &resolved)) return false;
+  return TryReadBuiltinSource(resolved, out_source);
 }
 
 const std::vector<std::string>& AllBuiltinIds() {

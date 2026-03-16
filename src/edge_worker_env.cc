@@ -134,11 +134,23 @@ void EdgeWorkerEnvRequestStop(napi_env env) {
 }
 
 void EdgeWorkerEnvForget(napi_env env) {
-  (void)env;
+  edge::Environment::Detach(env);
 }
 
 void EdgeWorkerEnvRunCleanup(napi_env env) {
   EdgeEnvironmentRunCleanup(env);
+}
+
+void EdgeWorkerEnvRunCleanupPreserveLoop(napi_env env) {
+  EdgeEnvironmentRunCleanupPreserveLoop(env);
+}
+
+uv_loop_t* EdgeWorkerEnvReleaseEventLoop(napi_env env) {
+  return EdgeEnvironmentReleaseEventLoop(env);
+}
+
+void EdgeWorkerEnvDestroyReleasedEventLoop(uv_loop_t* loop) {
+  EdgeEnvironmentDestroyReleasedEventLoop(loop);
 }
 
 napi_value EdgeWorkerEnvGetBinding(napi_env env) {

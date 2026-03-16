@@ -238,6 +238,33 @@ std::optional<std::filesystem::path> TryGetCurrentPath() {
   return cwd.lexically_normal();
 }
 
+bool TryGetCurrentWorkingDirectoryString(std::string* out, int* uv_error_out = nullptr) {
+  if (out == nullptr) return false;
+  out->clear();
+  if (uv_error_out != nullptr) *uv_error_out = 0;
+
+  size_t cwd_len = 256;
+  for (;;) {
+    std::string cwd(cwd_len, '\0');
+    const int rc = uv_cwd(cwd.data(), &cwd_len);
+    if (rc == 0) {
+      cwd.resize(cwd_len);
+      if (!cwd.empty()) {
+        *out = std::move(cwd);
+        return true;
+      }
+      if (uv_error_out != nullptr) *uv_error_out = UV_EIO;
+      break;
+    }
+    if (rc != UV_ENOBUFS) {
+      if (uv_error_out != nullptr) *uv_error_out = rc;
+      break;
+    }
+    cwd_len += 1;
+  }
+  return false;
+}
+
 void DeleteRefIfPresent(napi_env env, napi_ref* ref) {
   if (env == nullptr || ref == nullptr || *ref == nullptr) return;
   napi_delete_reference(env, *ref);
@@ -863,17 +890,8 @@ void ThrowUvCwdError(napi_env env, int err) {
 }
 
 std::string GetCurrentWorkingDirectoryForErrors() {
-  size_t cwd_len = 256;
-  for (;;) {
-    std::string cwd(cwd_len, '\0');
-    const int rc = uv_cwd(cwd.data(), &cwd_len);
-    if (rc == 0) {
-      cwd.resize(cwd_len);
-      return cwd;
-    }
-    if (rc != UV_ENOBUFS) return ".";
-    cwd_len += 1;
-  }
+  std::string cwd;
+  return TryGetCurrentWorkingDirectoryString(&cwd) ? cwd : ".";
 }
 
 std::string GetProcessTitleString() {
@@ -3418,20 +3436,11 @@ napi_value CreateProcessEnvObject(napi_env env) {
 }
 
 napi_value ProcessCwdCallback(napi_env env, napi_callback_info info) {
-  size_t cwd_len = 256;
   std::string cwd;
-  for (;;) {
-    cwd.assign(cwd_len, '\0');
-    const int rc = uv_cwd(cwd.data(), &cwd_len);
-    if (rc == 0) {
-      cwd.resize(cwd_len);
-      break;
-    }
-    if (rc != UV_ENOBUFS) {
-      ThrowUvCwdError(env, rc);
-      return nullptr;
-    }
-    cwd_len += 1;
+  int uv_error = 0;
+  if (!TryGetCurrentWorkingDirectoryString(&cwd, &uv_error)) {
+    ThrowUvCwdError(env, uv_error);
+    return nullptr;
   }
   napi_value result = nullptr;
   if (napi_create_string_utf8(env, cwd.c_str(), cwd.size(), &result) != napi_ok) return nullptr;
@@ -3820,6 +3829,8 @@ napi_value ProcessExitCallback(napi_env env, napi_callback_info info) {
   }
   EdgeEnvironmentRunAtExitCallbacks(env);
   if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->set_exiting(true);
+    environment->set_exit_code(exit_code);
     environment->RequestStop();
   }
   uv_loop_t* loop = EdgeGetExistingEnvLoop(env);

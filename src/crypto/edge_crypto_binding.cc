@@ -68,9 +68,9 @@ std::unique_ptr<X509Set> g_user_root_certs;
 
 std::atomic<bool> g_tried_cert_loading_off_thread{false};
 std::atomic<bool> g_cert_loading_thread_started{false};
-std::atomic<bool> g_cert_loading_cleanup_hook_installed{false};
 std::mutex g_cert_loading_thread_mutex;
 uv_thread_t g_cert_loading_thread;
+std::once_flag g_cert_loading_cleanup_once;
 
 struct RootCertLoadPlan {
   bool load_bundled = false;
@@ -645,14 +645,9 @@ void CleanupRootCertLoading(void* data) {
 
 void EnsureRootCertThreadCleanupHook(napi_env env) {
   if (env == nullptr) return;
-  bool expected = false;
-  if (g_cert_loading_cleanup_hook_installed.compare_exchange_strong(expected, true)) {
-    if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
-      environment->AddCleanupHook(CleanupRootCertLoading, nullptr);
-    } else if (napi_add_env_cleanup_hook(env, CleanupRootCertLoading, nullptr) != napi_ok) {
-      g_cert_loading_cleanup_hook_installed.store(false);
-    }
-  }
+  std::call_once(g_cert_loading_cleanup_once, []() {
+    std::atexit([]() { CleanupRootCertLoading(nullptr); });
+  });
 }
 
 bool GetAnyBufferSourceBytesImpl(napi_env env, napi_value value, uint8_t** data, size_t* len) {

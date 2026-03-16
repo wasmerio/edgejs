@@ -28,11 +28,18 @@ struct PlatformTask {
 };
 
 void CleanupTask(napi_env env, PlatformTask* task);
+struct PlatformTaskState;
 
 struct DelayedPlatformTask {
   PlatformTask task;
   uint64_t seq = 0;
   Clock::time_point due;
+};
+
+struct ScheduledForegroundTask {
+  PlatformTaskState* state = nullptr;
+  PlatformTask task;
+  uv_timer_t timer{};
 };
 
 struct DelayedPlatformTaskCompare {
@@ -77,20 +84,20 @@ struct PlatformTaskState {
   std::priority_queue<DelayedPlatformTask,
                       std::vector<DelayedPlatformTask>,
                       DelayedPlatformTaskCompare> delayed_foreground_tasks;
+  std::vector<ScheduledForegroundTask*> scheduled_foreground_tasks;
   uint64_t next_foreground_seq = 0;
   bool draining_foreground = false;
   bool foreground_async_pending = false;
 
   uv_async_t foreground_async{};
-  uv_timer_t foreground_timer{};
   bool foreground_async_initialized = false;
-  bool foreground_timer_initialized = false;
-  bool foreground_timer_armed = false;
-  Clock::time_point foreground_timer_due{};
 
   std::atomic<bool> cleanup_started {false};
   uint32_t pending_handle_closes = 0;
 };
+
+std::mutex g_retired_platform_states_mutex;
+std::vector<std::unique_ptr<PlatformTaskState>> g_retired_platform_states;
 
 size_t DrainForegroundTasksFromState(PlatformTaskState* state,
                                      bool run_checkpoint,
@@ -104,8 +111,21 @@ PlatformTaskState* GetState(napi_env env) {
 }
 
 PlatformTaskState& EnsureState(napi_env env) {
-  return EdgeEnvironmentGetOrCreateSlotData<PlatformTaskState>(
-      env, kEdgeEnvironmentSlotPlatformTaskState);
+  if (auto* existing = GetState(env); existing != nullptr) {
+    return *existing;
+  }
+  auto* created = new PlatformTaskState(env);
+  EdgeEnvironmentSetOpaqueSlot(
+      env,
+      kEdgeEnvironmentSlotPlatformTaskState,
+      created,
+      [](void* data) {
+        auto* state = static_cast<PlatformTaskState*>(data);
+        if (state == nullptr) return;
+        std::lock_guard<std::mutex> lock(g_retired_platform_states_mutex);
+        g_retired_platform_states.emplace_back(state);
+      });
+  return *created;
 }
 
 void AssertOwningThread(const PlatformTaskState* state, const char* where) {
@@ -131,14 +151,116 @@ void MaybeDestroyState(PlatformTaskState* state) {
   (void)state;
 }
 
+void RemoveScheduledForegroundTask(PlatformTaskState* state,
+                                   ScheduledForegroundTask* scheduled) {
+  if (state == nullptr || scheduled == nullptr) return;
+  auto it = std::find(state->scheduled_foreground_tasks.begin(),
+                      state->scheduled_foreground_tasks.end(),
+                      scheduled);
+  if (it != state->scheduled_foreground_tasks.end()) {
+    state->scheduled_foreground_tasks.erase(it);
+  }
+}
+
+void OnScheduledForegroundTaskClosed(uv_handle_t* handle) {
+  auto* scheduled = static_cast<ScheduledForegroundTask*>(handle != nullptr ? handle->data : nullptr);
+  if (scheduled == nullptr) return;
+  PlatformTaskState* state = scheduled->state;
+  if (state != nullptr) {
+    RemoveScheduledForegroundTask(state, scheduled);
+    if (state->pending_handle_closes > 0) {
+      --state->pending_handle_closes;
+    }
+  }
+  CleanupTask(state != nullptr ? state->env : nullptr, &scheduled->task);
+  delete scheduled;
+  MaybeDestroyState(state);
+}
+
+void CloseScheduledForegroundTask(ScheduledForegroundTask* scheduled) {
+  if (scheduled == nullptr) return;
+  PlatformTaskState* state = scheduled->state;
+  uv_handle_t* handle = reinterpret_cast<uv_handle_t*>(&scheduled->timer);
+  if (uv_is_closing(handle) != 0) {
+    return;
+  }
+  if (state == nullptr) {
+    CleanupTask(state != nullptr ? state->env : nullptr, &scheduled->task);
+    delete scheduled;
+    return;
+  }
+  ++state->pending_handle_closes;
+  uv_close(handle, OnScheduledForegroundTaskClosed);
+}
+
+void RunScheduledForegroundTask(uv_timer_t* handle) {
+  auto* scheduled = static_cast<ScheduledForegroundTask*>(handle != nullptr ? handle->data : nullptr);
+  if (scheduled == nullptr) return;
+  PlatformTaskState* state = scheduled->state;
+  if (state != nullptr &&
+      !state->cleanup_started.load(std::memory_order_acquire) &&
+      scheduled->task.callback != nullptr) {
+    scheduled->task.callback(state->env, scheduled->task.data);
+    if (HasPendingException(state->env)) {
+      bool handled = false;
+      (void)EdgeHandlePendingExceptionNow(state->env, &handled);
+    }
+  }
+  if (handle != nullptr && handle->loop != nullptr) {
+    uv_stop(handle->loop);
+  }
+  CloseScheduledForegroundTask(scheduled);
+}
+
+bool ScheduleForegroundTaskTimer(PlatformTaskState* state,
+                                 PlatformTask task,
+                                 Clock::time_point due) {
+  if (state == nullptr) {
+    CleanupTask(nullptr, &task);
+    return false;
+  }
+
+  uv_loop_t* loop = EdgeGetEnvLoop(state->env);
+  if (loop == nullptr) {
+    CleanupTask(state->env, &task);
+    return false;
+  }
+
+  auto* scheduled = new ScheduledForegroundTask();
+  scheduled->state = state;
+  scheduled->task = std::move(task);
+  scheduled->timer.data = scheduled;
+
+  if (uv_timer_init(loop, &scheduled->timer) != 0) {
+    CleanupTask(state->env, &scheduled->task);
+    delete scheduled;
+    return false;
+  }
+
+  Clock::duration remaining = due - Clock::now();
+  if (remaining < Clock::duration::zero()) {
+    remaining = Clock::duration::zero();
+  }
+  const auto delay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+  if (uv_timer_start(&scheduled->timer,
+                     RunScheduledForegroundTask,
+                     static_cast<uint64_t>(delay_ms),
+                     0) != 0) {
+    CloseScheduledForegroundTask(scheduled);
+    return false;
+  }
+
+  uv_unref(reinterpret_cast<uv_handle_t*>(&scheduled->timer));
+  state->scheduled_foreground_tasks.push_back(scheduled);
+  return true;
+}
+
 void OnForegroundHandleClosed(uv_handle_t* handle) {
   auto* state = static_cast<PlatformTaskState*>(handle->data);
   if (state == nullptr) return;
 
   if (handle == reinterpret_cast<uv_handle_t*>(&state->foreground_async)) {
     state->foreground_async_initialized = false;
-  } else if (handle == reinterpret_cast<uv_handle_t*>(&state->foreground_timer)) {
-    state->foreground_timer_initialized = false;
   }
 
   if (state->pending_handle_closes > 0) {
@@ -165,55 +287,6 @@ void RefreshForegroundAsyncRef(PlatformTaskState* state) {
   }
 }
 
-void MoveDueForegroundTasksLocked(PlatformTaskState* state) {
-  const Clock::time_point now = Clock::now();
-  while (!state->delayed_foreground_tasks.empty() &&
-         state->delayed_foreground_tasks.top().due <= now) {
-    DelayedPlatformTask delayed =
-        std::move(const_cast<DelayedPlatformTask&>(state->delayed_foreground_tasks.top()));
-    state->delayed_foreground_tasks.pop();
-    state->foreground_tasks.push_back(std::move(delayed.task));
-  }
-}
-
-void RefreshForegroundTimerLocked(PlatformTaskState* state) {
-  if (state == nullptr || !state->foreground_timer_initialized) return;
-  if (uv_is_closing(reinterpret_cast<uv_handle_t*>(&state->foreground_timer)) != 0) return;
-
-  if (state->delayed_foreground_tasks.empty()) {
-    uv_timer_stop(&state->foreground_timer);
-    state->foreground_timer_armed = false;
-    return;
-  }
-
-  const Clock::time_point due = state->delayed_foreground_tasks.top().due;
-  if (state->foreground_timer_armed && due == state->foreground_timer_due) {
-    return;
-  }
-
-  Clock::duration remaining = due - Clock::now();
-  if (remaining < Clock::duration::zero()) {
-    remaining = Clock::duration::zero();
-  }
-  const auto delay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
-  uv_timer_stop(&state->foreground_timer);
-  uv_timer_start(&state->foreground_timer,
-                 [](uv_timer_t* handle) {
-                   auto* state = static_cast<PlatformTaskState*>(handle->data);
-                   if (state == nullptr ||
-                       state->cleanup_started.load(std::memory_order_acquire)) {
-                     return;
-                   }
-                   if (handle->loop != nullptr) {
-                     uv_stop(handle->loop);
-                   }
-                 },
-                 static_cast<uint64_t>(delay_ms),
-                 0);
-  state->foreground_timer_due = due;
-  state->foreground_timer_armed = true;
-}
-
 size_t DrainForegroundTasksFromState(PlatformTaskState* state,
                                      bool run_checkpoint,
                                      bool clear_async_pending,
@@ -236,49 +309,48 @@ size_t DrainForegroundTasksFromState(PlatformTaskState* state,
     state->foreground_async_pending = false;
   }
 
-  for (;;) {
-    std::deque<PlatformTask> batch;
-    {
-      std::lock_guard<std::mutex> lock(state->foreground_mutex);
-      MoveDueForegroundTasksLocked(state);
-      RefreshForegroundTimerLocked(state);
-      batch.swap(state->foreground_tasks);
+  std::deque<PlatformTask> batch;
+  std::vector<DelayedPlatformTask> delayed_batch;
+  {
+    std::lock_guard<std::mutex> lock(state->foreground_mutex);
+    batch.swap(state->foreground_tasks);
+    while (!state->delayed_foreground_tasks.empty()) {
+      delayed_batch.push_back(
+          std::move(const_cast<DelayedPlatformTask&>(state->delayed_foreground_tasks.top())));
+      state->delayed_foreground_tasks.pop();
     }
-    if (batch.empty()) break;
+  }
 
-    while (!batch.empty()) {
-      PlatformTask task = std::move(batch.front());
-      batch.pop_front();
-      if (task.callback == nullptr) {
-        CleanupTask(state->env, &task);
-        continue;
-      }
-      task.callback(state->env, task.data);
-      ++ran;
+  for (auto& delayed : delayed_batch) {
+    if (!ScheduleForegroundTaskTimer(state, std::move(delayed.task), delayed.due)) {
+      continue;
+    }
+  }
+
+  while (!batch.empty()) {
+    PlatformTask task = std::move(batch.front());
+    batch.pop_front();
+    if (task.callback == nullptr) {
       CleanupTask(state->env, &task);
-
-      if (HasPendingException(state->env)) {
-        bool handled = false;
-        (void)EdgeHandlePendingExceptionNow(state->env, &handled);
-        if (HasPendingException(state->env)) {
-          state->draining_foreground = false;
-          if (status_out != nullptr) *status_out = napi_pending_exception;
-          if (ran_out != nullptr) *ran_out = ran;
-          return ran;
-        }
-      }
+      continue;
     }
+    task.callback(state->env, task.data);
+    ++ran;
+    CleanupTask(state->env, &task);
 
-    if (run_checkpoint) {
-      napi_status checkpoint_status = EdgeRunCallbackScopeCheckpoint(state->env);
-      if (checkpoint_status != napi_ok) {
+    if (HasPendingException(state->env)) {
+      bool handled = false;
+      (void)EdgeHandlePendingExceptionNow(state->env, &handled);
+      if (HasPendingException(state->env)) {
         state->draining_foreground = false;
-        if (status_out != nullptr) *status_out = checkpoint_status;
+        if (status_out != nullptr) *status_out = napi_pending_exception;
         if (ran_out != nullptr) *ran_out = ran;
         return ran;
       }
     }
   }
+
+  (void)run_checkpoint;
 
   state->draining_foreground = false;
   if (ran_out != nullptr) *ran_out = ran;
@@ -307,17 +379,9 @@ bool EnsureForegroundHandles(PlatformTaskState* state) {
                       }) != 0) {
       return false;
     }
+    uv_unref(reinterpret_cast<uv_handle_t*>(&state->foreground_async));
     state->foreground_async_initialized = true;
     RefreshForegroundAsyncRef(state);
-  }
-
-  if (!state->foreground_timer_initialized) {
-    state->foreground_timer.data = state;
-    if (uv_timer_init(loop, &state->foreground_timer) != 0) {
-      return false;
-    }
-    uv_unref(reinterpret_cast<uv_handle_t*>(&state->foreground_timer));
-    state->foreground_timer_initialized = true;
   }
 
   return true;
@@ -369,19 +433,17 @@ void OnPlatformEnvCleanup(void* arg) {
       CleanupTask(env, &delayed.task);
     }
   }
-  state->refed_immediate_count = 0;
-
-  if (state->foreground_timer_initialized) {
-    uv_timer_stop(&state->foreground_timer);
-    state->foreground_timer_armed = false;
+  std::vector<ScheduledForegroundTask*> scheduled_tasks = std::move(state->scheduled_foreground_tasks);
+  state->scheduled_foreground_tasks.clear();
+  for (ScheduledForegroundTask* scheduled : scheduled_tasks) {
+    CloseScheduledForegroundTask(scheduled);
   }
+  state->refed_immediate_count = 0;
+  state->env = nullptr;
 
   CloseHandleIfInitialized(state,
                            reinterpret_cast<uv_handle_t*>(&state->foreground_async),
                            &state->foreground_async_initialized);
-  CloseHandleIfInitialized(state,
-                           reinterpret_cast<uv_handle_t*>(&state->foreground_timer),
-                           &state->foreground_timer_initialized);
 
   MaybeDestroyState(state);
 }
@@ -407,6 +469,20 @@ napi_status EnqueueForegroundTaskFromEngine(void* target,
   task.callback = callback;
   task.cleanup = cleanup;
   task.data = data;
+
+  if (delay_millis != 0 && state->owning_thread == std::this_thread::get_id()) {
+    AssertOwningThread(state, "EnqueueForegroundTaskFromEngine.delay");
+    if (state->cleanup_started.load(std::memory_order_acquire)) {
+      CleanupTask(state->env, &task);
+      return napi_generic_failure;
+    }
+    return ScheduleForegroundTaskTimer(
+               state,
+               std::move(task),
+               Clock::now() + std::chrono::milliseconds(delay_millis)) ?
+           napi_ok :
+           napi_generic_failure;
+  }
 
   bool should_signal = false;
   int signal_rc = 0;
@@ -614,11 +690,4 @@ napi_status EdgeRuntimePlatformDrainTasks(napi_env env) {
 void EdgeRunRuntimePlatformEnvCleanup(napi_env env) {
   if (env == nullptr) return;
   OnPlatformEnvCleanup(env);
-  uv_loop_t* loop = EdgeGetExistingEnvLoop(env);
-  PlatformTaskState* state = GetState(env);
-  for (size_t guard = 0; loop != nullptr && state != nullptr && state->pending_handle_closes != 0 && guard < 1024;
-       ++guard) {
-    (void)uv_run(loop, UV_RUN_NOWAIT);
-    state = GetState(env);
-  }
 }

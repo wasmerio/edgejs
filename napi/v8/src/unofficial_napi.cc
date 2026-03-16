@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <ctime>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -18,7 +20,19 @@
 #include <vector>
 
 #include <libplatform/libplatform.h>
+#include <v8.h>
 #include <v8-profiler.h>
+
+extern "C" uint64_t uv_get_total_memory(void);
+extern "C" uint64_t uv_get_constrained_memory(void);
+struct uv_loop_s;
+using uv_loop_t = struct uv_loop_s;
+enum uv_run_mode {
+  UV_RUN_DEFAULT = 0,
+  UV_RUN_ONCE,
+  UV_RUN_NOWAIT
+};
+extern "C" int uv_run(uv_loop_t* loop, uv_run_mode mode);
 
 #include "internal/node_v8_default_flags.h"
 #include "internal/napi_v8_env.h"
@@ -37,15 +51,17 @@ class TrackingArrayBufferAllocator;
 
 struct UnofficialEnvScope {
   v8::Isolate* isolate = nullptr;
-  TrackingArrayBufferAllocator* allocator = nullptr;
+  std::shared_ptr<TrackingArrayBufferAllocator> allocator;
   std::optional<v8::Isolate::Scope> isolate_scope;
   std::optional<v8::HandleScope> handle_scope;
   std::optional<v8::Global<v8::Context>> context;
   std::optional<v8::Context::Scope> context_scope;
   napi_env env = nullptr;
 
-  explicit UnofficialEnvScope(v8::Isolate* isolate_in, TrackingArrayBufferAllocator* allocator_in)
-      : isolate(isolate_in), allocator(allocator_in) {
+  explicit UnofficialEnvScope(
+      v8::Isolate* isolate_in,
+      std::shared_ptr<TrackingArrayBufferAllocator> allocator_in)
+      : isolate(isolate_in), allocator(std::move(allocator_in)) {
     isolate_scope.emplace(isolate_in);
     handle_scope.emplace(isolate_in);
   }
@@ -77,7 +93,8 @@ std::unordered_map<v8::Isolate*, uint64_t> g_hash_seeds;
 std::unordered_map<v8::Isolate*, v8::Global<v8::Function>> g_promise_reject_callbacks;
 std::unordered_map<v8::Isolate*, std::array<v8::Global<v8::Function>, 4>> g_promise_hooks;
 std::unordered_map<napi_env, PrepareStackTraceState> g_prepare_stack_trace_callbacks;
-std::unordered_map<v8::ArrayBuffer::Allocator*, void*> g_tracking_allocators;
+std::unordered_map<v8::ArrayBuffer::Allocator*, std::shared_ptr<TrackingArrayBufferAllocator>>
+    g_tracking_allocators;
 
 struct FatalErrorCallbacks {
   unofficial_napi_fatal_error_callback fatal = nullptr;
@@ -441,6 +458,87 @@ class TrackingArrayBufferAllocator final : public v8::ArrayBuffer::Allocator {
   v8::ArrayBuffer::Allocator* backing_ = nullptr;
   std::atomic<uint64_t> total_mem_usage_ {0};
 };
+
+void ApplyNodeIsolateCreateParams(v8::Isolate::CreateParams* params) {
+  if (params == nullptr) return;
+
+  const uint64_t constrained_memory = uv_get_constrained_memory();
+  const uint64_t total_memory =
+      constrained_memory > 0
+          ? std::min<uint64_t>(uv_get_total_memory(), constrained_memory)
+          : uv_get_total_memory();
+  if (total_memory > 0 &&
+      params->constraints.max_old_generation_size_in_bytes() == 0) {
+    params->constraints.ConfigureDefaults(total_memory, 0);
+  }
+}
+
+v8::IsolateGroup GetOrCreateIsolateGroup() {
+  if (v8::IsolateGroup::CanCreateNewGroups()) {
+    return v8::IsolateGroup::Create();
+  }
+  return v8::IsolateGroup::GetDefault();
+}
+
+v8::Isolate* CreateIsolateForEnv(EdgeV8Platform* platform,
+                                 const v8::Isolate::CreateParams& params) {
+  v8::Isolate* isolate = v8::Isolate::Allocate(GetOrCreateIsolateGroup());
+  if (isolate == nullptr) return nullptr;
+  if (platform != nullptr && !platform->RegisterIsolate(isolate)) {
+    isolate->Dispose();
+    return nullptr;
+  }
+  v8::Isolate::Initialize(isolate, params);
+  return isolate;
+}
+
+struct PlatformShutdownWaiter {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool finished = false;
+};
+
+void OnPlatformShutdownFinished(void* data) {
+  auto* waiter = static_cast<PlatformShutdownWaiter*>(data);
+  if (waiter == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(waiter->mutex);
+    waiter->finished = true;
+  }
+  waiter->cv.notify_all();
+}
+
+void WaitForPlatformShutdown(PlatformShutdownWaiter* waiter,
+                             uv_loop_t* loop) {
+  if (waiter == nullptr) return;
+  std::unique_lock<std::mutex> lock(waiter->mutex);
+  while (!waiter->finished) {
+    if (loop != nullptr) {
+      lock.unlock();
+      (void)uv_run(loop, UV_RUN_ONCE);
+      lock.lock();
+      continue;
+    }
+    waiter->cv.wait_for(lock, std::chrono::milliseconds(1));
+  }
+}
+
+void DisposeIsolateAndWait(EdgeV8Platform* platform,
+                           v8::Isolate* isolate,
+                           uv_loop_t* loop = nullptr) {
+  if (isolate == nullptr) return;
+
+  PlatformShutdownWaiter waiter;
+  if (platform != nullptr) {
+    platform->AddIsolateFinishedCallback(
+        isolate, OnPlatformShutdownFinished, &waiter);
+    platform->DisposeIsolate(isolate);
+  } else {
+    waiter.finished = true;
+    isolate->Dispose();
+  }
+  WaitForPlatformShutdown(&waiter, loop);
+}
 
 void ApplyDefaultV8Flags() {
   v8::V8::SetFlagsFromString(
@@ -1259,9 +1357,164 @@ class StructuredCloneDeserializerDelegate final : public v8::ValueDeserializer::
 
 struct SerializedClonePayload {
   std::vector<uint8_t> bytes;
+  std::vector<std::shared_ptr<v8::BackingStore>> array_buffers;
   std::vector<std::shared_ptr<v8::BackingStore>> shared_array_buffers;
   std::vector<v8::CompiledWasmModule> wasm_modules;
 };
+
+void ThrowCloneTransferError(v8::Isolate* isolate, const char* message) {
+  v8::Local<v8::String> text =
+      v8::String::NewFromUtf8(isolate, message, v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  isolate->ThrowException(
+      v8::Exception::Error(text));
+}
+
+napi_status CollectTransferArrayBuffers(
+    napi_env env,
+    v8::Local<v8::Context> context,
+    v8::ValueSerializer* serializer,
+    napi_value transfer_list,
+    std::vector<v8::Local<v8::ArrayBuffer>>* out) {
+  if (transfer_list == nullptr) return napi_ok;
+  if (env == nullptr || serializer == nullptr || out == nullptr) return napi_invalid_arg;
+
+  v8::Isolate* isolate = env->isolate;
+  v8::Local<v8::Value> transfer_value = napi_v8_unwrap_value(transfer_list);
+  if (!transfer_value->IsArray()) return napi_invalid_arg;
+
+  v8::Local<v8::Array> array = transfer_value.As<v8::Array>();
+  for (uint32_t i = 0; i < array->Length(); ++i) {
+    v8::Local<v8::Value> entry;
+    if (!array->Get(context, i).ToLocal(&entry)) {
+      return napi_pending_exception;
+    }
+    if (!entry->IsArrayBuffer()) {
+      ThrowCloneTransferError(isolate, "Only ArrayBuffer instances can be transferred");
+      return napi_pending_exception;
+    }
+    v8::Local<v8::ArrayBuffer> array_buffer = entry.As<v8::ArrayBuffer>();
+    if (!array_buffer->IsDetachable() || array_buffer->WasDetached()) {
+      ThrowCloneTransferError(isolate, "An ArrayBuffer is detached and could not be cloned.");
+      return napi_pending_exception;
+    }
+    if (std::find(out->begin(), out->end(), array_buffer) != out->end()) {
+      ThrowCloneTransferError(isolate, "Transfer list contains duplicate ArrayBuffer");
+      return napi_pending_exception;
+    }
+    serializer->TransferArrayBuffer(static_cast<uint32_t>(out->size()), array_buffer);
+    out->push_back(array_buffer);
+  }
+
+  return napi_ok;
+}
+
+napi_status DetachTransferredArrayBuffers(
+    const std::vector<v8::Local<v8::ArrayBuffer>>& array_buffers,
+    std::vector<std::shared_ptr<v8::BackingStore>>* out) {
+  if (out == nullptr) return napi_invalid_arg;
+  out->clear();
+  out->reserve(array_buffers.size());
+  for (v8::Local<v8::ArrayBuffer> array_buffer : array_buffers) {
+    std::shared_ptr<v8::BackingStore> backing_store = array_buffer->GetBackingStore();
+    if (array_buffer->Detach(v8::Local<v8::Value>()).IsNothing()) {
+      return napi_pending_exception;
+    }
+    out->push_back(std::move(backing_store));
+  }
+  return napi_ok;
+}
+
+napi_status DeserializeTransferredClone(
+    napi_env env,
+    const std::vector<uint8_t>& bytes,
+    const std::vector<std::shared_ptr<v8::BackingStore>>& array_buffers,
+    const std::vector<std::shared_ptr<v8::BackingStore>>& shared_array_buffers,
+    const std::vector<v8::CompiledWasmModule>& wasm_modules,
+    napi_value* result_out) {
+  if (env == nullptr || env->isolate == nullptr || result_out == nullptr) {
+    return napi_invalid_arg;
+  }
+
+  v8::Isolate* isolate = env->isolate;
+  v8::Local<v8::Context> context = env->context();
+  StructuredCloneDeserializerDelegate deserializer_delegate(
+      isolate, shared_array_buffers, wasm_modules);
+  v8::ValueDeserializer deserializer(
+      isolate,
+      bytes.data(),
+      bytes.size(),
+      &deserializer_delegate);
+
+  for (uint32_t i = 0; i < array_buffers.size(); ++i) {
+    v8::Local<v8::ArrayBuffer> array_buffer =
+        v8::ArrayBuffer::New(isolate, array_buffers[i]);
+    deserializer.TransferArrayBuffer(i, array_buffer);
+  }
+
+  bool header_ok = false;
+  if (!deserializer.ReadHeader(context).To(&header_ok) || !header_ok) {
+    return isolate->IsExecutionTerminating() ? napi_pending_exception : napi_pending_exception;
+  }
+
+  v8::Local<v8::Value> output;
+  if (!deserializer.ReadValue(context).ToLocal(&output)) {
+    return isolate->IsExecutionTerminating() ? napi_pending_exception : napi_pending_exception;
+  }
+
+  *result_out = napi_v8_wrap_value(env, output);
+  return *result_out == nullptr ? napi_generic_failure : napi_ok;
+}
+
+napi_status StructuredCloneImpl(
+    napi_env env,
+    napi_value value,
+    napi_value transfer_list,
+    napi_value* result_out) {
+  if (env == nullptr || env->isolate == nullptr || value == nullptr || result_out == nullptr) {
+    return napi_invalid_arg;
+  }
+
+  v8::Isolate* isolate = env->isolate;
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context = env->context();
+  v8::Context::Scope context_scope(context);
+
+  v8::Local<v8::Value> input = napi_v8_unwrap_value(value);
+  StructuredCloneSerializerDelegate serializer_delegate(isolate);
+  v8::ValueSerializer serializer(isolate, &serializer_delegate);
+
+  std::vector<v8::Local<v8::ArrayBuffer>> array_buffers;
+  napi_status transfer_status =
+      CollectTransferArrayBuffers(env, context, &serializer, transfer_list, &array_buffers);
+  if (transfer_status != napi_ok) {
+    return transfer_status;
+  }
+
+  serializer.WriteHeader();
+  if (serializer.WriteValue(context, input).IsNothing()) {
+    return isolate->IsExecutionTerminating() ? napi_pending_exception : napi_pending_exception;
+  }
+
+  std::vector<std::shared_ptr<v8::BackingStore>> transferred_array_buffers;
+  transfer_status = DetachTransferredArrayBuffers(array_buffers, &transferred_array_buffers);
+  if (transfer_status != napi_ok) {
+    return transfer_status;
+  }
+
+  std::pair<uint8_t*, size_t> released = serializer.Release();
+  if (released.first == nullptr) return napi_generic_failure;
+  std::unique_ptr<uint8_t, decltype(&std::free)> buffer(released.first, &std::free);
+
+  std::vector<uint8_t> bytes(buffer.get(), buffer.get() + released.second);
+  return DeserializeTransferredClone(
+      env,
+      bytes,
+      transferred_array_buffers,
+      serializer_delegate.shared_array_buffers(),
+      serializer_delegate.wasm_modules(),
+      result_out);
+}
 
 }  // namespace
 
@@ -1475,14 +1728,14 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
   napi_status status = AcquireRuntime(&platform);
   if (status != napi_ok || platform == nullptr) return status != napi_ok ? status : napi_generic_failure;
 
-  auto* allocator = new (std::nothrow) TrackingArrayBufferAllocator();
-  if (allocator == nullptr) {
+  auto allocator = std::make_shared<TrackingArrayBufferAllocator>();
+  if (!allocator) {
     ReleaseRuntime();
     return napi_generic_failure;
   }
 
   v8::Isolate::CreateParams params{};
-  params.array_buffer_allocator = allocator;
+  params.array_buffer_allocator_shared = allocator;
   if (options != nullptr) {
     if (options->max_young_generation_size_in_bytes > 0) {
       params.constraints.set_max_young_generation_size_in_bytes(
@@ -1501,33 +1754,25 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
           static_cast<uint32_t*>(options->stack_limit));
     }
   }
-  v8::Isolate* isolate = v8::Isolate::New(params);
+  ApplyNodeIsolateCreateParams(&params);
+  v8::Isolate* isolate = CreateIsolateForEnv(platform, params);
   if (isolate == nullptr) {
-    delete allocator;
-    ReleaseRuntime();
-    return napi_generic_failure;
-  }
-  if (!platform->RegisterIsolate(isolate)) {
-    isolate->Dispose();
-    delete allocator;
     ReleaseRuntime();
     return napi_generic_failure;
   }
   {
     std::lock_guard<std::mutex> lock(g_runtime_mu);
     g_hash_seeds[isolate] = GenerateHashSeed();
-    g_tracking_allocators[allocator] = allocator;
+    g_tracking_allocators[allocator.get()] = allocator;
   }
 
   auto* scope = new (std::nothrow) UnofficialEnvScope(isolate, allocator);
   if (scope == nullptr) {
-    isolate->Dispose();
+    DisposeIsolateAndWait(platform, isolate);
     {
       std::lock_guard<std::mutex> lock(g_runtime_mu);
-      g_tracking_allocators.erase(allocator);
-      platform->UnregisterIsolate(isolate);
+      g_tracking_allocators.erase(allocator.get());
     }
-    delete allocator;
     ReleaseRuntime();
     return napi_generic_failure;
   }
@@ -1538,13 +1783,11 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
   status = unofficial_napi_create_env_from_context(context, module_api_version, &scope->env);
   if (status != napi_ok || scope->env == nullptr) {
     delete scope;
-    isolate->Dispose();
+    DisposeIsolateAndWait(platform, isolate);
     {
       std::lock_guard<std::mutex> lock(g_runtime_mu);
-      g_tracking_allocators.erase(allocator);
-      platform->UnregisterIsolate(isolate);
+      g_tracking_allocators.erase(allocator.get());
     }
-    delete allocator;
     ReleaseRuntime();
     return (status == napi_ok) ? napi_generic_failure : status;
   }
@@ -1554,7 +1797,7 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
   return napi_ok;
 }
 
-napi_status NAPI_CDECL unofficial_napi_release_env(void* scope_ptr) {
+napi_status ReleaseEnvScope(void* scope_ptr, uv_loop_t* loop) {
   if (scope_ptr == nullptr) return napi_invalid_arg;
   auto* scope = static_cast<UnofficialEnvScope*>(scope_ptr);
 
@@ -1565,24 +1808,40 @@ napi_status NAPI_CDECL unofficial_napi_release_env(void* scope_ptr) {
   }
 
   v8::Isolate* isolate = scope->isolate;
-  TrackingArrayBufferAllocator* allocator = scope->allocator;
+  std::shared_ptr<TrackingArrayBufferAllocator> allocator = scope->allocator;
   delete scope;
 
   if (isolate != nullptr) {
-    isolate->Dispose();
-  }
-  {
-    std::lock_guard<std::mutex> lock(g_runtime_mu);
-    if (g_runtime.platform != nullptr && isolate != nullptr) {
-      g_runtime.platform->UnregisterIsolate(isolate);
+    EdgeV8Platform* platform = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(g_runtime_mu);
+      platform = g_runtime.platform.get();
     }
-    if (allocator != nullptr) {
-      g_tracking_allocators.erase(allocator);
+    DisposeIsolateAndWait(platform, isolate, loop);
+  }
+  if (allocator != nullptr) {
+    {
+      std::lock_guard<std::mutex> lock(g_runtime_mu);
+      g_tracking_allocators.erase(allocator.get());
     }
   }
-  delete allocator;
   ReleaseRuntime();
   return status;
+}
+
+napi_status NAPI_CDECL unofficial_napi_release_env(void* scope_ptr) {
+  return ReleaseEnvScope(scope_ptr, nullptr);
+}
+
+napi_status NAPI_CDECL unofficial_napi_release_env_with_loop(void* scope_ptr,
+                                                             uv_loop_t* loop) {
+  return ReleaseEnvScope(scope_ptr, loop);
+}
+
+napi_status NAPI_CDECL unofficial_napi_low_memory_notification(napi_env env) {
+  if (env == nullptr || env->isolate == nullptr) return napi_invalid_arg;
+  env->isolate->LowMemoryNotification();
+  return napi_ok;
 }
 
 napi_status NAPI_CDECL unofficial_napi_set_flags_from_string(
@@ -1730,48 +1989,15 @@ napi_status NAPI_CDECL unofficial_napi_structured_clone(
     napi_env env,
     napi_value value,
     napi_value* result_out) {
-  if (env == nullptr || env->isolate == nullptr || value == nullptr || result_out == nullptr) {
-    return napi_invalid_arg;
-  }
+  return StructuredCloneImpl(env, value, nullptr, result_out);
+}
 
-  v8::Isolate* isolate = env->isolate;
-  v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Context> context = env->context();
-  v8::Context::Scope context_scope(context);
-
-  v8::Local<v8::Value> input = napi_v8_unwrap_value(value);
-  StructuredCloneSerializerDelegate serializer_delegate(isolate);
-  v8::ValueSerializer serializer(isolate, &serializer_delegate);
-
-  serializer.WriteHeader();
-  if (serializer.WriteValue(context, input).IsNothing()) {
-    return isolate->IsExecutionTerminating() ? napi_pending_exception : napi_pending_exception;
-  }
-
-  std::pair<uint8_t*, size_t> released = serializer.Release();
-  if (released.first == nullptr) return napi_generic_failure;
-  std::unique_ptr<uint8_t, decltype(&std::free)> buffer(released.first, &std::free);
-
-  StructuredCloneDeserializerDelegate deserializer_delegate(
-      isolate, serializer_delegate.shared_array_buffers(), serializer_delegate.wasm_modules());
-  v8::ValueDeserializer deserializer(
-      isolate,
-      buffer.get(),
-      released.second,
-      &deserializer_delegate);
-
-  bool header_ok = false;
-  if (!deserializer.ReadHeader(context).To(&header_ok) || !header_ok) {
-    return isolate->IsExecutionTerminating() ? napi_pending_exception : napi_pending_exception;
-  }
-
-  v8::Local<v8::Value> output;
-  if (!deserializer.ReadValue(context).ToLocal(&output)) {
-    return isolate->IsExecutionTerminating() ? napi_pending_exception : napi_pending_exception;
-  }
-
-  *result_out = napi_v8_wrap_value(env, output);
-  return *result_out == nullptr ? napi_generic_failure : napi_ok;
+napi_status NAPI_CDECL unofficial_napi_structured_clone_with_transfer(
+    napi_env env,
+    napi_value value,
+    napi_value transfer_list,
+    napi_value* result_out) {
+  return StructuredCloneImpl(env, value, transfer_list, result_out);
 }
 
 napi_status NAPI_CDECL unofficial_napi_serialize_value(
@@ -1835,6 +2061,12 @@ napi_status NAPI_CDECL unofficial_napi_deserialize_value(
       payload->bytes.data(),
       payload->bytes.size(),
       &deserializer_delegate);
+
+  for (uint32_t i = 0; i < payload->array_buffers.size(); ++i) {
+    v8::Local<v8::ArrayBuffer> array_buffer =
+        v8::ArrayBuffer::New(isolate, payload->array_buffers[i]);
+    deserializer.TransferArrayBuffer(i, array_buffer);
+  }
 
   bool header_ok = false;
   if (!deserializer.ReadHeader(context).To(&header_ok) || !header_ok) {
@@ -2275,9 +2507,8 @@ napi_status NAPI_CDECL unofficial_napi_get_process_memory_info(
   {
     std::lock_guard<std::mutex> lock(g_runtime_mu);
     auto it = g_tracking_allocators.find(env->isolate->GetArrayBufferAllocator());
-    if (it != g_tracking_allocators.end() && it->second != nullptr) {
-      auto* allocator = static_cast<TrackingArrayBufferAllocator*>(it->second);
-      array_buffers = allocator->total_mem_usage();
+    if (it != g_tracking_allocators.end() && it->second) {
+      array_buffers = it->second->total_mem_usage();
     }
   }
 

@@ -1431,7 +1431,6 @@ void Http2StreamFinalize(napi_env env, void* data, void* /*hint*/) {
   DeleteRefIfPresent(env, &wrap->shutdown_req_ref);
   DeleteRefIfPresent(env, &wrap->active_ref);
   DeleteRefIfPresent(env, &wrap->onread_ref);
-  DeleteRefIfPresent(env, &wrap->wrapper_ref);
   delete wrap;
 }
 
@@ -1910,12 +1909,18 @@ napi_value DeferredFlushSessionOutputCallback(napi_env env, napi_callback_info i
   size_t argc = 0;
   napi_get_cb_info(env, info, &argc, nullptr, &self, &data);
   auto* session = static_cast<Http2SessionWrap*>(data);
-  if (session == nullptr || env == nullptr || session->env != env || session->destroyed ||
-      session->parent_write_in_progress || !session->write_scheduled) {
+  if (session == nullptr || env == nullptr) {
     return Undefined(env);
   }
-  session->write_scheduled = false;
-  (void)FlushSessionOutput(session);
+  if (session->env == env && !session->destroyed &&
+      !session->parent_write_in_progress && session->write_scheduled) {
+    session->write_scheduled = false;
+    (void)FlushSessionOutput(session);
+  }
+  if (session->wrapper_ref != nullptr) {
+    uint32_t ignored = 0;
+    (void)napi_reference_unref(env, session->wrapper_ref, &ignored);
+  }
   return Undefined(env);
 }
 
@@ -1933,6 +1938,13 @@ void MaybeScheduleSessionFlush(Http2SessionWrap* session) {
 
 void ScheduleSessionFlush(Http2SessionWrap* session) {
   if (session == nullptr || session->env == nullptr) return;
+  bool wrapper_refed = false;
+  if (session->wrapper_ref != nullptr) {
+    uint32_t ignored = 0;
+    if (napi_reference_ref(session->env, session->wrapper_ref, &ignored) == napi_ok) {
+      wrapper_refed = true;
+    }
+  }
   napi_value global = GetGlobal(session->env);
   napi_value set_immediate = nullptr;
   napi_valuetype set_immediate_type = napi_undefined;
@@ -1942,6 +1954,10 @@ void ScheduleSessionFlush(Http2SessionWrap* session) {
       napi_typeof(session->env, set_immediate, &set_immediate_type) != napi_ok ||
       set_immediate_type != napi_function) {
     session->write_scheduled = false;
+    if (wrapper_refed && session->wrapper_ref != nullptr) {
+      uint32_t ignored = 0;
+      (void)napi_reference_unref(session->env, session->wrapper_ref, &ignored);
+    }
     (void)FlushSessionOutput(session);
     return;
   }
@@ -1955,6 +1971,10 @@ void ScheduleSessionFlush(Http2SessionWrap* session) {
                            &callback) != napi_ok ||
       callback == nullptr) {
     session->write_scheduled = false;
+    if (wrapper_refed && session->wrapper_ref != nullptr) {
+      uint32_t ignored = 0;
+      (void)napi_reference_unref(session->env, session->wrapper_ref, &ignored);
+    }
     (void)FlushSessionOutput(session);
     return;
   }
@@ -1963,17 +1983,16 @@ void ScheduleSessionFlush(Http2SessionWrap* session) {
   napi_value ignored = nullptr;
   if (napi_call_function(session->env, global, set_immediate, 1, argv, &ignored) != napi_ok) {
     session->write_scheduled = false;
+    if (wrapper_refed && session->wrapper_ref != nullptr) {
+      uint32_t ref_ignored = 0;
+      (void)napi_reference_unref(session->env, session->wrapper_ref, &ref_ignored);
+    }
     (void)FlushSessionOutput(session);
   }
 }
 
-napi_value DeferredDestroyStreamCallback(napi_env env, napi_callback_info info) {
-  napi_value self = nullptr;
-  size_t argc = 0;
-  void* data = nullptr;
-  napi_get_cb_info(env, info, &argc, nullptr, &self, &data);
-  auto* stream = static_cast<Http2StreamWrap*>(data);
-  if (stream == nullptr) return Undefined(env);
+void RunDeferredStreamDestroy(Http2StreamWrap* stream) {
+  if (stream == nullptr) return;
   stream->destroy_scheduled = false;
   while (!stream->outbound_chunks.empty()) {
     OutboundChunk chunk = std::move(stream->outbound_chunks.front());
@@ -1984,12 +2003,33 @@ napi_value DeferredDestroyStreamCallback(napi_env env, napi_callback_info info) 
   CompleteStreamReq(stream, &stream->shutdown_req_ref, UV_ECANCELED, true);
   if (stream->session != nullptr) RemoveStreamFromSession(stream);
   EdgeStreamBaseOnClosed(&stream->base);
+}
+
+napi_value DeferredDestroyStreamCallback(napi_env env, napi_callback_info info) {
+  napi_value self = nullptr;
+  size_t argc = 0;
+  void* data = nullptr;
+  napi_get_cb_info(env, info, &argc, nullptr, &self, &data);
+  auto* stream = static_cast<Http2StreamWrap*>(data);
+  if (stream == nullptr) return Undefined(env);
+  RunDeferredStreamDestroy(stream);
+  if (stream->wrapper_ref != nullptr) {
+    uint32_t ignored = 0;
+    (void)napi_reference_unref(env, stream->wrapper_ref, &ignored);
+  }
   return Undefined(env);
 }
 
 void ScheduleDeferredStreamDestroy(Http2StreamWrap* stream) {
   if (stream == nullptr || stream->env == nullptr || stream->destroy_scheduled) return;
   stream->destroy_scheduled = true;
+  bool wrapper_refed = false;
+  if (stream->wrapper_ref != nullptr) {
+    uint32_t ignored = 0;
+    if (napi_reference_ref(stream->env, stream->wrapper_ref, &ignored) == napi_ok) {
+      wrapper_refed = true;
+    }
+  }
   napi_value callback = nullptr;
   if (napi_create_function(stream->env,
                            "__ubiHttp2DeferredDestroyStream",
@@ -1999,6 +2039,10 @@ void ScheduleDeferredStreamDestroy(Http2StreamWrap* stream) {
                            &callback) != napi_ok ||
       callback == nullptr) {
     stream->destroy_scheduled = false;
+    if (wrapper_refed && stream->wrapper_ref != nullptr) {
+      uint32_t ignored = 0;
+      (void)napi_reference_unref(stream->env, stream->wrapper_ref, &ignored);
+    }
     return;
   }
   napi_value global = GetGlobal(stream->env);
@@ -2010,11 +2054,22 @@ void ScheduleDeferredStreamDestroy(Http2StreamWrap* stream) {
       napi_typeof(stream->env, set_immediate, &set_immediate_type) != napi_ok ||
       set_immediate_type != napi_function) {
     stream->destroy_scheduled = false;
+    if (wrapper_refed && stream->wrapper_ref != nullptr) {
+      uint32_t ignored = 0;
+      (void)napi_reference_unref(stream->env, stream->wrapper_ref, &ignored);
+    }
     return;
   }
   napi_value argv[1] = {callback};
   napi_value ignored = nullptr;
-  (void)napi_call_function(stream->env, global, set_immediate, 1, argv, &ignored);
+  if (napi_call_function(stream->env, global, set_immediate, 1, argv, &ignored) != napi_ok) {
+    stream->destroy_scheduled = false;
+    RunDeferredStreamDestroy(stream);
+    if (wrapper_refed && stream->wrapper_ref != nullptr) {
+      uint32_t ref_ignored = 0;
+      (void)napi_reference_unref(stream->env, stream->wrapper_ref, &ref_ignored);
+    }
+  }
 }
 
 void DestroyStreamHandle(Http2StreamWrap* stream) {

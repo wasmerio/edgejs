@@ -14,6 +14,7 @@
 #include <signal.h>
 #endif
 
+#include "edge_environment.h"
 #include "internal_binding/helpers.h"
 #include "unofficial_napi.h"
 
@@ -178,7 +179,13 @@ bool InformWatchdogsAboutSignal() {
     if (wrap == nullptr || !wrap->started.load()) continue;
     bool expected = false;
     if (!wrap->interrupt_requested.compare_exchange_strong(expected, true)) continue;
-    if (unofficial_napi_request_interrupt(wrap->env, HandleWatchdogInterrupt, wrap) != napi_ok) {
+    napi_status status = napi_generic_failure;
+    if (auto* environment = EdgeEnvironmentGet(wrap->env); environment != nullptr) {
+      status = environment->RequestInterrupt(HandleWatchdogInterrupt, wrap);
+    } else {
+      status = unofficial_napi_request_interrupt(wrap->env, HandleWatchdogInterrupt, wrap);
+    }
+    if (status != napi_ok) {
       wrap->interrupt_requested.store(false);
     }
   }

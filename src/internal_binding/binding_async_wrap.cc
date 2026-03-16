@@ -159,13 +159,12 @@ void QueueDestroyHookForAsyncId(napi_env env, double async_id) {
 void DestroyHookFinalizer(napi_env env, void* data, void* /*hint*/) {
   auto* hook = static_cast<DestroyHookData*>(data);
   if (hook == nullptr) return;
-  napi_env cb_env = env != nullptr ? env : hook->env;
-  if (cb_env != nullptr) {
-    if (!IsDestroyHookAlreadyHandled(cb_env, hook->destroyed_ref)) {
-      EmitDestroyHookForAsyncId(cb_env, hook->async_id);
+  if (env != nullptr) {
+    if (!IsDestroyHookAlreadyHandled(env, hook->destroyed_ref)) {
+      QueueDestroyHookForAsyncId(env, hook->async_id);
     }
     if (hook->destroyed_ref != nullptr) {
-      napi_delete_reference(cb_env, hook->destroyed_ref);
+      napi_delete_reference(env, hook->destroyed_ref);
       hook->destroyed_ref = nullptr;
     }
   }

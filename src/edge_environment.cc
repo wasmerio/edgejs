@@ -247,9 +247,9 @@ Environment::Environment(napi_env env) : env_(env) {
 
 Environment::~Environment() {
   ResetTrackedRefs();
-  CleanupActiveRegistryEntries();
   CloseTrackedUnmanagedFds();
   CloseAndDestroyEventLoop();
+  CleanupActiveRegistryEntries();
   RunSlotDeleters(&slots_);
 }
 
@@ -278,6 +278,9 @@ void Environment::Configure(const EdgeEnvironmentConfig& config) {
   std::lock_guard<std::mutex> lock(mutex_);
   config_ = config;
   flags_ = DeriveFlags(config);
+  if (loop_ == nullptr && config.external_event_loop != nullptr) {
+    loop_ = config.external_event_loop;
+  }
 }
 
 EdgeEnvironmentConfig Environment::config() const {
@@ -318,6 +321,38 @@ bool Environment::tracks_unmanaged_fds() const {
 bool Environment::stop_requested() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return stop_requested_;
+}
+
+bool Environment::exiting() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return exiting_;
+}
+
+void Environment::set_exiting(bool exiting) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  exiting_ = exiting;
+}
+
+bool Environment::has_exit_code() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return has_exit_code_;
+}
+
+int Environment::exit_code(int default_code) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return has_exit_code_ ? exit_code_ : default_code;
+}
+
+void Environment::set_exit_code(int code) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  has_exit_code_ = true;
+  exit_code_ = code;
+}
+
+void Environment::clear_exit_code() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  has_exit_code_ = false;
+  exit_code_ = 0;
 }
 
 int32_t Environment::thread_id() const {
@@ -448,11 +483,43 @@ uv_loop_t* Environment::GetExistingEventLoop() const {
   return loop_;
 }
 
+uv_loop_t* Environment::ReleaseEventLoop() {
+  uv_loop_t* loop = nullptr;
+  bool wait_for_threadsafe_async_close = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    wait_for_threadsafe_async_close = threadsafe_immediate_async_initialized_;
+    CloseThreadsafeImmediateHandleLocked();
+    loop = loop_;
+    loop_ = nullptr;
+  }
+
+  if (wait_for_threadsafe_async_close && loop != nullptr) {
+    for (size_t guard = 0; guard < 256; ++guard) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (threadsafe_immediate_async_closed_) break;
+      }
+      (void)uv_run(loop, UV_RUN_NOWAIT);
+    }
+  }
+
+  return loop;
+}
+
+void Environment::DestroyReleasedEventLoop(uv_loop_t* loop) {
+  if (loop != nullptr && DrainAndCloseEnvLoop(loop)) {
+    delete loop;
+  }
+}
+
 bool Environment::EnsureThreadsafeImmediateHandleLocked() {
   if (threadsafe_immediate_async_initialized_) return true;
   if (loop_ == nullptr) return false;
   threadsafe_immediate_async_.data = this;
+  threadsafe_immediate_async_closed_ = false;
   if (uv_async_init(loop_, &threadsafe_immediate_async_, OnThreadsafeImmediate) != 0) {
+    threadsafe_immediate_async_closed_ = true;
     return false;
   }
   uv_unref(reinterpret_cast<uv_handle_t*>(&threadsafe_immediate_async_));
@@ -463,25 +530,15 @@ bool Environment::EnsureThreadsafeImmediateHandleLocked() {
 void Environment::CloseThreadsafeImmediateHandleLocked() {
   if (!threadsafe_immediate_async_initialized_) return;
   threadsafe_immediate_async_initialized_ = false;
-  threadsafe_immediate_ref_count_ = 0;
   if (uv_is_closing(reinterpret_cast<uv_handle_t*>(&threadsafe_immediate_async_)) == 0) {
-    uv_close(reinterpret_cast<uv_handle_t*>(&threadsafe_immediate_async_), nullptr);
+    threadsafe_immediate_async_closed_ = false;
+    uv_close(reinterpret_cast<uv_handle_t*>(&threadsafe_immediate_async_),
+             OnThreadsafeImmediateClosed);
   }
 }
 
 void Environment::CloseAndDestroyEventLoop() {
-  uv_loop_t* loop = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    CloseThreadsafeImmediateHandleLocked();
-    loop = loop_;
-    loop_ = nullptr;
-  }
-  if (loop != nullptr) {
-    if (DrainAndCloseEnvLoop(loop)) {
-      delete loop;
-    }
-  }
+  DestroyReleasedEventLoop(ReleaseEventLoop());
 }
 
 void Environment::AddCleanupHook(CleanupHookCallback callback, void* arg) {
@@ -1041,45 +1098,65 @@ napi_status Environment::SetImmediateThreadsafe(ThreadsafeImmediateCallback call
                                                 bool refed) {
   if (callback == nullptr) return napi_invalid_arg;
   if (EnsureEventLoop(nullptr) != napi_ok) return napi_generic_failure;
+  int send_rc = UV_EINVAL;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (cleanup_started_) return napi_generic_failure;
     if (!EnsureThreadsafeImmediateHandleLocked()) return napi_generic_failure;
     threadsafe_immediates_.push_back(ThreadsafeImmediateEntry{callback, data, refed});
-    if (refed) {
-      if (threadsafe_immediate_ref_count_ == 0) {
-        uv_ref(reinterpret_cast<uv_handle_t*>(&threadsafe_immediate_async_));
-      }
-      threadsafe_immediate_ref_count_ += 1;
+    send_rc = uv_async_send(&threadsafe_immediate_async_);
+    if (send_rc != 0) {
+      threadsafe_immediates_.pop_back();
     }
   }
 
-  return uv_async_send(&threadsafe_immediate_async_) == 0 ? napi_ok : napi_generic_failure;
+  return send_rc == 0 ? napi_ok : napi_generic_failure;
 }
 
 napi_status Environment::RequestInterrupt(InterruptCallback callback, void* data) {
   if (callback == nullptr) return napi_invalid_arg;
-  return unofficial_napi_request_interrupt(env_, callback, data);
+  if (EnsureEventLoop(nullptr) != napi_ok) return napi_generic_failure;
+  int send_rc = UV_EINVAL;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (cleanup_started_) return napi_generic_failure;
+    if (!EnsureThreadsafeImmediateHandleLocked()) return napi_generic_failure;
+    interrupts_.push_back(ThreadsafeImmediateEntry{callback, data, true});
+    send_rc = uv_async_send(&threadsafe_immediate_async_);
+    if (send_rc != 0) {
+      interrupts_.pop_back();
+    }
+  }
+
+  if (send_rc != 0) {
+    return napi_generic_failure;
+  }
+
+  return unofficial_napi_request_interrupt(env_, OnInterruptFromV8, this);
+}
+
+size_t Environment::DrainInterrupts() {
+  std::deque<ThreadsafeImmediateEntry> tasks;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tasks.swap(interrupts_);
+  }
+
+  for (const auto& task : tasks) {
+    if (task.callback != nullptr) {
+      task.callback(env_, task.data);
+    }
+  }
+  return tasks.size();
 }
 
 size_t Environment::DrainThreadsafeImmediates() {
   std::deque<ThreadsafeImmediateEntry> tasks;
-  size_t consumed_refed = 0;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     tasks.swap(threadsafe_immediates_);
-    for (const auto& task : tasks) {
-      if (task.refed && threadsafe_immediate_ref_count_ > 0) {
-        consumed_refed += 1;
-      }
-    }
-    if (consumed_refed > 0) {
-      threadsafe_immediate_ref_count_ -= std::min(consumed_refed, threadsafe_immediate_ref_count_);
-      if (threadsafe_immediate_async_initialized_ && threadsafe_immediate_ref_count_ == 0) {
-        uv_unref(reinterpret_cast<uv_handle_t*>(&threadsafe_immediate_async_));
-      }
-    }
   }
 
   for (const auto& task : tasks) {
@@ -1093,7 +1170,21 @@ size_t Environment::DrainThreadsafeImmediates() {
 void Environment::OnThreadsafeImmediate(uv_async_t* handle) {
   auto* env = static_cast<Environment*>(handle != nullptr ? handle->data : nullptr);
   if (env == nullptr) return;
+  (void)env->DrainInterrupts();
   (void)env->DrainThreadsafeImmediates();
+}
+
+void Environment::OnThreadsafeImmediateClosed(uv_handle_t* handle) {
+  auto* env = static_cast<Environment*>(handle != nullptr ? handle->data : nullptr);
+  if (env == nullptr) return;
+  std::lock_guard<std::mutex> lock(env->mutex_);
+  env->threadsafe_immediate_async_closed_ = true;
+}
+
+void Environment::OnInterruptFromV8(napi_env env, void* data) {
+  auto* environment = static_cast<Environment*>(data);
+  if (environment == nullptr || environment->env_ != env) return;
+  (void)environment->DrainInterrupts();
 }
 
 TickInfo* Environment::tick_info() {
@@ -1202,7 +1293,7 @@ void Environment::CleanupActiveRegistryEntries() {
   }
 }
 
-void Environment::RunCleanup() {
+void Environment::RunCleanup(bool close_event_loop) {
   std::vector<CleanupStageEntry> stages;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1229,6 +1320,10 @@ void Environment::RunCleanup() {
     }
     CancelActiveRequests();
     CloseActiveHandles();
+
+    if (DrainInterrupts() > 0) {
+      did_work = true;
+    }
 
     if (DrainThreadsafeImmediates() > 0) {
       did_work = true;
@@ -1266,6 +1361,16 @@ void Environment::RunCleanup() {
     if (uv_loop_t* loop = GetExistingEventLoop(); loop != nullptr) {
       if (uv_run(loop, UV_RUN_NOWAIT) != 0) {
         did_work = true;
+      } else {
+        bool has_pending_registry_entries = false;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          has_pending_registry_entries = !active_requests_.empty() || !active_handles_.empty();
+        }
+        if (has_pending_registry_entries) {
+          (void)uv_run(loop, UV_RUN_ONCE);
+          did_work = true;
+        }
       }
     }
 
@@ -1273,9 +1378,11 @@ void Environment::RunCleanup() {
   }
 
   ResetTrackedRefs();
-  CleanupActiveRegistryEntries();
   CloseTrackedUnmanagedFds();
-  CloseAndDestroyEventLoop();
+  if (close_event_loop) {
+    CloseAndDestroyEventLoop();
+  }
+  CleanupActiveRegistryEntries();
 
   std::unordered_map<size_t, SlotEntry> slots;
   {
@@ -1311,9 +1418,26 @@ bool EdgeEnvironmentGetConfig(napi_env env, EdgeEnvironmentConfig* out) {
   return false;
 }
 
+uv_loop_t* EdgeEnvironmentReleaseEventLoop(napi_env env) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->ReleaseEventLoop();
+  }
+  return nullptr;
+}
+
+void EdgeEnvironmentDestroyReleasedEventLoop(uv_loop_t* loop) {
+  edge::Environment::DestroyReleasedEventLoop(loop);
+}
+
 void EdgeEnvironmentRunCleanup(napi_env env) {
   if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
     environment->RunCleanup();
+  }
+}
+
+void EdgeEnvironmentRunCleanupPreserveLoop(napi_env env) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->RunCleanup(false);
   }
 }
 

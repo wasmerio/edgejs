@@ -46,6 +46,7 @@ struct StreamPipeWrap {
   bool source_listener_attached = false;
   bool sink_listener_attached = false;
   bool onunpipe_scheduled = false;
+  bool lifetime_refed = false;
   uint32_t pending_writes = 0;
   size_t wanted_data = 65536;
 };
@@ -77,6 +78,25 @@ StreamPipeWrap* UnwrapPipe(napi_env env, napi_value value) {
 
 void FreeOwnedBuffer(napi_env /*env*/, void* data, void* /*hint*/) {
   free(data);
+}
+
+void RefPipeLifetime(StreamPipeWrap* wrap) {
+  if (wrap == nullptr || wrap->env == nullptr || wrap->wrapper_ref == nullptr || wrap->lifetime_refed) return;
+  uint32_t ignored = 0;
+  if (napi_reference_ref(wrap->env, wrap->wrapper_ref, &ignored) == napi_ok) {
+    wrap->lifetime_refed = true;
+  }
+}
+
+void MaybeReleasePipeLifetime(StreamPipeWrap* wrap) {
+  if (wrap == nullptr || wrap->env == nullptr || wrap->wrapper_ref == nullptr || !wrap->lifetime_refed) return;
+  if (!wrap->is_closed || wrap->pending_writes != 0 || wrap->source_listener_attached ||
+      wrap->sink_listener_attached || wrap->onunpipe_scheduled) {
+    return;
+  }
+  wrap->lifetime_refed = false;
+  uint32_t ignored = 0;
+  (void)napi_reference_unref(wrap->env, wrap->wrapper_ref, &ignored);
 }
 
 void ClearLinks(napi_env env, napi_value self, StreamPipeWrap* wrap, bool clear_js_links) {
@@ -119,11 +139,23 @@ napi_value DeferredOnUnpipeCallback(napi_env env, napi_callback_info info) {
     (void)napi_call_function(env, pipe_self, onunpipe, 0, nullptr, &ignored);
   }
   ClearLinks(env, pipe_self, wrap, true);
+  if (wrap->wrapper_ref != nullptr) {
+    uint32_t ignored = 0;
+    (void)napi_reference_unref(env, wrap->wrapper_ref, &ignored);
+  }
+  MaybeReleasePipeLifetime(wrap);
   return Undefined(env);
 }
 
 void ScheduleOnUnpipe(napi_env env, StreamPipeWrap* wrap) {
   if (env == nullptr || wrap == nullptr || wrap->onunpipe_scheduled) return;
+  bool wrapper_refed = false;
+  if (wrap->wrapper_ref != nullptr) {
+    uint32_t ignored = 0;
+    if (napi_reference_ref(env, wrap->wrapper_ref, &ignored) == napi_ok) {
+      wrapper_refed = true;
+    }
+  }
   napi_value global = GetGlobal(env);
   napi_value set_immediate = nullptr;
   napi_valuetype set_immediate_type = napi_undefined;
@@ -132,8 +164,13 @@ void ScheduleOnUnpipe(napi_env env, StreamPipeWrap* wrap) {
       set_immediate == nullptr ||
       napi_typeof(env, set_immediate, &set_immediate_type) != napi_ok ||
       set_immediate_type != napi_function) {
+    if (wrapper_refed && wrap->wrapper_ref != nullptr) {
+      uint32_t ignored = 0;
+      (void)napi_reference_unref(env, wrap->wrapper_ref, &ignored);
+    }
     napi_value pipe_self = GetRefValue(env, wrap->wrapper_ref);
     if (pipe_self != nullptr) ClearLinks(env, pipe_self, wrap, true);
+    MaybeReleasePipeLifetime(wrap);
     return;
   }
 
@@ -145,15 +182,29 @@ void ScheduleOnUnpipe(napi_env env, StreamPipeWrap* wrap) {
                            wrap,
                            &callback) != napi_ok ||
       callback == nullptr) {
+    if (wrapper_refed && wrap->wrapper_ref != nullptr) {
+      uint32_t ignored = 0;
+      (void)napi_reference_unref(env, wrap->wrapper_ref, &ignored);
+    }
     napi_value pipe_self = GetRefValue(env, wrap->wrapper_ref);
     if (pipe_self != nullptr) ClearLinks(env, pipe_self, wrap, true);
+    MaybeReleasePipeLifetime(wrap);
     return;
   }
 
   wrap->onunpipe_scheduled = true;
   napi_value argv[1] = {callback};
   napi_value ignored = nullptr;
-  (void)napi_call_function(env, global, set_immediate, 1, argv, &ignored);
+  if (napi_call_function(env, global, set_immediate, 1, argv, &ignored) != napi_ok) {
+    wrap->onunpipe_scheduled = false;
+    if (wrapper_refed && wrap->wrapper_ref != nullptr) {
+      uint32_t ref_ignored = 0;
+      (void)napi_reference_unref(env, wrap->wrapper_ref, &ref_ignored);
+    }
+    napi_value pipe_self = GetRefValue(env, wrap->wrapper_ref);
+    if (pipe_self != nullptr) ClearLinks(env, pipe_self, wrap, true);
+    MaybeReleasePipeLifetime(wrap);
+  }
 }
 
 void RemoveListeners(StreamPipeWrap* wrap) {
@@ -171,12 +222,11 @@ void RemoveListeners(StreamPipeWrap* wrap) {
 void UnpipeInternal(napi_env env, napi_value self, StreamPipeWrap* wrap, bool in_deletion) {
   if (wrap == nullptr || wrap->is_closed) return;
 
-  if (!wrap->source_destroyed && wrap->source_base != nullptr) {
-    (void)EdgeStreamBaseReadStop(wrap->source_base);
-  }
-
   wrap->is_closed = true;
   wrap->is_reading = false;
+  if (!in_deletion && !wrap->source_destroyed && wrap->source_base != nullptr) {
+    (void)EdgeStreamBaseReadStop(wrap->source_base);
+  }
   RemoveListeners(wrap);
 
   if (in_deletion) {
@@ -315,6 +365,7 @@ bool WritableOnAfterWrite(EdgeStreamListener* listener, napi_value req_obj, int 
 
   if (wrap->is_closed) {
     RemoveListeners(wrap);
+    MaybeReleasePipeLifetime(wrap);
     return true;
   }
 
@@ -379,6 +430,7 @@ void StreamPipeFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<StreamPipeWrap*>(data);
   if (wrap == nullptr) return;
   UnpipeInternal(env, nullptr, wrap, true);
+  wrap->lifetime_refed = false;
   DeleteRefIfPresent(env, &wrap->wrapper_ref);
   delete wrap;
 }
@@ -447,6 +499,7 @@ napi_value StreamPipeStart(napi_env env, napi_callback_info info) {
   StreamPipeWrap* wrap = UnwrapPipe(env, self);
   if (wrap == nullptr) return Undefined(env);
 
+  RefPipeLifetime(wrap);
   wrap->is_closed = false;
   if (wrap->source_base == nullptr || wrap->sink_base == nullptr) {
     UnpipeInternal(env, self, wrap, false);

@@ -9,6 +9,8 @@
 extern "C" {
 #endif
 
+struct uv_loop_s;
+
 // Unofficial/test-only helper APIs for creating and releasing an env scope.
 typedef struct {
   size_t max_young_generation_size_in_bytes;
@@ -45,6 +47,10 @@ NAPI_EXTERN napi_status unofficial_napi_set_context_token_callbacks(
     void* data);
 NAPI_EXTERN napi_status unofficial_napi_destroy_env_instance(napi_env env);
 NAPI_EXTERN napi_status unofficial_napi_release_env(void* scope);
+NAPI_EXTERN napi_status unofficial_napi_release_env_with_loop(
+    void* scope,
+    struct uv_loop_s* loop);
+NAPI_EXTERN napi_status unofficial_napi_low_memory_notification(napi_env env);
 NAPI_EXTERN napi_status unofficial_napi_set_flags_from_string(
     const char* flags,
     size_t length);
@@ -222,6 +228,12 @@ NAPI_EXTERN napi_status unofficial_napi_create_private_symbol(napi_env env,
 NAPI_EXTERN napi_status unofficial_napi_structured_clone(
     napi_env env,
     napi_value value,
+    napi_value* result_out);
+
+NAPI_EXTERN napi_status unofficial_napi_structured_clone_with_transfer(
+    napi_env env,
+    napi_value value,
+    napi_value transfer_list,
     napi_value* result_out);
 
 // Unofficial helpers for env-agnostic message payload queues.

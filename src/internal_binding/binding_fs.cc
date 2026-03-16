@@ -956,6 +956,7 @@ struct FileHandleWrap {
 struct FileHandleReadReq {
   uv_fs_t req{};
   FileHandleWrap* wrap = nullptr;
+  void* active_request_token = nullptr;
   char* storage = nullptr;
   uv_buf_t buf{};
 };
@@ -965,6 +966,7 @@ struct FileHandleCloseReq {
   FileHandleWrap* wrap = nullptr;
   uv_fs_t req{};
   napi_ref req_ref = nullptr;
+  void* active_request_token = nullptr;
   bool is_shutdown = false;
 };
 
@@ -1036,6 +1038,35 @@ void ReleaseFileHandleRef(FileHandleWrap* wrap) {
   if (wrap == nullptr || wrap->env == nullptr || wrap->base.wrapper_ref == nullptr) return;
   uint32_t ref_count = 0;
   (void)napi_reference_unref(wrap->env, wrap->base.wrapper_ref, &ref_count);
+}
+
+napi_value GetFileHandleOwner(napi_env env, FileHandleWrap* wrap) {
+  if (env == nullptr || wrap == nullptr) return nullptr;
+  return EdgeStreamBaseGetWrapper(&wrap->base);
+}
+
+napi_value GetFileHandleReadReqOwner(napi_env env, void* data) {
+  auto* req = static_cast<FileHandleReadReq*>(data);
+  return req != nullptr ? GetFileHandleOwner(env, req->wrap) : nullptr;
+}
+
+void CancelFileHandleReadReq(void* data) {
+  auto* req = static_cast<FileHandleReadReq*>(data);
+  if (req == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->req));
+}
+
+napi_value GetFileHandleCloseReqOwner(napi_env env, void* data) {
+  auto* req = static_cast<FileHandleCloseReq*>(data);
+  if (req == nullptr) return nullptr;
+  napi_value owner = GetRefValue(env, req->req_ref);
+  return owner != nullptr ? owner : GetFileHandleOwner(env, req->wrap);
+}
+
+void CancelFileHandleCloseReq(void* data) {
+  auto* req = static_cast<FileHandleCloseReq*>(data);
+  if (req == nullptr) return;
+  (void)uv_cancel(reinterpret_cast<uv_req_t*>(&req->req));
 }
 
 napi_value CreateUvExceptionValue(napi_env env, int errorno, const char* syscall);
@@ -1707,6 +1738,10 @@ void FinishFileHandleClose(FileHandleCloseReq* close_req, int result) {
 
   auto delete_close_req = [env](FileHandleCloseReq* req) {
     if (req == nullptr) return;
+    if (env != nullptr && req->active_request_token != nullptr) {
+      EdgeUnregisterActiveRequestToken(env, req->active_request_token);
+      req->active_request_token = nullptr;
+    }
     if (env != nullptr) ResetRef(env, &req->req_ref);
     uv_fs_req_cleanup(&req->req);
     delete req;
@@ -1797,6 +1832,10 @@ void AfterFileHandleRead(uv_fs_t* req) {
   if (read_req == nullptr) return;
 
   FileHandleWrap* wrap = read_req->wrap;
+  if (wrap != nullptr && wrap->env != nullptr && read_req->active_request_token != nullptr) {
+    EdgeUnregisterActiveRequestToken(wrap->env, read_req->active_request_token);
+    read_req->active_request_token = nullptr;
+  }
   ssize_t result = req->result;
   uv_fs_req_cleanup(req);
 
@@ -1878,6 +1917,16 @@ int FileHandleReadStartInternal(FileHandleWrap* wrap) {
   }
 
   wrap->current_read = read_req;
+  napi_value owner = GetFileHandleOwner(wrap->env, wrap);
+  if (owner != nullptr) {
+    read_req->active_request_token =
+        EdgeRegisterActiveRequest(wrap->env,
+                                  owner,
+                                  "FSReqCallback",
+                                  read_req,
+                                  CancelFileHandleReadReq,
+                                  GetFileHandleReadReqOwner);
+  }
   HoldFileHandleRef(wrap);
   const int rc = uv_fs_read(loop,
                             &read_req->req,
@@ -1888,6 +1937,10 @@ int FileHandleReadStartInternal(FileHandleWrap* wrap) {
                             AfterFileHandleRead);
   if (rc < 0) {
     wrap->current_read = nullptr;
+    if (read_req->active_request_token != nullptr) {
+      EdgeUnregisterActiveRequestToken(wrap->env, read_req->active_request_token);
+      read_req->active_request_token = nullptr;
+    }
     ReleaseFileHandleRef(wrap);
     free(read_req->storage);
     delete read_req;
@@ -1933,6 +1986,13 @@ int FileHandleShutdownOp(EdgeStreamBase* base, napi_value req_obj) {
   wrap->closing = true;
   EdgeStreamReqActivate(wrap->env, req_obj, kEdgeProviderShutdownWrap, wrap->base.async_id);
   HoldFileHandleRef(wrap);
+  close_req->active_request_token =
+      EdgeRegisterActiveRequest(wrap->env,
+                                req_obj,
+                                "FSReqCallback",
+                                close_req,
+                                CancelFileHandleCloseReq,
+                                GetFileHandleCloseReqOwner);
 
   uv_loop_t* loop = EdgeGetEnvLoop(wrap->env);
   const int rc = loop != nullptr ? uv_fs_close(loop, &close_req->req, wrap->fd, AfterFileHandleClose)
@@ -1994,6 +2054,9 @@ napi_value FileHandleCtor(napi_env env, napi_callback_info info) {
   if (argc >= 3 && argv[2] != nullptr) (void)napi_get_value_int64(env, argv[2], &length);
   wrap->read_offset = offset;
   wrap->read_length = length;
+  if (wrap->fd >= 0) {
+    EdgeWorkerEnvRemoveUnmanagedFd(env, wrap->fd);
+  }
   EdgeStreamBaseInit(&wrap->base, env, &kFileHandleStreamOps, kEdgeProviderNone);
   napi_value offset_value = nullptr;
   napi_value length_value = nullptr;
@@ -2099,6 +2162,13 @@ napi_value FileHandleClose(napi_env env, napi_callback_info info) {
   close_req->env = env;
   close_req->wrap = wrap;
   close_req->req.data = close_req;
+  close_req->active_request_token =
+      EdgeRegisterActiveRequest(env,
+                                this_arg,
+                                "FSReqCallback",
+                                close_req,
+                                CancelFileHandleCloseReq,
+                                GetFileHandleCloseReqOwner);
   HoldFileHandleRef(wrap);
 
   uv_loop_t* loop = EdgeGetEnvLoop(env);
