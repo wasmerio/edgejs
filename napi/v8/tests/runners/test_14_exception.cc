@@ -74,7 +74,10 @@ TEST_F(Test14Exception, SetLastExceptionStoresArrowMessageOnThrownError) {
   napi_value script = nullptr;
   ASSERT_EQ(
       napi_create_string_utf8(
-          s.env, "throw new Error('boom')", NAPI_AUTO_LENGTH, &script),
+          s.env,
+          "throw new Error('boom')\n//# sourceURL=original.js",
+          NAPI_AUTO_LENGTH,
+          &script),
       napi_ok);
   napi_value result = nullptr;
   ASSERT_EQ(napi_run_script(s.env, script, &result), napi_pending_exception);
@@ -108,4 +111,42 @@ TEST_F(Test14Exception, SetLastExceptionPreservesArrowMessageAcrossSameErrorReth
   ASSERT_EQ(napi_get_and_clear_last_exception(s.env, &second), napi_ok);
   ASSERT_NE(second, nullptr);
   EXPECT_EQ(GetArrowMessage(s.env, second), first_line);
+}
+
+TEST_F(Test14Exception, PreserveErrorSourceMessageStoresMappedArrowMessageWhenSourceMapsEnabled) {
+  EnvScope s(runtime_.get());
+
+  ASSERT_EQ(unofficial_napi_set_source_maps_enabled(s.env, true), napi_ok);
+
+  napi_value callback_script = nullptr;
+  ASSERT_EQ(
+      napi_create_string_utf8(
+          s.env,
+          "(() => 'mapped.js:10\\nconst boom = 1;\\n      ^\\n\\n')",
+          NAPI_AUTO_LENGTH,
+          &callback_script),
+      napi_ok);
+  napi_value callback = nullptr;
+  ASSERT_EQ(napi_run_script(s.env, callback_script, &callback), napi_ok);
+  ASSERT_NE(callback, nullptr);
+  ASSERT_EQ(
+      unofficial_napi_set_get_source_map_error_source_callback(s.env, callback),
+      napi_ok);
+
+  napi_value script = nullptr;
+  ASSERT_EQ(
+      napi_create_string_utf8(
+          s.env,
+          "(() => { try { throw new Error('boom'); } catch (e) { return e; } })()\n"
+          "//# sourceURL=original.js",
+          NAPI_AUTO_LENGTH,
+          &script),
+      napi_ok);
+  napi_value error = nullptr;
+  ASSERT_EQ(napi_run_script(s.env, script, &error), napi_ok);
+  ASSERT_NE(error, nullptr);
+  ASSERT_EQ(unofficial_napi_preserve_error_source_message(s.env, error), napi_ok);
+
+  EXPECT_EQ(GetArrowMessage(s.env, error),
+            "mapped.js:10\nconst boom = 1;\n      ^\n\n");
 }

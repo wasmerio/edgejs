@@ -310,12 +310,11 @@ void AttachSyntaxArrowMessage(v8::Isolate* isolate,
   (void)err_obj->SetPrivate(context, decorated_key, v8::True(isolate));
 }
 
-void SetArrowMessage(v8::Isolate* isolate,
-                     v8::Local<v8::Context> context,
-                     v8::Local<v8::Value> exception,
-                     v8::Local<v8::Message> message) {
-  if (exception.IsEmpty() || !exception->IsObject() || message.IsEmpty()) return;
-
+void SetArrowMessageFromString(v8::Isolate* isolate,
+                               v8::Local<v8::Context> context,
+                               v8::Local<v8::Value> exception,
+                               const std::string& arrow) {
+  if (exception.IsEmpty() || !exception->IsObject() || arrow.empty()) return;
   v8::Local<v8::Object> err_obj = exception.As<v8::Object>();
   v8::Local<v8::Private> arrow_key = ApiPrivate(isolate, "node:arrowMessage");
   v8::Local<v8::Value> existing_arrow;
@@ -323,14 +322,25 @@ void SetArrowMessage(v8::Isolate* isolate,
     return;
   }
 
-  const std::string arrow = BuildSyntaxArrowMessage(isolate, context, message);
-  if (arrow.empty()) return;
-
   v8::Local<v8::String> arrow_v8;
-  if (!v8::String::NewFromUtf8(isolate, arrow.c_str(), v8::NewStringType::kNormal).ToLocal(&arrow_v8)) {
+  if (!v8::String::NewFromUtf8(isolate,
+                               arrow.c_str(),
+                               v8::NewStringType::kNormal,
+                               static_cast<int>(arrow.size()))
+           .ToLocal(&arrow_v8)) {
     return;
   }
   (void)err_obj->SetPrivate(context, arrow_key, arrow_v8);
+}
+
+void SetArrowMessage(v8::Isolate* isolate,
+                     v8::Local<v8::Context> context,
+                     v8::Local<v8::Value> exception,
+                     v8::Local<v8::Message> message) {
+  if (exception.IsEmpty() || !exception->IsObject() || message.IsEmpty()) return;
+
+  SetArrowMessageFromString(
+      isolate, context, exception, BuildSyntaxArrowMessage(isolate, context, message));
 }
 
 napi_status SetSourceMapsEnabled(napi_env env, bool enabled) {
@@ -370,13 +380,12 @@ napi_status PreserveErrorSourceMessage(napi_env env, napi_value error) {
   v8::Local<v8::Message> message = v8::Exception::CreateMessage(isolate, raw);
   if (message.IsEmpty()) return napi_generic_failure;
 
-  if (raw->IsObject()) {
-    SetArrowMessage(isolate, context, raw, message);
-  }
+  const std::string source_line = GetErrorSourceLineForStderrImpl(env, message);
+  SetArrowMessageFromString(isolate, context, raw, source_line);
 
   PreserveErrorFormatting(env,
                           raw,
-                          GetErrorSourceLineForStderrImpl(env, message),
+                          source_line,
                           GetThrownAtString(isolate, message));
   return napi_ok;
 }
