@@ -53,7 +53,6 @@ void SignalExit(int signal, siginfo_t* info, void* ucontext);
 namespace {
 
 constexpr const char kUsage[] = "Usage: edge <script.js>";
-constexpr const char kSafeModeUnavailable[] = "--safe mode is not enabled in this release of edge";
 constexpr unsigned kMaxSignal = 32;
 std::once_flag g_cli_init_once;
 #if defined(_WIN32)
@@ -1084,6 +1083,17 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   if (argc > 1 && argv[1] != nullptr && EdgeShouldWrapCompatCommand(argv[1])) {
     return EdgeRunCompatCommand(argc, argv, error_out);
   }
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] == nullptr || std::string(argv[i]) != "--safe") continue;
+
+    std::vector<std::string> forwarded_args;
+    forwarded_args.reserve(static_cast<size_t>(argc > 1 ? argc - 2 : 0));
+    for (int argi = 1; argi < argc; ++argi) {
+      if (argi == i || argv[argi] == nullptr) continue;
+      forwarded_args.emplace_back(argv[argi]);
+    }
+    return EdgeRunSafeModeCommand(forwarded_args, error_out);
+  }
   if (argc > 1 && argv[1] != nullptr &&
       (std::string(argv[1]) == "-v" || std::string(argv[1]) == "--version")) {
     std::cout << NODE_VERSION << "\n";
@@ -1187,13 +1197,6 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       set_requires_argument_error(token.substr(0, token.size() - 1));
       return 9;
     }
-    if (token == "--safe") {
-      if (error_out != nullptr) {
-        *error_out = kSafeModeUnavailable;
-      }
-      return 1;
-    }
-
     if (token == "-c" || token == "--check") {
       raw_exec_argv.push_back(token);
       saw_check = true;

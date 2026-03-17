@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,15 @@
 #include "edge_process.h"
 
 namespace {
+
+constexpr const char kSafeModeInstallUrl[] = "https://docs.wasmer.io/install";
+
+struct CommandResult {
+  int exit_code = 1;
+  int exec_errno = 0;
+  std::string stdout_output;
+  std::string stderr_output;
+};
 
 std::string BuildEdgeBinaryPath() {
   namespace fs = std::filesystem;
@@ -68,6 +78,198 @@ std::string BuildCompatWrappedPathPrefix() {
   return updated_path;
 }
 
+bool SafeModeVersionHasNapiFeature(const std::string& version_output) {
+  std::istringstream stream(version_output);
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (line.rfind("features:", 0) != 0) continue;
+    return line.find("NAPI") != std::string::npos;
+  }
+  return false;
+}
+
+CommandResult RunCommandCapture(const std::vector<std::string>& command) {
+  CommandResult result;
+  if (command.empty()) {
+    result.stderr_output = "empty command";
+    return result;
+  }
+
+  int stdout_pipe[2] = {-1, -1};
+  int stderr_pipe[2] = {-1, -1};
+  int exec_error_pipe[2] = {-1, -1};
+  if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0 || pipe(exec_error_pipe) != 0) {
+    const int pipe_errno = errno;
+    for (int fd : stdout_pipe) {
+      if (fd >= 0) close(fd);
+    }
+    for (int fd : stderr_pipe) {
+      if (fd >= 0) close(fd);
+    }
+    for (int fd : exec_error_pipe) {
+      if (fd >= 0) close(fd);
+    }
+    result.stderr_output = std::strerror(pipe_errno);
+    return result;
+  }
+
+  const pid_t child_pid = fork();
+  if (child_pid < 0) {
+    const int fork_errno = errno;
+    close(stdout_pipe[0]);
+    close(stdout_pipe[1]);
+    close(stderr_pipe[0]);
+    close(stderr_pipe[1]);
+    close(exec_error_pipe[0]);
+    close(exec_error_pipe[1]);
+    result.stderr_output = std::strerror(fork_errno);
+    return result;
+  }
+
+  if (child_pid == 0) {
+    close(stdout_pipe[0]);
+    close(stderr_pipe[0]);
+    close(exec_error_pipe[0]);
+    if (dup2(stdout_pipe[1], STDOUT_FILENO) < 0 || dup2(stderr_pipe[1], STDERR_FILENO) < 0) {
+      const int dup_errno = errno;
+      (void)write(exec_error_pipe[1], &dup_errno, sizeof(dup_errno));
+      _exit(127);
+    }
+    close(stdout_pipe[1]);
+    close(stderr_pipe[1]);
+
+    std::vector<char*> argv;
+    argv.reserve(command.size() + 1);
+    for (const auto& arg : command) {
+      argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    execvp(argv[0], argv.data());
+    const int exec_errno = errno;
+    (void)write(exec_error_pipe[1], &exec_errno, sizeof(exec_errno));
+    _exit(127);
+  }
+
+  close(stdout_pipe[1]);
+  close(stderr_pipe[1]);
+  close(exec_error_pipe[1]);
+
+  char buffer[512];
+  while (true) {
+    const ssize_t n = read(stdout_pipe[0], buffer, sizeof(buffer));
+    if (n > 0) {
+      result.stdout_output.append(buffer, static_cast<size_t>(n));
+      continue;
+    }
+    break;
+  }
+  while (true) {
+    const ssize_t n = read(stderr_pipe[0], buffer, sizeof(buffer));
+    if (n > 0) {
+      result.stderr_output.append(buffer, static_cast<size_t>(n));
+      continue;
+    }
+    break;
+  }
+
+  int exec_errno = 0;
+  const ssize_t exec_errno_size = read(exec_error_pipe[0], &exec_errno, sizeof(exec_errno));
+  if (exec_errno_size == static_cast<ssize_t>(sizeof(exec_errno))) {
+    result.exec_errno = exec_errno;
+  }
+
+  close(stdout_pipe[0]);
+  close(stderr_pipe[0]);
+  close(exec_error_pipe[0]);
+
+  int status = 0;
+  while (waitpid(child_pid, &status, 0) < 0) {
+    if (errno == EINTR) continue;
+    result.stderr_output = std::strerror(errno);
+    return result;
+  }
+
+  if (WIFEXITED(status)) {
+    result.exit_code = WEXITSTATUS(status);
+  } else if (WIFSIGNALED(status)) {
+    result.exit_code = 128 + WTERMSIG(status);
+  }
+
+  return result;
+}
+
+int RunCommandPassthrough(const std::vector<std::string>& command, std::string* error_out) {
+  if (command.empty()) {
+    if (error_out != nullptr) *error_out = "empty command";
+    return 1;
+  }
+
+  int exec_error_pipe[2] = {-1, -1};
+  if (pipe(exec_error_pipe) != 0) {
+    if (error_out != nullptr) {
+      *error_out = std::strerror(errno);
+    }
+    return 1;
+  }
+
+  const pid_t child_pid = fork();
+  if (child_pid < 0) {
+    const int fork_errno = errno;
+    close(exec_error_pipe[0]);
+    close(exec_error_pipe[1]);
+    if (error_out != nullptr) {
+      *error_out = std::strerror(fork_errno);
+    }
+    return 1;
+  }
+
+  if (child_pid == 0) {
+    close(exec_error_pipe[0]);
+
+    std::vector<char*> argv;
+    argv.reserve(command.size() + 1);
+    for (const auto& arg : command) {
+      argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    execvp(argv[0], argv.data());
+    const int exec_errno = errno;
+    (void)write(exec_error_pipe[1], &exec_errno, sizeof(exec_errno));
+    _exit(127);
+  }
+
+  close(exec_error_pipe[1]);
+
+  int exec_errno = 0;
+  const ssize_t exec_errno_size = read(exec_error_pipe[0], &exec_errno, sizeof(exec_errno));
+  close(exec_error_pipe[0]);
+
+  int status = 0;
+  while (waitpid(child_pid, &status, 0) < 0) {
+    if (errno == EINTR) continue;
+    if (error_out != nullptr) {
+      *error_out = std::strerror(errno);
+    }
+    return 1;
+  }
+
+  if (exec_errno_size == static_cast<ssize_t>(sizeof(exec_errno)) && exec_errno == ENOENT) {
+    if (error_out != nullptr) {
+      *error_out = "safe mode requires Wasmer. Install it from " + std::string(kSafeModeInstallUrl);
+    }
+    return 1;
+  }
+
+  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+  if (error_out != nullptr) {
+    *error_out = "safe mode command ended unexpectedly";
+  }
+  return 1;
+}
+
 }  // namespace
 
 bool EdgeShouldWrapCompatCommand(std::string_view command) {
@@ -85,6 +287,38 @@ bool EdgeShouldWrapCompatCommand(std::string_view command) {
     if (command == candidate) return true;
   }
   return false;
+}
+
+int EdgeRunSafeModeCommand(const std::vector<std::string>& forwarded_args, std::string* error_out) {
+  const CommandResult version_result = RunCommandCapture({"wasmer", "--version", "-v"});
+  if (version_result.exec_errno == ENOENT) {
+    if (error_out != nullptr) {
+      *error_out = "safe mode requires Wasmer.\nInstall it from " + std::string(kSafeModeInstallUrl);
+    }
+    return 1;
+  }
+  if (version_result.exit_code != 0) {
+    if (error_out != nullptr) {
+      *error_out = "failed to query Wasmer version";
+      const std::string details = version_result.stderr_output.empty() ? version_result.stdout_output : version_result.stderr_output;
+      if (!details.empty()) {
+        *error_out += ": " + details;
+      }
+    }
+    return 1;
+  }
+  const std::string version_output =
+      version_result.stdout_output.empty() ? version_result.stderr_output : version_result.stdout_output;
+  if (!SafeModeVersionHasNapiFeature(version_output)) {
+    if (error_out != nullptr) {
+      *error_out = "safe mode requires a Wasmer build with the NAPI feature enabled.\nInstall it from " + std::string(kSafeModeInstallUrl);
+    }
+    return 1;
+  }
+
+  std::vector<std::string> child_args = {"wasmer", "run", "wasmer/edgejs", "--volume=.", "--net"};
+  child_args.insert(child_args.end(), forwarded_args.begin(), forwarded_args.end());
+  return RunCommandPassthrough(child_args, error_out);
 }
 
 int EdgeRunCompatCommand(int argc, const char* const* argv, std::string* error_out) {
