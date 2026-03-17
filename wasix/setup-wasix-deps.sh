@@ -36,7 +36,7 @@ clone_or_update() {
 
 mkdir -p "${DEPS_DIR}"
 # Keep the upstream branch name until the external repo renames it.
-clone_or_update "${DEPS_DIR}/libuv-wasix" "https://github.com/wasix-org/libuv.git" "ubi"
+clone_or_update "${DEPS_DIR}/libuv-wasix" "https://github.com/wasix-org/libuv.git" "fix/spawn"
 clone_or_update "${DEPS_DIR}/openssl-wasix" "https://github.com/wasix-org/openssl.git" "master"
 
 echo "WASIX deps are ready under ${DEPS_DIR}"
