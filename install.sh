@@ -795,11 +795,9 @@ maybe_install_wasmer() {
 
   if prompt_yes_no "Would you like to install Wasmer now?" "Y"; then
     if has_cmd curl; then
-      sh -c "$(curl -fsSL https://get.wasmer.io)"
-    elif has_cmd wget; then
-      sh -c "$(wget -qO- https://get.wasmer.io)"
+      curl https://get.wasmer.io -sSfL | sh -s "v7.1.0-rc.2"
     else
-      status_warn "Cannot install Wasmer automatically because neither curl nor wget is available."
+      status_warn "Cannot install Wasmer automatically because curl is not available."
     fi
   else
     if [ "$TTY_AVAILABLE" != "true" ]; then
