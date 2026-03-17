@@ -2859,10 +2859,14 @@ napi_status NAPI_CDECL napi_get_and_clear_last_exception(napi_env env,
       message = env->last_exception_message.Get(env->isolate);
     }
     if (!message.IsEmpty()) {
+      const std::string source_line =
+          unofficial_napi_internal::GetErrorSourceLineForStderrImpl(env, message);
+      unofficial_napi_internal::SetArrowMessageFromString(
+          env->isolate, env->context(), ex, source_line);
       unofficial_napi_internal::PreserveErrorFormatting(
           env,
           ex,
-          unofficial_napi_internal::GetErrorSourceLineForStderrImpl(env, message),
+          source_line,
           unofficial_napi_internal::GetThrownAtString(env->isolate, message));
     } else {
       (void)unofficial_napi_internal::PreserveErrorSourceMessage(env, wrapped);
