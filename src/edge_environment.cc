@@ -50,7 +50,7 @@ void AttachedEnvUnassignContextToken(napi_env env, void* token, void* /*data*/) 
 }
 
 bool RegisterAttachedEnvHooks(napi_env env) {
-#if defined(EDGE_BUNDLED_NAPI_V8)
+#if defined(EDGE_BUNDLED_NAPI_PROVIDER)
   if (unofficial_napi_set_edge_environment(env, edge::Environment::Get(env)) != napi_ok) {
     return false;
   }

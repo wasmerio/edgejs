@@ -562,14 +562,179 @@ TEST_F(Test1CliPhase01, PrintFlagExposesEdgeProcessVersionEntry) {
   EXPECT_NE(stdout_output.find(EDGE_VERSION_STRING), std::string::npos) << stdout_output;
 }
 
-TEST_F(Test1CliPhase01, SafeFlagExitsWithUnavailableMessage) {
-  const char* argv[] = {"edge", "--safe"};
-  std::string error;
+TEST_F(Test1CliPhase01, SafeFlagDelegatesToWasmerWithRemainingArgs) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "safe mode subprocess check is POSIX-oriented";
+#else
+  namespace fs = std::filesystem;
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
 
-  const int exit_code = EdgeRunCli(2, argv, &error);
+  const auto temp_root = fs::temp_directory_path() / "edge_phase01_cli_safe_wrap";
+  const auto bin_dir = temp_root / "bin";
+  const auto wasmer_path = bin_dir / "wasmer";
+  const auto stdout_path = temp_root / "stdout.txt";
+  const auto stderr_path = temp_root / "stderr.txt";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(bin_dir, ec);
+  ASSERT_FALSE(ec) << "Failed to create temp bin directory";
 
-  EXPECT_EQ(exit_code, 1);
-  EXPECT_EQ(error, "--safe mode is not enabled in this release of edge");
+  std::ofstream wasmer_out(wasmer_path);
+  wasmer_out
+      << "#!/bin/sh\n"
+      << "if [ \"$1\" = \"--version\" ] && [ \"$2\" = \"-v\" ]; then\n"
+      << "  printf 'wasmer 1.2.3\\n'\n"
+      << "  printf 'features: NAPI,foo\\n'\n"
+      << "  exit 0\n"
+      << "fi\n"
+      << "printf 'args=%s\\n' \"$*\"\n"
+      << "printf 'pwd=%s\\n' \"$PWD\"\n";
+  wasmer_out.close();
+  ASSERT_TRUE(wasmer_out.good()) << "Failed to write wasmer shim";
+  fs::permissions(
+      wasmer_path,
+      fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec |
+          fs::perms::group_read | fs::perms::group_exec |
+          fs::perms::others_read | fs::perms::others_exec,
+      fs::perm_options::replace,
+      ec);
+  ASSERT_FALSE(ec) << "Failed to chmod wasmer shim";
+
+  const std::string old_path = GetEnvOrEmpty("PATH");
+  const std::string cmd =
+      "cd " + ShellSingleQuoted(temp_root.string()) + " && PATH=" +
+      ShellSingleQuoted(bin_dir.string() + ":" + old_path) + " " +
+      ShellSingleQuoted(edge_path.string()) +
+      " --safe examples/http-server.js alpha beta >" +
+      ShellSingleQuoted(stdout_path.string()) + " 2>" +
+      ShellSingleQuoted(stderr_path.string());
+  const int status = std::system(cmd.c_str());
+  ASSERT_NE(status, -1);
+  ASSERT_TRUE(WIFEXITED(status)) << "status=" << status;
+
+  std::ifstream stdout_in(stdout_path);
+  const std::string stdout_output((std::istreambuf_iterator<char>(stdout_in)),
+                                  std::istreambuf_iterator<char>());
+  std::ifstream stderr_in(stderr_path);
+  const std::string stderr_output((std::istreambuf_iterator<char>(stderr_in)),
+                                  std::istreambuf_iterator<char>());
+  fs::remove_all(temp_root, ec);
+
+  EXPECT_EQ(WEXITSTATUS(status), 0) << "stderr=" << stderr_output;
+  EXPECT_TRUE(stderr_output.empty()) << "stderr=" << stderr_output;
+  EXPECT_NE(stdout_output.find("args=run wasmer/edgejs --dir=. examples/http-server.js alpha beta"),
+            std::string::npos)
+      << stdout_output;
+  EXPECT_NE(stdout_output.find("pwd=" + temp_root.string()), std::string::npos) << stdout_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, SafeFlagReportsInstallUrlWhenWasmerIsMissing) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "safe mode subprocess check is POSIX-oriented";
+#else
+  namespace fs = std::filesystem;
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const auto temp_root = fs::temp_directory_path() / "edge_phase01_cli_safe_missing_wasmer";
+  const auto empty_bin_dir = temp_root / "bin";
+  const auto stdout_path = temp_root / "stdout.txt";
+  const auto stderr_path = temp_root / "stderr.txt";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(empty_bin_dir, ec);
+  ASSERT_FALSE(ec) << "Failed to create temp bin directory";
+
+  const std::string cmd =
+      "cd " + ShellSingleQuoted(temp_root.string()) + " && PATH=" +
+      ShellSingleQuoted(empty_bin_dir.string()) + " " +
+      ShellSingleQuoted(edge_path.string()) + " --safe >" +
+      ShellSingleQuoted(stdout_path.string()) + " 2>" +
+      ShellSingleQuoted(stderr_path.string());
+  const int status = std::system(cmd.c_str());
+  ASSERT_NE(status, -1);
+  ASSERT_TRUE(WIFEXITED(status)) << "status=" << status;
+
+  std::ifstream stdout_in(stdout_path);
+  const std::string stdout_output((std::istreambuf_iterator<char>(stdout_in)),
+                                  std::istreambuf_iterator<char>());
+  std::ifstream stderr_in(stderr_path);
+  const std::string stderr_output((std::istreambuf_iterator<char>(stderr_in)),
+                                  std::istreambuf_iterator<char>());
+  fs::remove_all(temp_root, ec);
+
+  EXPECT_EQ(WEXITSTATUS(status), 1);
+  EXPECT_TRUE(stdout_output.empty()) << stdout_output;
+  EXPECT_NE(stderr_output.find("safe mode requires Wasmer. Install it from https://docs.wasmer.io/install"),
+            std::string::npos)
+      << stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, SafeFlagRequiresWasmerNapiFeature) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "safe mode subprocess check is POSIX-oriented";
+#else
+  namespace fs = std::filesystem;
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const auto temp_root = fs::temp_directory_path() / "edge_phase01_cli_safe_missing_napi";
+  const auto bin_dir = temp_root / "bin";
+  const auto wasmer_path = bin_dir / "wasmer";
+  const auto stdout_path = temp_root / "stdout.txt";
+  const auto stderr_path = temp_root / "stderr.txt";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(bin_dir, ec);
+  ASSERT_FALSE(ec) << "Failed to create temp bin directory";
+
+  std::ofstream wasmer_out(wasmer_path);
+  wasmer_out
+      << "#!/bin/sh\n"
+      << "if [ \"$1\" = \"--version\" ] && [ \"$2\" = \"-v\" ]; then\n"
+      << "  printf 'wasmer 1.2.3\\n'\n"
+      << "  printf 'features: foo,bar\\n'\n"
+      << "  exit 0\n"
+      << "fi\n"
+      << "printf 'unexpected-run=%s\\n' \"$*\"\n";
+  wasmer_out.close();
+  ASSERT_TRUE(wasmer_out.good()) << "Failed to write wasmer shim";
+  fs::permissions(
+      wasmer_path,
+      fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec |
+          fs::perms::group_read | fs::perms::group_exec |
+          fs::perms::others_read | fs::perms::others_exec,
+      fs::perm_options::replace,
+      ec);
+  ASSERT_FALSE(ec) << "Failed to chmod wasmer shim";
+
+  const std::string cmd =
+      "cd " + ShellSingleQuoted(temp_root.string()) + " && PATH=" +
+      ShellSingleQuoted(bin_dir.string()) + " " +
+      ShellSingleQuoted(edge_path.string()) + " --safe foo.js >" +
+      ShellSingleQuoted(stdout_path.string()) + " 2>" +
+      ShellSingleQuoted(stderr_path.string());
+  const int status = std::system(cmd.c_str());
+  ASSERT_NE(status, -1);
+  ASSERT_TRUE(WIFEXITED(status)) << "status=" << status;
+
+  std::ifstream stdout_in(stdout_path);
+  const std::string stdout_output((std::istreambuf_iterator<char>(stdout_in)),
+                                  std::istreambuf_iterator<char>());
+  std::ifstream stderr_in(stderr_path);
+  const std::string stderr_output((std::istreambuf_iterator<char>(stderr_in)),
+                                  std::istreambuf_iterator<char>());
+  fs::remove_all(temp_root, ec);
+
+  EXPECT_EQ(WEXITSTATUS(status), 1);
+  EXPECT_TRUE(stdout_output.empty()) << stdout_output;
+  EXPECT_NE(stderr_output.find("safe mode requires a Wasmer build with the NAPI feature enabled"),
+            std::string::npos)
+      << stderr_output;
+#endif
 }
 
 TEST_F(Test1CliPhase01, InteractiveWelcomeMessageIncludesEdgeAndNodeVersions) {

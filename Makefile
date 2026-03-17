@@ -1,8 +1,9 @@
-.PHONY: build test test-only check-portability clean-dist dist dist-only
+.PHONY: build build-napi-v8 build-napi-jsc test test-only check-portability clean-dist dist dist-only
 
 UNAME_S := $(shell uname -s)
 BUILD_NAPI_DIR ?= build-v8-napi
 BUILD_DIR ?= build-edge
+BUILD_TARGET ?=
 DIST_DIR ?= dist
 DIST_BIN_DIR ?= $(DIST_DIR)/bin
 DIST_BIN_COMPAT_DIR ?= $(DIST_DIR)/bin-compat
@@ -16,6 +17,8 @@ EDGEENV_BINARY ?= $(BUILD_DIR)/edgeenv
 CMAKE_ARGS ?=
 BUILD_ENV ?= env
 EXTRA_CMAKE_ARGS ?=
+NAPI_V8_BUILD_DIR ?= build-napi-v8
+NAPI_JSC_BUILD_DIR ?= build-napi-jsc
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS
@@ -32,7 +35,24 @@ test-napi-only:
 
 build:
 	$(BUILD_ENV) cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) $(EXTRA_CMAKE_ARGS) $(CMAKE_ARGS)
-	$(BUILD_ENV) cmake --build $(BUILD_DIR) -j$(JOBS)
+	$(BUILD_ENV) cmake --build $(BUILD_DIR) -j$(JOBS) $(if $(strip $(BUILD_TARGET)),--target $(BUILD_TARGET),)
+
+build-napi-v8:
+	$(MAKE) build \
+		BUILD_DIR=$(NAPI_V8_BUILD_DIR) \
+		BUILD_TARGET=napi_v8_tests \
+		CMAKE_ARGS='$(CMAKE_ARGS) -DEDGE_NAPI_PROVIDER=bundled-v8 -DEDGE_NAPI_PROVIDER_BUILD_TESTS=ON'
+
+build-napi-jsc:
+ifeq ($(UNAME_S),Darwin)
+	$(MAKE) build \
+		BUILD_DIR=$(NAPI_JSC_BUILD_DIR) \
+		BUILD_TARGET=napi_jsc_tests \
+		CMAKE_ARGS='$(CMAKE_ARGS) -DEDGE_NAPI_PROVIDER=bundled-jsc -DEDGE_NAPI_PROVIDER_BUILD_TESTS=ON'
+else
+	@echo "build-napi-jsc is macOS-only for now." >&2
+	@exit 1
+endif
 
 test: build test-only
 

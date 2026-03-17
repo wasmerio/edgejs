@@ -263,6 +263,145 @@ jobs:
         if: always()
         run: sccache --show-stats || true
 
+  build-napi-jsc-macos:
+    name: build-napi-jsc-macos
+    runs-on: macos-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      JSC_BUILD_DIR: build-napi-jsc
+      JSC_STOCK_BUILD_DIR: build-jsc-stock-host
+      JSC_SMOKE_REGEX: "napi_jsc_test_(29_bigint|31_dataview|32_sharedarraybuffer|35_promise|39_cannot_run_js|65_unofficial_contextify|66_unofficial_unsupported)"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+          test -f node/src/node_api_types.h
+
+      - name: Validate public N-API headers stay V8-agnostic
+        run: |
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+
+      - name: Resolve Bun WebKit SDK path
+        id: bun_webkit
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(bash napi/jsc/tools/bun_webkit_release_tag.sh)"
+          arch="$(uname -m)"
+          case "${arch}" in
+            arm64) asset_arch="arm64" ;;
+            x86_64) asset_arch="amd64" ;;
+            *) echo "Unsupported macOS architecture: ${arch}" >&2; exit 1 ;;
+          esac
+          root="${GITHUB_WORKSPACE}/.ci/jsc/${tag}/macos-${asset_arch}"
+          {
+            echo "tag=${tag}"
+            echo "root=${root}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Cache Bun WebKit SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.bun_webkit.outputs.root }}
+          key: bun-webkit-${{ runner.os }}-${{ runner.arch }}-${{ steps.bun_webkit.outputs.tag }}
+
+      - name: Fetch Bun WebKit SDK
+        shell: bash
+        env:
+          BUN_WEBKIT_ROOT: ${{ steps.bun_webkit.outputs.root }}
+          BUN_WEBKIT_TAG: ${{ steps.bun_webkit.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bash napi/jsc/tools/fetch_bun_webkit_macos.sh
+
+      - name: Build stock-host negative guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S napi/jsc -B "${JSC_STOCK_BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DNAPI_JSC_BUILD_TESTS=ON
+          cmake --build "${JSC_STOCK_BUILD_DIR}" --parallel 4 --target napi_jsc_test_67_jsc_config_guard
+
+      - name: Run stock-host negative guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u BUN_WEBKIT_ROOT -u DYLD_FRAMEWORK_PATH -u DYLD_LIBRARY_PATH -u __XPC_DYLD_FRAMEWORK_PATH -u __XPC_DYLD_LIBRARY_PATH \
+            "./${JSC_STOCK_BUILD_DIR}/tests/napi_jsc_test_67_jsc_config_guard" \
+            --gtest_filter=Test67JscConfigGuard.RejectsSablessHostConfiguration
+
+      - name: Build napi-jsc
+        shell: bash
+        env:
+          BUN_WEBKIT_ROOT: ${{ steps.bun_webkit.outputs.root }}
+        run: |
+          set -euo pipefail
+          make build-napi-jsc BUILD_DIR="${JSC_BUILD_DIR}" CMAKE_BUILD_TYPE=Release JOBS=4
+
+      - name: Run JSC runtime probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${JSC_BUILD_DIR}/napi-jsc/tests/napi_jsc_runtime_probe" | tee "${JSC_BUILD_DIR}/jsc-runtime-probe.txt"
+
+      - name: Check JSC linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          otool -L "${JSC_BUILD_DIR}/napi-jsc/tests/napi_jsc_test_32_sharedarraybuffer" | tee "${JSC_BUILD_DIR}/jsc-runtime-otool.txt"
+          ! grep -q '/System/Library/Frameworks/JavaScriptCore.framework' "${JSC_BUILD_DIR}/jsc-runtime-otool.txt"
+
+      - name: Run JSC smoke subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "${JSC_BUILD_DIR}" --output-on-failure -j4 -R "${JSC_SMOKE_REGEX}"
+
+      - name: Run JSC ctest suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "${JSC_BUILD_DIR}" --output-on-failure -j4 -R '^napi_jsc\.'
+
+      - name: Write JSC runtime report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${JSC_BUILD_DIR}"
+          {
+            echo "BUN_WEBKIT_TAG: ${{ steps.bun_webkit.outputs.tag }}"
+            echo "BUN_WEBKIT_ROOT: ${{ steps.bun_webkit.outputs.root }}"
+            echo "Build directory: ${JSC_BUILD_DIR}"
+            echo "Smoke regex: ${JSC_SMOKE_REGEX}"
+            echo "Probe binary: ${JSC_BUILD_DIR}/napi-jsc/tests/napi_jsc_runtime_probe"
+            echo "Full ctest command: ctest --test-dir ${JSC_BUILD_DIR} --output-on-failure -j4 -R ^napi_jsc\\."
+          } > "${JSC_BUILD_DIR}/jsc-runtime-report.txt"
+
+      - name: Upload JSC diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-jsc-macos-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build-napi-jsc/jsc-runtime-probe.txt
+            build-napi-jsc/jsc-runtime-report.txt
+            build-napi-jsc/jsc-runtime-otool.txt
+            build-napi-jsc/Testing/Temporary/LastTest.log
+            build-jsc-stock-host/Testing/Temporary/LastTest.log
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
   # build-windows-smoke:
   #   name: build-windows-smoke
   #   runs-on: windows-latest

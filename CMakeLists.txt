@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(EDGE_ROOT "${PROJECT_ROOT}")
 set(NAPI_V8_ROOT "${PROJECT_ROOT}/napi/v8")
+set(NAPI_JSC_ROOT "${PROJECT_ROOT}/napi/jsc")
 set(NAPI_INCLUDE_ROOT "${PROJECT_ROOT}/napi/include")
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
@@ -137,23 +138,26 @@ if(EDGE_IS_WASIX_TARGET)
 endif()
 set(EDGE_NAPI_PROVIDER
   "${_edge_napi_provider_default}"
-  CACHE STRING "N-API provider backend: bundled-v8|imports"
+  CACHE STRING "N-API provider backend: bundled-v8|bundled-jsc|imports"
 )
-set_property(CACHE EDGE_NAPI_PROVIDER PROPERTY STRINGS bundled-v8 imports)
+set_property(CACHE EDGE_NAPI_PROVIDER PROPERTY STRINGS bundled-v8 bundled-jsc imports)
+option(EDGE_NAPI_PROVIDER_BUILD_TESTS
+  "Build bundled N-API provider tests when using a bundled provider"
+  OFF)
 if(EDGE_EXTERNAL_NAPI_V8)
   message(WARNING
     "EDGE_EXTERNAL_NAPI_V8 is deprecated; use EDGE_NAPI_PROVIDER=imports.")
   set(EDGE_NAPI_PROVIDER "imports" CACHE STRING
-    "N-API provider backend: bundled-v8|imports" FORCE)
+    "N-API provider backend: bundled-v8|bundled-jsc|imports" FORCE)
 endif()
 string(TOLOWER "${EDGE_NAPI_PROVIDER}" EDGE_NAPI_PROVIDER)
-if(NOT EDGE_NAPI_PROVIDER MATCHES "^(bundled-v8|imports)$")
+if(NOT EDGE_NAPI_PROVIDER MATCHES "^(bundled-v8|bundled-jsc|imports)$")
   message(FATAL_ERROR
     "Invalid EDGE_NAPI_PROVIDER='${EDGE_NAPI_PROVIDER}'. "
-    "Valid values: bundled-v8, imports.")
+    "Valid values: bundled-v8, bundled-jsc, imports.")
 endif()
 set(EDGE_NAPI_PROVIDER "${EDGE_NAPI_PROVIDER}" CACHE STRING
-  "N-API provider backend: bundled-v8|imports" FORCE)
+  "N-API provider backend: bundled-v8|bundled-jsc|imports" FORCE)
 
 # Hard gate: edge runtime/library sources must never directly reference V8.
 file(GLOB_RECURSE EDGE_PURE_SRC_FILES
@@ -192,8 +196,11 @@ if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
       endif()
     endif()
   endif()
-  set(NAPI_V8_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(NAPI_V8_BUILD_TESTS ${EDGE_NAPI_PROVIDER_BUILD_TESTS} CACHE BOOL "" FORCE)
   add_subdirectory("${NAPI_V8_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/napi-v8")
+elseif(EDGE_NAPI_PROVIDER STREQUAL "bundled-jsc")
+  set(NAPI_JSC_BUILD_TESTS ${EDGE_NAPI_PROVIDER_BUILD_TESTS} CACHE BOOL "" FORCE)
+  add_subdirectory("${NAPI_JSC_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/napi-jsc")
 elseif(EDGE_NAPI_PROVIDER STREQUAL "imports")
   add_library(edge_napi_headers INTERFACE)
   target_include_directories(edge_napi_headers INTERFACE "${NAPI_INCLUDE_ROOT}")
@@ -611,6 +618,9 @@ target_include_directories(edge_environment_core
     "${NAPI_INCLUDE_ROOT}"
 )
 target_link_libraries(edge_environment_core PUBLIC uv_a)
+if(EDGE_NAPI_PROVIDER MATCHES "^bundled-")
+  target_compile_definitions(edge_environment_core PUBLIC EDGE_BUNDLED_NAPI_PROVIDER=1)
+endif()
 if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
   target_compile_definitions(edge_environment_core PUBLIC EDGE_BUNDLED_NAPI_V8=1)
 endif()
@@ -749,6 +759,8 @@ target_link_libraries(edge_node_api
 if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
   target_compile_definitions(napi_v8 PUBLIC EDGE_BUNDLED_NAPI_V8=1)
   target_link_libraries(edge_node_api PUBLIC napi_v8)
+elseif(EDGE_NAPI_PROVIDER STREQUAL "bundled-jsc")
+  target_link_libraries(edge_node_api PUBLIC napi_jsc)
 endif()
 
 add_library(edge_runtime STATIC
@@ -916,6 +928,8 @@ target_link_libraries(edge_runtime
 )
 if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
   target_link_libraries(edge_runtime PUBLIC napi_v8)
+elseif(EDGE_NAPI_PROVIDER STREQUAL "bundled-jsc")
+  target_link_libraries(edge_runtime PUBLIC napi_jsc)
 endif()
 set(EDGE_NODE_SHARED_OPENSSL 0)
 if(NOT EDGE_IS_WASIX_TARGET AND EDGE_SHARED_OPENSSL)

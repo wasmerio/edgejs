@@ -11,6 +11,7 @@ v8-*.tar.xz
 /deps/openssl-wasix
 /dist
 /v8-custom-builds
+/.ci/jsc
 /.vscode
 
 # direnv

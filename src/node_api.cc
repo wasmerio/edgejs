@@ -58,7 +58,7 @@ struct napi_callback_scope__ {
   bool entered = false;
 };
 
-void napi_v8_run_async_cleanup_hooks(napi_env env);
+void napi_run_async_cleanup_hooks(napi_env env);
 
 namespace {
 
@@ -153,7 +153,7 @@ void CleanupEnvLoopOnTeardown(void* arg) {
 void RunAsyncCleanupHooksOnEnvTeardown(void* arg) {
   auto* env = static_cast<napi_env>(arg);
   if (!CheckEnv(env)) return;
-  napi_v8_run_async_cleanup_hooks(env);
+  napi_run_async_cleanup_hooks(env);
 }
 
 bool HasPendingException(napi_env env) {
@@ -362,7 +362,7 @@ void UvAfterWork(uv_work_t* req, int status) {
 
 }  // namespace
 
-void napi_v8_run_async_cleanup_hooks(napi_env env) {
+void napi_run_async_cleanup_hooks(napi_env env) {
   if (!CheckEnv(env)) return;
 
   if (auto* environment = GetAttachedEnvironment(env); environment != nullptr) {
