@@ -491,29 +491,15 @@ std::string DetectExecPath() {
   if (forced_exec != nullptr && forced_exec[0] != '\0') {
     return forced_exec;
   }
-#if defined(__APPLE__)
-  uint32_t size = 0;
-  _NSGetExecutablePath(nullptr, &size);
-  if (size > 0) {
-    std::vector<char> buf(size + 1, '\0');
-    if (_NSGetExecutablePath(buf.data(), &size) == 0) {
-      char resolved[4096] = {'\0'};
-      if (realpath(buf.data(), resolved) != nullptr) {
-        return MaybePreferSiblingEdgeBinary(std::string(resolved));
-      }
-      return MaybePreferSiblingEdgeBinary(std::string(buf.data()));
-    }
+  char exec_path_buf[8192];
+  size_t exec_path_len = sizeof(exec_path_buf);
+  if (uv_exepath(exec_path_buf, &exec_path_len) == 0) {
+    return MaybePreferSiblingEdgeBinary(std::string(exec_path_buf, exec_path_len));
   }
-  return "edge";
-#elif defined(__linux__)
-  std::vector<char> buf(4096, '\0');
-  ssize_t n = readlink("/proc/self/exe", buf.data(), buf.size() - 1);
-  if (n > 0) {
-    buf[static_cast<size_t>(n)] = '\0';
-    return MaybePreferSiblingEdgeBinary(std::string(buf.data()));
+  if (!g_edge_argv0.empty()) {
+    return g_edge_argv0;
   }
-  return "edge";
-#elif defined(_WIN32)
+#if defined(_WIN32)
   return "edge.exe";
 #else
   return "edge";
