@@ -1,0 +1,3721 @@
+{
+  "schemaVersion": 1,
+  "locked": true,
+  "updatedAt": "2026-03-13T17:37:10.810Z",
+  "description": "Locked top-100 by npm last-year downloads. Manual edits required to change package list or per-package commands.",
+  "runners": {
+    "node": {
+      "description": "Run tests with locally installed node"
+    },
+    "edgejs": {
+      "description": "Run tests with native edgejs runner"
+    },
+    "wasix_edgejs": {
+      "description": "Run tests with wasix edgejs runner",
+      "requiresEnv": [
+        "UBI"
+      ]
+    }
+  },
+  "packages": [
+    {
+      "name": "debug",
+      "version": "4.3.4",
+      "rank": 1,
+      "downloadsLastYear": 20574894752,
+      "smokeTest": "debug-test.js",
+      "repository": "https://github.com/debug-js/debug.git",
+      "cloneDir": "repos/debug",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for debug\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for debug\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "chalk",
+      "version": "5.0.1",
+      "rank": 2,
+      "downloadsLastYear": 17475384726,
+      "smokeTest": "chalk-test.js",
+      "repository": "https://github.com/chalk/chalk.git",
+      "cloneDir": "repos/chalk",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for chalk\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for chalk\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "minimatch",
+      "version": "5.1.0",
+      "rank": 3,
+      "downloadsLastYear": 16870788394,
+      "smokeTest": "minimatch-test.js",
+      "repository": "ssh://git@github.com/isaacs/minimatch.git",
+      "cloneDir": "repos/minimatch",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for minimatch\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for minimatch\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lru-cache",
+      "version": "7.10.1",
+      "rank": 4,
+      "downloadsLastYear": 12592472787,
+      "smokeTest": "lru-cache-test.js",
+      "repository": "ssh://git@github.com/isaacs/node-lru-cache.git",
+      "cloneDir": "repos/lru-cache",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for lru-cache\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for lru-cache\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "commander",
+      "version": "9.3.0",
+      "rank": 5,
+      "downloadsLastYear": 11521404276,
+      "smokeTest": "commander-test.js",
+      "repository": "https://github.com/tj/commander.js.git",
+      "cloneDir": "repos/commander",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for commander\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for commander\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "color-convert",
+      "version": "2.0.1",
+      "rank": 6,
+      "downloadsLastYear": 11442972229,
+      "smokeTest": "color-convert-test.js",
+      "repository": "https://github.com/Qix-/color-convert.git",
+      "cloneDir": "repos/color-convert",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for color-convert\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for color-convert\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "color-name",
+      "version": "1.1.4",
+      "rank": 7,
+      "downloadsLastYear": 11419732970,
+      "smokeTest": "color-name-test.js",
+      "repository": "ssh://git@github.com/colorjs/color-name.git",
+      "cloneDir": "repos/color-name",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for color-name\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for color-name\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "emoji-regex",
+      "version": "10.1.0",
+      "rank": 8,
+      "downloadsLastYear": 11058600775,
+      "smokeTest": "emoji-regex-test.js",
+      "repository": "https://github.com/mathiasbynens/emoji-regex.git",
+      "cloneDir": "repos/emoji-regex",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for emoji-regex\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for emoji-regex\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "escape-string-regexp",
+      "version": "5.0.0",
+      "rank": 9,
+      "downloadsLastYear": 9248999799,
+      "smokeTest": "escape-string-regexp-test.js",
+      "repository": "https://github.com/sindresorhus/escape-string-regexp.git",
+      "cloneDir": "repos/escape-string-regexp",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for escape-string-regexp\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for escape-string-regexp\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "uuid",
+      "version": "8.3.2",
+      "rank": 10,
+      "downloadsLastYear": 8600690646,
+      "smokeTest": "uuid-test.js",
+      "repository": "https://github.com/uuidjs/uuid.git",
+      "cloneDir": "repos/uuid",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for uuid\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for uuid\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ajv",
+      "version": "8.11.0",
+      "rank": 11,
+      "downloadsLastYear": 8348859532,
+      "smokeTest": "ajv-test.js",
+      "repository": "https://github.com/ajv-validator/ajv.git",
+      "cloneDir": "repos/ajv",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for ajv\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for ajv\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "which",
+      "version": "2.0.2",
+      "rank": 12,
+      "downloadsLastYear": 7462793979,
+      "smokeTest": "which-test.js",
+      "repository": "https://github.com/npm/node-which.git",
+      "cloneDir": "repos/which",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for which\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for which\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "json-schema-traverse",
+      "version": "1.0.0",
+      "rank": 13,
+      "downloadsLastYear": 7348931725,
+      "smokeTest": "json-schema-traverse-test.js",
+      "repository": "https://github.com/epoberezkin/json-schema-traverse.git",
+      "cloneDir": "repos/json-schema-traverse",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for json-schema-traverse\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for json-schema-traverse\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "globals",
+      "version": "13.15.0",
+      "rank": 14,
+      "downloadsLastYear": 6787629476,
+      "smokeTest": "globals-test.js",
+      "repository": "https://github.com/sindresorhus/globals.git",
+      "cloneDir": "repos/globals",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for globals\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for globals\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "acorn",
+      "version": "8.7.1",
+      "rank": 15,
+      "downloadsLastYear": 6422831729,
+      "smokeTest": "acorn-test.js",
+      "repository": "https://github.com/acornjs/acorn.git",
+      "cloneDir": "repos/acorn",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for acorn\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for acorn\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "yargs",
+      "version": "17.5.1",
+      "rank": 16,
+      "downloadsLastYear": 6420949473,
+      "smokeTest": "yargs-test.js",
+      "repository": "https://github.com/yargs/yargs.git",
+      "cloneDir": "repos/yargs",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for yargs\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for yargs\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "fs-extra",
+      "version": "10.1.0",
+      "rank": 17,
+      "downloadsLastYear": 6238600757,
+      "smokeTest": "fs-extra-test.js",
+      "repository": "https://github.com/jprichardson/node-fs-extra.git",
+      "cloneDir": "repos/fs-extra",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for fs-extra\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for fs-extra\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "path-exists",
+      "version": "5.0.0",
+      "rank": 18,
+      "downloadsLastYear": 5988432874,
+      "smokeTest": "path-exists-test.js",
+      "repository": "https://github.com/sindresorhus/path-exists.git",
+      "cloneDir": "repos/path-exists",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for path-exists\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for path-exists\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ws",
+      "version": "8.8.0",
+      "rank": 19,
+      "downloadsLastYear": 5976465497,
+      "smokeTest": "ws-test.js",
+      "repository": "https://github.com/websockets/ws.git",
+      "cloneDir": "repos/ws",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for ws\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for ws\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cross-spawn",
+      "version": "7.0.3",
+      "rank": 20,
+      "downloadsLastYear": 5765144361,
+      "smokeTest": "cross-spawn-test.js",
+      "repository": "ssh://git@github.com/moxystudio/node-cross-spawn.git",
+      "cloneDir": "repos/cross-spawn",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for cross-spawn\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for cross-spawn\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "postcss",
+      "version": "8.4.14",
+      "rank": 21,
+      "downloadsLastYear": 5503251107,
+      "smokeTest": "postcss-test.js",
+      "repository": "https://github.com/postcss/postcss.git",
+      "cloneDir": "repos/postcss",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for postcss\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for postcss\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "onetime",
+      "version": "6.0.0",
+      "rank": 22,
+      "downloadsLastYear": 4961947610,
+      "smokeTest": "onetime-test.js",
+      "repository": "https://github.com/sindresorhus/onetime.git",
+      "cloneDir": "repos/onetime",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for onetime\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for onetime\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "strip-json-comments",
+      "version": "4.0.0",
+      "rank": 23,
+      "downloadsLastYear": 4924318911,
+      "smokeTest": "strip-json-comments-test.js",
+      "repository": "https://github.com/sindresorhus/strip-json-comments.git",
+      "cloneDir": "repos/strip-json-comments",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for strip-json-comments\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for strip-json-comments\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "fill-range",
+      "version": "7.0.1",
+      "rank": 24,
+      "downloadsLastYear": 4796202287,
+      "smokeTest": "fill-range-test.js",
+      "repository": "https://github.com/jonschlinkert/fill-range.git",
+      "cloneDir": "repos/fill-range",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for fill-range\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for fill-range\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "path-to-regexp",
+      "version": "6.2.1",
+      "rank": 25,
+      "downloadsLastYear": 4546174970,
+      "smokeTest": "path-to-regexp-test.js",
+      "repository": "https://github.com/pillarjs/path-to-regexp.git",
+      "cloneDir": "repos/path-to-regexp",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for path-to-regexp\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for path-to-regexp\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "get-intrinsic",
+      "version": "1.1.2",
+      "rank": 26,
+      "downloadsLastYear": 4535939099,
+      "smokeTest": "get-intrinsic-test.js",
+      "repository": "https://github.com/ljharb/get-intrinsic.git",
+      "cloneDir": "repos/get-intrinsic",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for get-intrinsic\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for get-intrinsic\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "strip-bom",
+      "version": "5.0.0",
+      "rank": 27,
+      "downloadsLastYear": 4502069242,
+      "smokeTest": "strip-bom-test.js",
+      "repository": "https://github.com/sindresorhus/strip-bom.git",
+      "cloneDir": "repos/strip-bom",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for strip-bom\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for strip-bom\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "function-bind",
+      "version": "1.1.1",
+      "rank": 28,
+      "downloadsLastYear": 4456643230,
+      "smokeTest": "function-bind-test.js",
+      "repository": "https://github.com/Raynos/function-bind.git",
+      "cloneDir": "repos/function-bind",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for function-bind\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for function-bind\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "readdirp",
+      "version": "3.6.0",
+      "rank": 29,
+      "downloadsLastYear": 4331414778,
+      "smokeTest": "readdirp-test.js",
+      "repository": "https://github.com/paulmillr/readdirp.git",
+      "cloneDir": "repos/readdirp",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for readdirp\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for readdirp\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mime",
+      "version": "3.0.0",
+      "rank": 30,
+      "downloadsLastYear": 4231219214,
+      "smokeTest": "mime-test.js",
+      "repository": "https://github.com/broofa/mime.git",
+      "cloneDir": "repos/mime",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for mime\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for mime\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "yaml",
+      "version": "2.1.1",
+      "rank": 31,
+      "downloadsLastYear": 4128070691,
+      "smokeTest": "yaml-test.js",
+      "repository": "https://github.com/eemeli/yaml.git",
+      "cloneDir": "repos/yaml",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for yaml\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for yaml\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "browserslist",
+      "version": "4.20.4",
+      "rank": 32,
+      "downloadsLastYear": 4069318139,
+      "smokeTest": "browserslist-test.js",
+      "repository": "https://github.com/browserslist/browserslist.git",
+      "cloneDir": "repos/browserslist",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for browserslist\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for browserslist\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ci-info",
+      "version": "3.3.2",
+      "rank": 33,
+      "downloadsLastYear": 3941452354,
+      "smokeTest": "ci-info-test.js",
+      "repository": "https://github.com/watson/ci-info.git",
+      "cloneDir": "repos/ci-info",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for ci-info\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for ci-info\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "escalade",
+      "version": "3.1.1",
+      "rank": 34,
+      "downloadsLastYear": 3926128950,
+      "smokeTest": "escalade-test.js",
+      "repository": "https://github.com/lukeed/escalade.git",
+      "cloneDir": "repos/escalade",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for escalade\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for escalade\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "object-inspect",
+      "version": "1.12.2",
+      "rank": 35,
+      "downloadsLastYear": 3863697614,
+      "smokeTest": "object-inspect-test.js",
+      "repository": "https://github.com/inspect-js/object-inspect.git",
+      "cloneDir": "repos/object-inspect",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for object-inspect\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for object-inspect\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "encodeurl",
+      "version": "1.0.2",
+      "rank": 36,
+      "downloadsLastYear": 3815724907,
+      "smokeTest": "encodeurl-test.js",
+      "repository": "https://github.com/pillarjs/encodeurl.git",
+      "cloneDir": "repos/encodeurl",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for encodeurl\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for encodeurl\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "jsonfile",
+      "version": "6.1.0",
+      "rank": 37,
+      "downloadsLastYear": 3808086125,
+      "smokeTest": "jsonfile-test.js",
+      "repository": "ssh://git@github.com/jprichardson/node-jsonfile.git",
+      "cloneDir": "repos/jsonfile",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for jsonfile\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for jsonfile\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "nanoid",
+      "version": "4.0.0",
+      "rank": 38,
+      "downloadsLastYear": 3566149736,
+      "smokeTest": "nanoid-test.js",
+      "repository": "https://github.com/ai/nanoid.git",
+      "cloneDir": "repos/nanoid",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for nanoid\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for nanoid\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "has-tostringtag",
+      "version": "1.0.0",
+      "rank": 39,
+      "downloadsLastYear": 3515719735,
+      "smokeTest": "has-tostringtag-test.js",
+      "repository": "https://github.com/inspect-js/has-tostringtag.git",
+      "cloneDir": "repos/has-tostringtag",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for has-tostringtag\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for has-tostringtag\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "async",
+      "version": "3.2.4",
+      "rank": 40,
+      "downloadsLastYear": 3485182214,
+      "smokeTest": "async-test.js",
+      "repository": "https://github.com/caolan/async.git",
+      "cloneDir": "repos/async",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for async\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for async\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "dotenv",
+      "version": "16.0.1",
+      "rank": 41,
+      "downloadsLastYear": 3419346832,
+      "smokeTest": "dotenv-test.js",
+      "repository": "https://github.com/motdotla/dotenv.git",
+      "cloneDir": "repos/dotenv",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for dotenv\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for dotenv\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "rank": 42,
+      "downloadsLastYear": 3408820620,
+      "smokeTest": "safer-buffer-test.js",
+      "repository": "https://github.com/ChALkeR/safer-buffer.git",
+      "cloneDir": "repos/safer-buffer",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for safer-buffer\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for safer-buffer\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "eslint",
+      "version": "8.18.0",
+      "rank": 43,
+      "downloadsLastYear": 3370453521,
+      "smokeTest": "eslint-test.js",
+      "repository": "https://github.com/eslint/eslint.git",
+      "cloneDir": "repos/eslint",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for eslint\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for eslint\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "path-parse",
+      "version": "1.0.7",
+      "rank": 44,
+      "downloadsLastYear": 3332666804,
+      "smokeTest": "path-parse-test.js",
+      "repository": "https://github.com/jbgutierrez/path-parse.git",
+      "cloneDir": "repos/path-parse",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for path-parse\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for path-parse\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "rxjs",
+      "version": "7.5.5",
+      "rank": 45,
+      "downloadsLastYear": 3231190842,
+      "smokeTest": "rxjs-test.js",
+      "repository": "https://github.com/reactivex/rxjs.git",
+      "cloneDir": "repos/rxjs",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for rxjs\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for rxjs\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "setprototypeof",
+      "version": "1.2.0",
+      "rank": 46,
+      "downloadsLastYear": 3228425868,
+      "smokeTest": "setprototypeof-test.js",
+      "repository": "https://github.com/wesleytodd/setprototypeof.git",
+      "cloneDir": "repos/setprototypeof",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for setprototypeof\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for setprototypeof\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "file-entry-cache",
+      "version": "6.0.1",
+      "rank": 47,
+      "downloadsLastYear": 3165961615,
+      "smokeTest": "file-entry-cache-test.js",
+      "repository": "https://github.com/jaredwray/cacheable.git",
+      "cloneDir": "repos/file-entry-cache",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for file-entry-cache\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for file-entry-cache\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "prettier",
+      "version": "2.7.1",
+      "rank": 48,
+      "downloadsLastYear": 2945818992,
+      "smokeTest": "prettier-test.js",
+      "repository": "https://github.com/prettier/prettier.git",
+      "cloneDir": "repos/prettier",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for prettier\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for prettier\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "finalhandler",
+      "version": "1.2.0",
+      "rank": 49,
+      "downloadsLastYear": 2939393662,
+      "smokeTest": "finalhandler-test.js",
+      "repository": "https://github.com/pillarjs/finalhandler.git",
+      "cloneDir": "repos/finalhandler",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for finalhandler\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for finalhandler\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "source-map-js",
+      "version": "1.0.2",
+      "rank": 50,
+      "downloadsLastYear": 2756973600,
+      "smokeTest": "source-map-js-test.js",
+      "repository": "https://github.com/7rulnik/source-map-js.git",
+      "cloneDir": "repos/source-map-js",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for source-map-js\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for source-map-js\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "merge-stream",
+      "version": "2.0.0",
+      "rank": 51,
+      "downloadsLastYear": 2747172317,
+      "smokeTest": "merge-stream-test.js",
+      "repository": "https://github.com/grncdr/merge-stream.git",
+      "cloneDir": "repos/merge-stream",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for merge-stream\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for merge-stream\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lodash.merge",
+      "version": "4.6.2",
+      "rank": 52,
+      "downloadsLastYear": 2659862915,
+      "smokeTest": "lodash.merge-test.js",
+      "repository": "https://github.com/lodash/lodash.git",
+      "cloneDir": "repos/lodash.merge",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for lodash.merge\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for lodash.merge\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "domhandler",
+      "version": "5.0.3",
+      "rank": 53,
+      "downloadsLastYear": 2659100469,
+      "smokeTest": "domhandler-test.js",
+      "repository": "https://github.com/fb55/domhandler.git",
+      "cloneDir": "repos/domhandler",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for domhandler\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for domhandler\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "object-keys",
+      "version": "1.1.1",
+      "rank": 54,
+      "downloadsLastYear": 2599529557,
+      "smokeTest": "object-keys-test.js",
+      "repository": "https://github.com/ljharb/object-keys.git",
+      "cloneDir": "repos/object-keys",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for object-keys\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for object-keys\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "require-from-string",
+      "version": "2.0.2",
+      "rank": 55,
+      "downloadsLastYear": 2582324901,
+      "smokeTest": "require-from-string-test.js",
+      "repository": "https://github.com/floatdrop/require-from-string.git",
+      "cloneDir": "repos/require-from-string",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for require-from-string\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for require-from-string\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "react",
+      "version": "18.2.0",
+      "rank": 56,
+      "downloadsLastYear": 2581760292,
+      "smokeTest": "react-test.js",
+      "repository": "https://github.com/facebook/react.git",
+      "cloneDir": "repos/react",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for react\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for react\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "express",
+      "version": "4.18.1",
+      "rank": 57,
+      "downloadsLastYear": 2579868642,
+      "smokeTest": "express-test.js",
+      "repository": "https://github.com/expressjs/express.git",
+      "cloneDir": "repos/express",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for express\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for express\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "jest-matcher-utils",
+      "version": "28.1.1",
+      "rank": 58,
+      "downloadsLastYear": 2441215714,
+      "smokeTest": "jest-matcher-utils-test.js",
+      "repository": "https://github.com/jestjs/jest.git",
+      "cloneDir": "repos/jest-matcher-utils",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for jest-matcher-utils\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for jest-matcher-utils\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "is-date-object",
+      "version": "1.0.5",
+      "rank": 59,
+      "downloadsLastYear": 2439934574,
+      "smokeTest": "is-date-object-test.js",
+      "repository": "https://github.com/inspect-js/is-date-object.git",
+      "cloneDir": "repos/is-date-object",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for is-date-object\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for is-date-object\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "toidentifier",
+      "version": "1.0.1",
+      "rank": 60,
+      "downloadsLastYear": 2430044727,
+      "smokeTest": "toidentifier-test.js",
+      "repository": "https://github.com/component/toidentifier.git",
+      "cloneDir": "repos/toidentifier",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for toidentifier\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for toidentifier\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "string.prototype.trimend",
+      "version": "1.0.5",
+      "rank": 61,
+      "downloadsLastYear": 2327705284,
+      "smokeTest": "string.prototype.trimend-test.js",
+      "repository": "https://github.com/es-shims/String.prototype.trimEnd.git",
+      "cloneDir": "repos/string.prototype.trimend",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for string.prototype.trimend\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for string.prototype.trimend\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "jest-mock",
+      "version": "28.1.1",
+      "rank": 62,
+      "downloadsLastYear": 2269227454,
+      "smokeTest": "jest-mock-test.js",
+      "repository": "https://github.com/jestjs/jest.git",
+      "cloneDir": "repos/jest-mock",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for jest-mock\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for jest-mock\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "is-shared-array-buffer",
+      "version": "1.0.2",
+      "rank": 63,
+      "downloadsLastYear": 2263871718,
+      "smokeTest": "is-shared-array-buffer-test.js",
+      "repository": "https://github.com/inspect-js/is-shared-array-buffer.git",
+      "cloneDir": "repos/is-shared-array-buffer",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for is-shared-array-buffer\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for is-shared-array-buffer\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "htmlparser2",
+      "version": "8.0.1",
+      "rank": 64,
+      "downloadsLastYear": 2250836482,
+      "smokeTest": "htmlparser2-test.js",
+      "repository": "https://github.com/fb55/htmlparser2.git",
+      "cloneDir": "repos/htmlparser2",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for htmlparser2\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for htmlparser2\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "etag",
+      "version": "1.8.1",
+      "rank": 65,
+      "downloadsLastYear": 2226846247,
+      "smokeTest": "etag-test.js",
+      "repository": "https://github.com/jshttp/etag.git",
+      "cloneDir": "repos/etag",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for etag\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for etag\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "has-bigints",
+      "version": "1.0.2",
+      "rank": 66,
+      "downloadsLastYear": 2204095096,
+      "smokeTest": "has-bigints-test.js",
+      "repository": "https://github.com/ljharb/has-bigints.git",
+      "cloneDir": "repos/has-bigints",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for has-bigints\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "napi_wasmer \"${UBI:-${UBI_WASM:?UBI must be set}}\" test/index.js"
+          ]
+        }
+      }
+    },
+    {
+      "name": "core-js",
+      "version": "3.23.1",
+      "rank": 67,
+      "downloadsLastYear": 2157976970,
+      "smokeTest": "core-js-test.js",
+      "repository": "https://github.com/zloirock/core-js.git",
+      "cloneDir": "repos/core-js",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for core-js\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for core-js\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kleur",
+      "version": "4.1.4",
+      "rank": 68,
+      "downloadsLastYear": 2094893387,
+      "smokeTest": "kleur-test.js",
+      "repository": "https://github.com/lukeed/kleur.git",
+      "cloneDir": "repos/kleur",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for kleur\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for kleur\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cli-width",
+      "version": "4.0.0",
+      "rank": 69,
+      "downloadsLastYear": 2011062999,
+      "smokeTest": "cli-width-test.js",
+      "repository": "ssh://git@github.com/knownasilya/cli-width.git",
+      "cloneDir": "repos/cli-width",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for cli-width\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for cli-width\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "destroy",
+      "version": "1.2.0",
+      "rank": 70,
+      "downloadsLastYear": 2010367868,
+      "smokeTest": "destroy-test.js",
+      "repository": "https://github.com/stream-utils/destroy.git",
+      "cloneDir": "repos/destroy",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for destroy\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for destroy\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "find-cache-dir",
+      "version": "3.3.2",
+      "rank": 71,
+      "downloadsLastYear": 2005809595,
+      "smokeTest": "find-cache-dir-test.js",
+      "repository": "https://github.com/sindresorhus/find-cache-dir.git",
+      "cloneDir": "repos/find-cache-dir",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for find-cache-dir\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for find-cache-dir\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "methods",
+      "version": "1.1.2",
+      "rank": 72,
+      "downloadsLastYear": 1909571146,
+      "smokeTest": "methods-test.js",
+      "repository": "https://github.com/jshttp/methods.git",
+      "cloneDir": "repos/methods",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for methods\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for methods\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "neo-async",
+      "version": "2.6.2",
+      "rank": 73,
+      "downloadsLastYear": 1873365074,
+      "smokeTest": "neo-async-test.js",
+      "repository": "ssh://git@github.com/suguru03/neo-async.git",
+      "cloneDir": "repos/neo-async",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for neo-async\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for neo-async\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "stack-utils",
+      "version": "2.0.5",
+      "rank": 74,
+      "downloadsLastYear": 1823267709,
+      "smokeTest": "stack-utils-test.js",
+      "repository": "https://github.com/tapjs/stack-utils.git",
+      "cloneDir": "repos/stack-utils",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for stack-utils\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for stack-utils\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cli-spinners",
+      "version": "2.6.1",
+      "rank": 75,
+      "downloadsLastYear": 1732583723,
+      "smokeTest": "cli-spinners-test.js",
+      "repository": "https://github.com/sindresorhus/cli-spinners.git",
+      "cloneDir": "repos/cli-spinners",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for cli-spinners\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for cli-spinners\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "webpack",
+      "version": "5.73.0",
+      "rank": 76,
+      "downloadsLastYear": 1700860532,
+      "smokeTest": "webpack-test.js",
+      "repository": "https://github.com/webpack/webpack.git",
+      "cloneDir": "repos/webpack",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for webpack\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for webpack\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ts-node",
+      "version": "10.8.1",
+      "rank": 77,
+      "downloadsLastYear": 1660409726,
+      "smokeTest": "ts-node-test.js",
+      "repository": "https://github.com/TypeStrong/ts-node.git",
+      "cloneDir": "repos/ts-node",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for ts-node\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for ts-node\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "bser",
+      "version": "2.1.1",
+      "rank": 78,
+      "downloadsLastYear": 1616171954,
+      "smokeTest": "bser-test.js",
+      "repository": "https://github.com/facebook/watchman.git",
+      "cloneDir": "repos/bser",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for bser\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for bser\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "core-js-compat",
+      "version": "3.23.1",
+      "rank": 79,
+      "downloadsLastYear": 1611481345,
+      "smokeTest": "core-js-compat-test.js",
+      "repository": "https://github.com/zloirock/core-js.git",
+      "cloneDir": "repos/core-js-compat",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for core-js-compat\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for core-js-compat\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "autoprefixer",
+      "version": "10.4.7",
+      "rank": 80,
+      "downloadsLastYear": 1579821128,
+      "smokeTest": "autoprefixer-test.js",
+      "repository": "https://github.com/postcss/autoprefixer.git",
+      "cloneDir": "repos/autoprefixer",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for autoprefixer\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for autoprefixer\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "walker",
+      "version": "1.0.8",
+      "rank": 81,
+      "downloadsLastYear": 1570499771,
+      "smokeTest": "walker-test.js",
+      "repository": "https://github.com/daaku/nodejs-walker.git",
+      "cloneDir": "repos/walker",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for walker\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for walker\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "set-blocking",
+      "version": "2.0.0",
+      "rank": 82,
+      "downloadsLastYear": 1545304144,
+      "smokeTest": "set-blocking-test.js",
+      "repository": "https://github.com/yargs/set-blocking.git",
+      "cloneDir": "repos/set-blocking",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for set-blocking\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for set-blocking\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lodash.debounce",
+      "version": "4.0.8",
+      "rank": 83,
+      "downloadsLastYear": 1408757192,
+      "smokeTest": "lodash.debounce-test.js",
+      "repository": "https://github.com/lodash/lodash.git",
+      "cloneDir": "repos/lodash.debounce",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for lodash.debounce\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for lodash.debounce\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "is-accessor-descriptor",
+      "version": "3.0.1",
+      "rank": 84,
+      "downloadsLastYear": 1391796643,
+      "smokeTest": "is-accessor-descriptor-test.js",
+      "repository": "https://github.com/inspect-js/is-accessor-descriptor.git",
+      "cloneDir": "repos/is-accessor-descriptor",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for is-accessor-descriptor\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for is-accessor-descriptor\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "is-data-descriptor",
+      "version": "2.0.0",
+      "rank": 85,
+      "downloadsLastYear": 1391540777,
+      "smokeTest": "is-data-descriptor-test.js",
+      "repository": "https://github.com/inspect-js/is-data-descriptor.git",
+      "cloneDir": "repos/is-data-descriptor",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for is-data-descriptor\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for is-data-descriptor\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lodash.memoize",
+      "version": "4.1.2",
+      "rank": 86,
+      "downloadsLastYear": 1363189804,
+      "smokeTest": "lodash.memoize-test.js",
+      "repository": "https://github.com/lodash/lodash.git",
+      "cloneDir": "repos/lodash.memoize",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for lodash.memoize\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for lodash.memoize\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "regenerate",
+      "version": "1.4.2",
+      "rank": 87,
+      "downloadsLastYear": 1340223753,
+      "smokeTest": "regenerate-test.js",
+      "repository": "https://github.com/mathiasbynens/regenerate.git",
+      "cloneDir": "repos/regenerate",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for regenerate\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for regenerate\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "immutable",
+      "version": "4.1.0",
+      "rank": 88,
+      "downloadsLastYear": 1332315834,
+      "smokeTest": "immutable-test.js",
+      "repository": "https://github.com/immutable-js/immutable-js.git",
+      "cloneDir": "repos/immutable",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for immutable\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for immutable\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "log-update",
+      "version": "5.0.1",
+      "rank": 89,
+      "downloadsLastYear": 1314674051,
+      "smokeTest": "log-update-test.js",
+      "repository": "https://github.com/sindresorhus/log-update.git",
+      "cloneDir": "repos/log-update",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for log-update\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for log-update\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "playwright-core",
+      "version": "1.22.2",
+      "rank": 90,
+      "downloadsLastYear": 1228443353,
+      "smokeTest": "playwright-core-test.js",
+      "repository": "https://github.com/microsoft/playwright.git",
+      "cloneDir": "repos/playwright-core",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for playwright-core\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for playwright-core\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lodash.once",
+      "version": "4.1.1",
+      "rank": 91,
+      "downloadsLastYear": 1226685598,
+      "smokeTest": "lodash.once-test.js",
+      "repository": "https://github.com/lodash/lodash.git",
+      "cloneDir": "repos/lodash.once",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for lodash.once\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for lodash.once\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "html-entities",
+      "version": "2.3.3",
+      "rank": 92,
+      "downloadsLastYear": 1169058159,
+      "smokeTest": "html-entities-test.js",
+      "repository": "https://github.com/mdevils/html-entities.git",
+      "cloneDir": "repos/html-entities",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for html-entities\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for html-entities\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "camel-case",
+      "version": "4.1.2",
+      "rank": 93,
+      "downloadsLastYear": 1136501457,
+      "smokeTest": "camel-case-test.js",
+      "repository": "https://github.com/blakeembrey/change-case.git",
+      "cloneDir": "repos/camel-case",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for camel-case\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for camel-case\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "fast-diff",
+      "version": "1.2.0",
+      "rank": 94,
+      "downloadsLastYear": 1128532735,
+      "smokeTest": "fast-diff-test.js",
+      "repository": "https://github.com/jhchen/fast-diff.git",
+      "cloneDir": "repos/fast-diff",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for fast-diff\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for fast-diff\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cacheable-request",
+      "version": "8.0.1",
+      "rank": 95,
+      "downloadsLastYear": 1105920658,
+      "smokeTest": "cacheable-request-test.js",
+      "repository": "https://github.com/jaredwray/cacheable.git",
+      "cloneDir": "repos/cacheable-request",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for cacheable-request\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for cacheable-request\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "webpack-dev-middleware",
+      "version": "5.3.3",
+      "rank": 96,
+      "downloadsLastYear": 1078190675,
+      "smokeTest": "webpack-dev-middleware-test.js",
+      "repository": "https://github.com/webpack/webpack-dev-middleware.git",
+      "cloneDir": "repos/webpack-dev-middleware",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for webpack-dev-middleware\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for webpack-dev-middleware\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "postcss-modules-extract-imports",
+      "version": "3.0.0",
+      "rank": 97,
+      "downloadsLastYear": 1051854807,
+      "smokeTest": "postcss-modules-extract-imports-test.js",
+      "repository": "https://github.com/css-modules/postcss-modules-extract-imports.git",
+      "cloneDir": "repos/postcss-modules-extract-imports",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for postcss-modules-extract-imports\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for postcss-modules-extract-imports\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "immer",
+      "version": "9.0.15",
+      "rank": 98,
+      "downloadsLastYear": 939931971,
+      "smokeTest": "immer-test.js",
+      "repository": "https://github.com/immerjs/immer.git",
+      "cloneDir": "repos/immer",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for immer\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for immer\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lie",
+      "version": "3.3.0",
+      "rank": 99,
+      "downloadsLastYear": 937234664,
+      "smokeTest": "lie-test.js",
+      "repository": "https://github.com/calvinmetcalf/lie.git",
+      "cloneDir": "repos/lie",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for lie\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for lie\"",
+            "exit 2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "vfile",
+      "version": "5.3.4",
+      "rank": 100,
+      "downloadsLastYear": 893269739,
+      "smokeTest": "vfile-test.js",
+      "repository": "https://github.com/vfile/vfile.git",
+      "cloneDir": "repos/vfile",
+      "unitTests": {
+        "node": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "npm test --if-present"
+          ]
+        },
+        "edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual edgejs unit-test command required for vfile\"",
+            "exit 2"
+          ]
+        },
+        "wasix_edgejs": {
+          "setup": [
+            "npm install --no-audit --fund=false --legacy-peer-deps"
+          ],
+          "run": [
+            "echo \"manual wasix_edgejs unit-test command required for vfile\"",
+            "exit 2"
+          ]
+        }
+      }
+    }
+  ]
+}
