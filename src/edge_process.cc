@@ -2542,7 +2542,7 @@ void WriteJsonStringArray(SimpleJsonWriter& writer,
 
 void WriteReportComponentVersions(SimpleJsonWriter& writer, bool has_intl) {
   writer.json_objectstart("componentVersions");
-  writer.json_keyvalue("node", NODE_VERSION_STRING);
+  writer.json_keyvalue("node", NODE_COMPAT_VERSION_STRING);
   for (const auto& entry : BuildProcessVersionEntries(has_intl)) {
     if (!entry.value.empty()) writer.json_keyvalue(entry.key, entry.value);
   }
@@ -2556,9 +2556,9 @@ void WriteReportRelease(SimpleJsonWriter& writer) {
   writer.json_keyvalue("lts", NODE_VERSION_LTS_CODENAME);
 #endif
   const std::string release_url_prefix =
-      std::string("https://nodejs.org/download/release/v") + NODE_VERSION_STRING + "/";
+      std::string("https://nodejs.org/download/release/v") + NODE_COMPAT_VERSION_STRING + "/";
   const std::string release_file_prefix =
-      release_url_prefix + "node-v" + NODE_VERSION_STRING;
+      release_url_prefix + "node-v" + NODE_COMPAT_VERSION_STRING;
   writer.json_keyvalue("sourceUrl", release_file_prefix + ".tar.gz");
   writer.json_keyvalue("headersUrl", release_file_prefix + "-headers.tar.gz");
   writer.json_objectend();
@@ -5158,7 +5158,7 @@ napi_status EdgeInstallProcessObject(napi_env env,
   if (status != napi_ok) return status;
 
   napi_value version_str = nullptr;
-  status = napi_create_string_utf8(env, NODE_VERSION, NAPI_AUTO_LENGTH, &version_str);
+  status = napi_create_string_utf8(env, NODE_COMPAT_VERSION, NAPI_AUTO_LENGTH, &version_str);
   if (status != napi_ok || version_str == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
   status = napi_set_named_property(env, process_obj, "version", version_str);
   if (status != napi_ok) return status;
@@ -5182,7 +5182,7 @@ napi_status EdgeInstallProcessObject(napi_env env,
   std::vector<ProcessVersionEntry> version_entries = BuildProcessVersionEntries(has_intl);
 
   napi_value node_version_value = nullptr;
-  status = napi_create_string_utf8(env, NODE_VERSION_STRING, NAPI_AUTO_LENGTH, &node_version_value);
+  status = napi_create_string_utf8(env, NODE_COMPAT_VERSION_STRING, NAPI_AUTO_LENGTH, &node_version_value);
   if (status != napi_ok || node_version_value == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
   napi_property_descriptor node_prop = {};
   node_prop.utf8name = "node";
@@ -5222,9 +5222,9 @@ napi_status EdgeInstallProcessObject(napi_env env,
   if (status != napi_ok) return status;
 #endif
   const std::string release_url_prefix =
-      std::string("https://nodejs.org/download/release/v") + NODE_VERSION_STRING + "/";
+      std::string("https://nodejs.org/download/release/v") + NODE_COMPAT_VERSION_STRING + "/";
   const std::string release_file_prefix =
-      release_url_prefix + "node-v" + NODE_VERSION_STRING;
+      release_url_prefix + "node-v" + NODE_COMPAT_VERSION_STRING;
   napi_value source_url = nullptr;
   status = napi_create_string_utf8(
       env,

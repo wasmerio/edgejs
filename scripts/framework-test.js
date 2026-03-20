@@ -117,7 +117,7 @@ function parseSelector(args) {
 
 async function test(selector) {
   const prepared = await setup(selector);
-  const nodeRunner = resolveHostNodeRunner();
+  const nodeRunner = HOST_NODE_RUNNER;
   const stages = buildRunnerStages(nodeRunner, prepared.runner);
 
   printSection('Framework Matrix', 'blue', `${prepared.projects.length} framework${prepared.projects.length === 1 ? '' : 's'}`);
@@ -166,6 +166,8 @@ function resolveHostNodeRunner() {
     targetPath,
   };
 }
+
+const HOST_NODE_RUNNER = resolveHostNodeRunner();
 
 function buildRunnerStages(nodeRunner, comparisonRunner) {
   const stages = [
@@ -216,6 +218,7 @@ function buildRunnerStages(nodeRunner, comparisonRunner) {
 
 function createIndependentRunnerStage(options) {
   return {
+    allowsProductionFallback: false,
     color: options.color,
     key: options.key,
     label: options.label,
@@ -234,6 +237,7 @@ function createDependentRunnerStage(options) {
   const runnerCommandParts = options.runnerCommandParts.slice();
 
   return {
+    allowsProductionFallback: true,
     color: options.color,
     key: options.key,
     label: options.label,
@@ -293,7 +297,7 @@ async function runRunnerStage(stage, projects, skippedProjects) {
     const emptyResult = {
       failed: [],
       passed: [],
-      skipped: skippedProjects || [],
+      skipped,
       stage,
       testedProjects: [],
     };
@@ -303,6 +307,7 @@ async function runRunnerStage(stage, projects, skippedProjects) {
 
   const passed = [];
   const failed = [];
+  const skipped = (skippedProjects || []).slice();
   for (let index = 0; index < projects.length; index += 1) {
     const project = projects[index];
 
@@ -316,6 +321,14 @@ async function runRunnerStage(stage, projects, skippedProjects) {
       });
       logSuccess(`validated ${project.name}: HTTP ${result.response.statusCode} via ${result.runtime.name} on ${DEFAULT_HOST}:${result.port}`);
     } catch (error) {
+      if (error && error.skip) {
+        skipped.push({
+          project,
+          reason: error.detail || error.message || 'skipped',
+        });
+        logSkip(`${project.name} skipped on ${stage.label}: ${error.detail || error.message}`);
+        continue;
+      }
       const failure = createFailureRecord(project, stage, error);
       failed.push(failure);
       logError(`${project.name} failed on ${stage.label}: ${failure.detail}`);
@@ -325,7 +338,7 @@ async function runRunnerStage(stage, projects, skippedProjects) {
   const result = {
     failed,
     passed,
-    skipped: skippedProjects || [],
+    skipped,
     stage,
     testedProjects: projects,
   };
@@ -591,21 +604,178 @@ async function testProject(project, stage, index, total, preparation) {
     log(`skipping build for ${project.name}; runtime script ${runtime.name} is development-oriented`);
   }
 
-  const server = await startProjectServer(project, runtime, portCandidates, stage);
+  let server = null;
+  let activeRuntime = runtime;
+  let usedProductionFallback = false;
   try {
-    validateHttpResponse(project, runtime, server.response);
+    server = await startProjectServer(project, runtime, portCandidates, stage);
+  } catch (error) {
+    const fallbackRuntime = await maybePrepareProductionFallback(project, stage, runtime, shouldBuild, reuseExistingBuild, error);
+    if (!fallbackRuntime) {
+      throw error;
+    }
+    activeRuntime = fallbackRuntime;
+    usedProductionFallback = true;
+    server = await startProjectServer(project, fallbackRuntime, portCandidates, stage);
+  }
+  try {
+    validateHttpResponse(project, activeRuntime, server.response);
     return {
       buildLogPath: shouldBuild && !reuseExistingBuild ? buildLogPath(project, stage) : null,
       candidate: server.candidate,
       port: server.port,
       project,
       response: server.response,
-      runtime,
+      runtime: activeRuntime,
       serverLogPath: server.logPath,
+      usedProductionFallback,
     };
   } finally {
     await stopProcess(server.handle);
   }
+}
+
+async function maybePrepareProductionFallback(project, stage, runtime, shouldBuild, reuseExistingBuild, startupError) {
+  if (!stage.allowsProductionFallback) {
+    return null;
+  }
+  if (typeof project.scripts.build !== 'string') {
+    return null;
+  }
+
+  logWarn(`runtime startup failed for ${project.name} on ${stage.label}; falling back to production artifact serving`);
+  if (startupError && startupError.message) {
+    logWarn(`startup failure: ${startupError.message}`);
+  }
+
+  if (!reuseExistingBuild) {
+    log(`building ${project.name} with Node.js for production fallback`);
+    const buildResult = await runProjectBuild(project, {
+      key: HOST_NODE_RUNNER.key,
+      label: HOST_NODE_RUNNER.label,
+      runnerCommandParts: [HOST_NODE_RUNNER.targetPath],
+    });
+    log(`Node.js fallback build completed for ${project.name} (${formatDuration(buildResult.durationMs)})`);
+  } else if (shouldBuild) {
+    log(`reusing existing production build for fallback on ${project.name}`);
+  }
+
+  const fallbackRuntime = resolveProductionFallbackRuntime(project, runtime);
+  if (!fallbackRuntime) {
+    return null;
+  }
+
+  return fallbackRuntime;
+}
+
+function isDevelopmentLikeRuntime(runtime) {
+  if (!runtime || typeof runtime.command !== 'string') {
+    return false;
+  }
+
+  return runtime.name === 'dev'
+    || runtime.name === 'develop'
+    || /\bdev\b/.test(runtime.command.toLowerCase())
+    || /\bdevelop\b/.test(runtime.command.toLowerCase());
+}
+
+function resolveProductionFallbackRuntime(project, currentRuntime) {
+  const nextPreRenderedDir = detectNextPrerenderedOutputDir(project);
+  if (nextPreRenderedDir) {
+    return {
+      command: `internal static server for ${path.relative(project.dir, nextPreRenderedDir)}/`,
+      mode: 'static-export',
+      name: 'static',
+      outputDir: nextPreRenderedDir,
+    };
+  }
+
+  const outputDir = detectStaticOutputDir(project);
+  if (outputDir) {
+    return {
+      command: `internal static server for ${path.basename(outputDir)}/`,
+      mode: 'static-export',
+      name: 'static',
+      outputDir,
+    };
+  }
+
+  const productionScript = detectProductionRuntimeScript(project);
+  if (productionScript && (!currentRuntime || productionScript.command.trim() !== currentRuntime.command.trim())) {
+    return resolveRuntimeStrategy(project, productionScript);
+  }
+
+  return null;
+}
+
+function detectProductionRuntimeScript(project) {
+  const entries = Object.entries(project.scripts)
+    .filter(([name, command]) => typeof command === 'string' && name !== 'dev' && name !== 'develop')
+    .map(([name, command]) => ({
+      command,
+      name,
+      score: scoreProductionRuntimeScript(name, command),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
+
+  return entries.length > 0 ? entries[0] : null;
+}
+
+function scoreProductionRuntimeScript(name, command) {
+  const lower = command.toLowerCase();
+  let score = 0;
+
+  if (name === 'preview') {
+    score += 100;
+  } else if (name === 'serve') {
+    score += 90;
+  } else if (name === 'start') {
+    score += 80;
+  }
+
+  if (/\bpreview\b/.test(lower)) {
+    score += 40;
+  }
+  if (/\bserve\b/.test(lower)) {
+    score += 30;
+  }
+  if (/\bstart\b/.test(lower)) {
+    score += 20;
+  }
+  if (/\bdev\b|\bdevelop\b/.test(lower)) {
+    score -= 200;
+  }
+  if (/\$port\b|--port\b|(?:^|\s)-p(?:\s|$)|(?:^|\s)-l(?:\s|$)/.test(lower)) {
+    score += 10;
+  }
+  if (/--host\b|--hostname\b|\$host\b/.test(lower)) {
+    score += 5;
+  }
+
+  return score;
+}
+
+function detectNextPrerenderedOutputDir(project) {
+  const candidate = path.join(project.dir, '.next', 'server', 'app');
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) {
+    return null;
+  }
+  if (!fs.existsSync(path.join(candidate, 'index.html'))) {
+    return null;
+  }
+  return candidate;
+}
+
+function detectStaticOutputDir(project) {
+  for (const candidate of ['out', 'dist', 'build', '.next']) {
+    const target = path.join(project.dir, candidate);
+    if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
+      return target;
+    }
+  }
+
+  return null;
 }
 
 function resolveRuntimeStrategy(project, runtime) {
