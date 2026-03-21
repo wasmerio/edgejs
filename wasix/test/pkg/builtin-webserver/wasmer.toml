@@ -1,0 +1,18 @@
+[package]
+name = "wasmer-tests/edgejs-builtin-webserver"
+entrypoint = "start"
+
+[dependencies]
+"wasmer/edgejs" = "*"
+
+[fs]
+"/app" = "./app"
+
+[[command]]
+name = "start"
+module = "wasmer/edgejs:edgejs"
+runner = "https://webc.org/runner/wasi"
+
+[command.annotations.wasi]
+atom = "wasmer/edgejs:edgejs"
+main-args = ["/app/server.js"]
