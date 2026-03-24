@@ -1,6 +1,9 @@
 # napi/v8 Tests
 
 Tier-1 tests use GoogleTest and consume shared fixtures from `napi/tests`.
+This CMake project only owns standalone `napi/v8` coverage. Runtime-owned
+Node-API cases that depend on host event-loop or `libuv` behavior are exercised
+from the Edge runtime build instead.
 
 ## Porting Rule
 
@@ -18,6 +21,8 @@ Tier-1 tests use GoogleTest and consume shared fixtures from `napi/tests`.
 ## Build And Run
 
 The gtest binary requires a V8 library to link against.
+Node-API fixtures without dedicated standalone runners are skipped even when
+`NAPI_V8_BUILD_NODE_API_TESTS=ON`.
 
 ## V8 Build Modes
 

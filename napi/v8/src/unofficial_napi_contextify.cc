@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -9,16 +13,20 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <uv.h>
-
 #if !defined(_WIN32)
 #include <pthread.h>
+#include <semaphore.h>
 #include <signal.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <fcntl.h>
+#endif
 #endif
 
 #include "internal/napi_v8_env.h"
@@ -166,76 +174,110 @@ void ResetRef(napi_env env, napi_ref* ref_ptr) {
   *ref_ptr = nullptr;
 }
 
-void CloseUvLoop(uv_loop_t* loop) {
-  if (loop == nullptr) return;
-  while (uv_loop_close(loop) == UV_EBUSY) {
-    uv_run(loop, UV_RUN_NOWAIT);
-  }
-}
-
 enum class SignalPropagation {
   kContinuePropagation,
   kStopPropagation,
 };
 
+#if !defined(_WIN32)
+#if defined(__APPLE__)
+struct SignalSemaphore {
+  sem_t* handle = SEM_FAILED;
+};
+#else
+struct SignalSemaphore {
+  sem_t handle{};
+};
+#endif
+
+bool InitSignalSemaphore(SignalSemaphore* semaphore) {
+  if (semaphore == nullptr) return false;
+#if defined(__APPLE__)
+  std::string name = "/edgejs-sigint-" + std::to_string(static_cast<long long>(getpid())) + "-" +
+                     std::to_string(reinterpret_cast<uintptr_t>(semaphore));
+  sem_t* handle = sem_open(name.c_str(), O_CREAT | O_EXCL, 0600, 0);
+  if (handle == SEM_FAILED) return false;
+  semaphore->handle = handle;
+  (void)sem_unlink(name.c_str());
+  return true;
+#else
+  return sem_init(&semaphore->handle, 0, 0) == 0;
+#endif
+}
+
+void DestroySignalSemaphore(SignalSemaphore* semaphore) {
+  if (semaphore == nullptr) return;
+#if defined(__APPLE__)
+  if (semaphore->handle != SEM_FAILED) {
+    (void)sem_close(semaphore->handle);
+    semaphore->handle = SEM_FAILED;
+  }
+#else
+  (void)sem_destroy(&semaphore->handle);
+#endif
+}
+
+bool WaitSignalSemaphore(SignalSemaphore* semaphore) {
+  if (semaphore == nullptr) return false;
+  for (;;) {
+#if defined(__APPLE__)
+    if (semaphore->handle == SEM_FAILED) return false;
+    if (sem_wait(semaphore->handle) == 0) return true;
+#else
+    if (sem_wait(&semaphore->handle) == 0) return true;
+#endif
+    if (errno != EINTR) return false;
+  }
+}
+
+bool PostSignalSemaphore(SignalSemaphore* semaphore) {
+  if (semaphore == nullptr) return false;
+#if defined(__APPLE__)
+  return semaphore->handle != SEM_FAILED && sem_post(semaphore->handle) == 0;
+#else
+  return sem_post(&semaphore->handle) == 0;
+#endif
+}
+#endif
+
 class Watchdog {
  public:
   Watchdog(v8::Isolate* isolate, uint64_t timeout_ms, bool* timed_out)
       : isolate_(isolate), timed_out_(timed_out) {
-    int rc = uv_loop_init(&loop_);
-    if (rc != 0) {
-      std::abort();
-    }
-
-    rc = uv_async_init(&loop_, &async_, [](uv_async_t* signal) {
-      Watchdog* watchdog = reinterpret_cast<Watchdog*>(signal->data);
-      uv_stop(&watchdog->loop_);
+    thread_ = std::thread([this, timeout_ms]() {
+      std::unique_lock<std::mutex> lock(mutex_);
+      const bool cancelled = cv_.wait_for(
+          lock,
+          std::chrono::milliseconds(timeout_ms),
+          [this]() { return stop_requested_; });
+      if (cancelled) return;
+      if (timed_out_ != nullptr) {
+        *timed_out_ = true;
+      }
+      if (isolate_ != nullptr) {
+        isolate_->TerminateExecution();
+      }
     });
-    if (rc != 0) std::abort();
-    async_.data = this;
-
-    rc = uv_timer_init(&loop_, &timer_);
-    if (rc != 0) std::abort();
-    timer_.data = this;
-
-    rc = uv_timer_start(&timer_, &Watchdog::Timer, timeout_ms, 0);
-    if (rc != 0) std::abort();
-
-    rc = uv_thread_create(&thread_, &Watchdog::Run, this);
-    if (rc != 0) std::abort();
   }
 
   ~Watchdog() {
-    uv_async_send(&async_);
-    uv_thread_join(&thread_);
-
-    uv_close(reinterpret_cast<uv_handle_t*>(&async_), nullptr);
-    uv_run(&loop_, UV_RUN_DEFAULT);
-    CloseUvLoop(&loop_);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stop_requested_ = true;
+    }
+    cv_.notify_one();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
   }
 
  private:
-  static void Run(void* arg) {
-    Watchdog* watchdog = static_cast<Watchdog*>(arg);
-    uv_run(&watchdog->loop_, UV_RUN_DEFAULT);
-    uv_close(reinterpret_cast<uv_handle_t*>(&watchdog->timer_), nullptr);
-  }
-
-  static void Timer(uv_timer_t* timer) {
-    Watchdog* watchdog = static_cast<Watchdog*>(timer->data);
-    if (watchdog->timed_out_ != nullptr) {
-      *watchdog->timed_out_ = true;
-    }
-    watchdog->isolate_->TerminateExecution();
-    uv_stop(&watchdog->loop_);
-  }
-
   v8::Isolate* isolate_ = nullptr;
-  uv_thread_t thread_{};
-  uv_loop_t loop_{};
-  uv_async_t async_{};
-  uv_timer_t timer_{};
   bool* timed_out_ = nullptr;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool stop_requested_ = false;
+  std::thread thread_;
 };
 
 class SigintWatchdogBase {
@@ -282,7 +324,7 @@ class SigintWatchdogHelper {
 
 #if !defined(_WIN32)
     if (!sem_initialized_) {
-      if (uv_sem_init(&sem_, 0) != 0) {
+      if (!InitSignalSemaphore(&sem_)) {
         start_stop_count_--;
         return -1;
       }
@@ -322,7 +364,7 @@ class SigintWatchdogHelper {
     action.sa_sigaction = &SigintWatchdogHelper::HandleSignal;
     action.sa_flags = SA_SIGINFO;
     if (sigaction(SIGINT, &action, &previous_sigint_action_) != 0) {
-      uv_sem_post(&sem_);
+      (void)PostSignalSemaphore(&sem_);
       (void)pthread_join(thread_, nullptr);
       has_running_thread_ = false;
       start_stop_count_--;
@@ -359,7 +401,7 @@ class SigintWatchdogHelper {
 
 #if !defined(_WIN32)
     if (has_running_thread_) {
-      uv_sem_post(&sem_);
+      (void)PostSignalSemaphore(&sem_);
       (void)pthread_join(thread_, nullptr);
       has_running_thread_ = false;
     }
@@ -385,7 +427,7 @@ class SigintWatchdogHelper {
     }
     (void)Stop();
     if (sem_initialized_) {
-      uv_sem_destroy(&sem_);
+      DestroySignalSemaphore(&sem_);
     }
 #endif
   }
@@ -417,7 +459,9 @@ class SigintWatchdogHelper {
     SigintWatchdogHelper* helper = static_cast<SigintWatchdogHelper*>(arg);
     bool stopping = false;
     do {
-      uv_sem_wait(&helper->sem_);
+      if (!WaitSignalSemaphore(&helper->sem_)) {
+        break;
+      }
       stopping = InformWatchdogsAboutSignal();
     } while (!stopping);
     return nullptr;
@@ -426,7 +470,7 @@ class SigintWatchdogHelper {
   static void HandleSignal(int /*signal*/, siginfo_t* /*info*/, void* /*ucontext*/) {
     SigintWatchdogHelper& helper = GetInstance();
     if (helper.sem_initialized_) {
-      uv_sem_post(&helper.sem_);
+      (void)PostSignalSemaphore(&helper.sem_);
     }
   }
 #endif
@@ -443,7 +487,7 @@ class SigintWatchdogHelper {
   bool stopping_ = false;
   bool has_previous_sigint_action_ = false;
   pthread_t thread_{};
-  uv_sem_t sem_{};
+  SignalSemaphore sem_{};
   struct sigaction previous_sigint_action_{};
 #endif
 };

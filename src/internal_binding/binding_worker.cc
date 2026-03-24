@@ -28,6 +28,7 @@
 #include "edge_environment_runtime.h"
 #include "edge_env_loop.h"
 #include "edge_handle_wrap.h"
+#include "edge_napi_embedder_hooks.h"
 #include "edge_option_helpers.h"
 #include "edge_process.h"
 #include "edge_runtime.h"
@@ -1165,6 +1166,7 @@ void WorkerThreadMain(Worker* wrap, uintptr_t stack_top) {
       create_options.stack_limit = reinterpret_cast<void*>(wrap->stack_base);
     }
   }
+  EdgeInstallNapiEmbedderHooks();
   if (unofficial_napi_create_env_with_options(8, &create_options, &worker_env, &worker_scope) != napi_ok ||
       worker_env == nullptr || worker_scope == nullptr) {
     EdgeEnvironmentDestroyReleasedEventLoop(worker_loop);

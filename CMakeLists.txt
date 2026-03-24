@@ -598,6 +598,7 @@ endif()
 
 add_library(edge_node_api STATIC
   src/node_api.cc
+  src/edge_napi_embedder_hooks.cc
   src/unofficial_napi_testing_until_gc.cc
 )
 
