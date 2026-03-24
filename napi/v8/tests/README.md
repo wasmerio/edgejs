@@ -48,7 +48,7 @@ Deprecated aliases are still accepted (with warnings):
 
 ```bash
 cmake -S napi/v8 -B napi/v8/build -DNAPI_V8_LIBRARY=/absolute/path/to/libv8_monolith.a
-cmake --build napi/v8/build -j4
+cmake --build napi/v8/build
 ctest --test-dir napi/v8/build --output-on-failure -R napi_v8_tier1_tests
 ```
 
@@ -59,7 +59,7 @@ and the gtest executable is skipped.
 
 ```bash
 cmake -S napi/v8 -B napi/v8/build
-cmake --build napi/v8/build -j4
+cmake --build napi/v8/build
 ```
 
 ### Forced Local

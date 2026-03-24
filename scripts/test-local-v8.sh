@@ -55,5 +55,5 @@ cmake \
   -DNAPI_V8_DEFINES="${NAPI_V8_DEFINES}" \
   -DEDGE_BUILD_CLI=ON
 
-cmake --build "${BUILD_DIR}" -j4
+cmake --build "${BUILD_DIR}"
 ctest --test-dir "${BUILD_DIR}" --output-on-failure

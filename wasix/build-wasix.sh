@@ -60,7 +60,7 @@ cmake \
   -DEDGE_BUILD_CLI=ON \
   -DBUILD_TESTING=OFF
 
-cmake --build "${BUILD_DIR}" -j4
+cmake --build "${BUILD_DIR}"
 
 if [[ -f "${BUILD_DIR}/edge" ]]; then
   optimize_wasm "${BUILD_DIR}/edge" "${BUILD_DIR}/edge.wasm"
