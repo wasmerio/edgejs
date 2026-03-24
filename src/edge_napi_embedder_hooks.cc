@@ -1,24 +1,38 @@
 #include "edge_napi_embedder_hooks.h"
 
+#include <cstdint>
 #include <mutex>
 
-#include <uv.h>
+#if defined(__unix__) || defined(__APPLE__)
+#include <unistd.h>
+#endif
 
 #include "unofficial_napi.h"
 
 namespace {
 
+uint64_t DetectTotalMemory() {
+#if defined(_SC_PHYS_PAGES)
+  const long pages = sysconf(_SC_PHYS_PAGES);
+#if defined(_SC_PAGE_SIZE)
+  const long page_size = sysconf(_SC_PAGE_SIZE);
+#elif defined(_SC_PAGESIZE)
+  const long page_size = sysconf(_SC_PAGESIZE);
+#else
+  const long page_size = 0;
+#endif
+  if (pages > 0 && page_size > 0) {
+    return static_cast<uint64_t>(pages) * static_cast<uint64_t>(page_size);
+  }
+#endif
+  return 0;
+}
+
 napi_status GetEmbedderMemoryInfo(void* /*target*/,
                                   unofficial_napi_embedder_memory_info* info_out) {
   if (info_out == nullptr) return napi_invalid_arg;
-  info_out->total_memory = uv_get_total_memory();
-  info_out->constrained_memory = uv_get_constrained_memory();
-  return napi_ok;
-}
-
-napi_status PumpShutdownLoop(void* /*target*/, void* handle) {
-  if (handle == nullptr) return napi_ok;
-  (void)uv_run(static_cast<uv_loop_t*>(handle), UV_RUN_ONCE);
+  info_out->total_memory = DetectTotalMemory();
+  info_out->constrained_memory = 0;
   return napi_ok;
 }
 
@@ -29,7 +43,6 @@ void EdgeInstallNapiEmbedderHooks() {
   std::call_once(once, []() {
     unofficial_napi_embedder_hooks hooks{};
     hooks.memory_info_callback = GetEmbedderMemoryInfo;
-    hooks.shutdown_pump_callback = PumpShutdownLoop;
     (void)unofficial_napi_set_embedder_hooks(&hooks);
   });
 }

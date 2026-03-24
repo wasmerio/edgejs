@@ -20,13 +20,13 @@ cli = [
 [dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true}
-virtual-fs = { version = "=0.701.0-rc.2", optional = true }
+virtual-fs = { version = ">=0.701.0-rc.2", optional = true }
 
-wasmer = { version = "=7.1.0-rc.2" }
-wasmer-cache = { version = "=7.1.0-rc.2", optional = true }
-wasmer-compiler-llvm = { version = "=7.1.0-rc.2", optional = true }
-wasmer-types = { version = "=7.1.0-rc.2", optional = true }
-wasmer-wasix = { version = "=0.701.0-rc.2", optional = true }
+wasmer = { version = ">=7.1.0-rc.2" }
+wasmer-cache = { version = ">=7.1.0-rc.2", optional = true }
+wasmer-compiler-llvm = { version = ">=7.1.0-rc.2", optional = true }
+wasmer-types = { version = ">=7.1.0-rc.2", optional = true }
+wasmer-wasix = { version = ">=0.701.0-rc.2", optional = true }
 
 [build-dependencies]
 cc = "1"

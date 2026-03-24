@@ -1,5 +1,8 @@
 use anyhow::{Context, Result, anyhow, bail};
-use napi_wasmer::{NapiCtx, cli::{GuestMount, run_wasix_main_capture_stdio_with_ctx}};
+use napi_wasmer::{
+    NapiCtx,
+    cli::{GuestMount, run_wasix_main_capture_stdio_with_ctx},
+};
 use std::path::{Path, PathBuf};
 
 const BUILTIN_JS_GUEST_PATH: &str = "/edgejs-builtins";

@@ -92,8 +92,11 @@ fn spawn_pipe_drain_thread(
 pub fn load_wasix_module(wasm_path: &Path) -> Result<LoadedWasm> {
     let wasm_bytes = std::fs::read(wasm_path)
         .with_context(|| format!("failed to read wasm file at {}", wasm_path.display()))?;
+
     let store = create_cli_store();
+
     let module = load_or_compile_module(&store, &wasm_bytes)?;
+
     let module_hash = ModuleHash::sha256(&wasm_bytes);
 
     Ok(LoadedWasm {

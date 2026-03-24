@@ -9,8 +9,7 @@ use std::ffi::{CString, c_void};
 use wasmer::{AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Imports};
 
 use crate::{
-    NAPI_EXTENSION_WASMER_MODULE_NAME, NAPI_MODULE_NAME,
-    RuntimeEnv,
+    NAPI_EXTENSION_WASMER_MODULE_NAME, NAPI_MODULE_NAME, RuntimeEnv,
     guest::{
         MAX_GUEST_CSTRING_SCAN,
         callback::{flush_host_buffer_copies_since, with_callback_state},
@@ -331,10 +330,7 @@ fn guest_unofficial_napi_release_env_with_loop(
     unsafe { snapi_bridge_unofficial_release_env_with_loop(snapi_env_state, loop_id) }
 }
 
-fn guest_unofficial_napi_set_embedder_hooks(
-    env: FunctionEnvMut<RuntimeEnv>,
-    napi_env: i32,
-) -> i32 {
+fn guest_unofficial_napi_set_embedder_hooks(env: FunctionEnvMut<RuntimeEnv>, napi_env: i32) -> i32 {
     let env_handle = snapi_env(&env, napi_env);
     unsafe { snapi_bridge_unofficial_set_embedder_hooks(env_handle) }
 }
@@ -1596,8 +1592,9 @@ fn guest_unofficial_napi_contextify_start_sigint_watchdog(
 ) -> i32 {
     let env_handle = snapi_env(&env, napi_env);
     let mut result = 0i32;
-    let status =
-        unsafe { snapi_bridge_unofficial_contextify_start_sigint_watchdog(env_handle, &mut result) };
+    let status = unsafe {
+        snapi_bridge_unofficial_contextify_start_sigint_watchdog(env_handle, &mut result)
+    };
     if status == 0 && result_ptr > 0 {
         write_guest_u8(&mut env, result_ptr as u32, (result != 0) as u8);
     }

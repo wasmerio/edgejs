@@ -10,8 +10,7 @@ use wasmer::{ExternType, FunctionEnv, Imports, Instance, Module, StoreMut, Table
 use wasmer_wasix::{PluggableRuntime, runners::wasi::WasiRunner};
 
 use crate::{
-    NAPI_EXTENSION_WASMER_MODULE_NAME, NAPI_MODULE_NAME,
-    RuntimeEnv,
+    NAPI_EXTENSION_WASMER_MODULE_NAME, NAPI_MODULE_NAME, RuntimeEnv,
     guest::napi::{register_env_imports, register_napi_imports},
 };
 

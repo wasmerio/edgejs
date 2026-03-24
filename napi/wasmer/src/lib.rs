@@ -1,6 +1,6 @@
-mod ctx;
 #[cfg(feature = "cli")]
 pub mod cli;
+mod ctx;
 mod env;
 mod guest;
 mod snapi;

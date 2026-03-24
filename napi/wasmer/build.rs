@@ -68,12 +68,6 @@ fn main() {
     let napi_include = project_root.join("napi/include");
     let napi_v8_src = napi_v8_dir.join("src");
     let edge_src = project_root.join("src");
-    let libuv_include = if project_root.join("deps/libuv-wasix/include").exists() {
-        project_root.join("deps/libuv-wasix/include")
-    } else {
-        project_root.join("deps/uv/include")
-    };
-
     let v8 = resolve_v8_config().unwrap_or_else(|err| panic!("{err}"));
     assert!(
         v8.include_dir.join("v8.h").exists(),
@@ -98,11 +92,15 @@ fn main() {
         .define("NAPI_EXTERN", Some(""))
         .include(&v8.include_dir)
         .include(edge_src.to_str().unwrap())
-        .include(libuv_include.to_str().unwrap())
         .include(napi_include.to_str().unwrap())
         .include(napi_v8_src.to_str().unwrap())
         .file("src/napi_bridge_init.cc")
-        .file(edge_src.join("edge_napi_embedder_hooks.cc").to_str().unwrap())
+        .file(
+            edge_src
+                .join("edge_napi_embedder_hooks.cc")
+                .to_str()
+                .unwrap(),
+        )
         .file(napi_v8_src.join("js_native_api_v8.cc").to_str().unwrap())
         .file(napi_v8_src.join("unofficial_napi.cc").to_str().unwrap())
         .file(
@@ -137,7 +135,6 @@ fn main() {
     for extra_link in &v8.extra_links {
         emit_extra_link(extra_link);
     }
-    emit_libuv_link(&project_root);
 
     if v8.origin == V8Origin::Prebuilt {
         println!("cargo:warning=using prebuilt V8 {}", PREBUILT_V8_VERSION);
@@ -164,24 +161,32 @@ fn resolve_v8_config() -> Result<V8Config, String> {
         "NAPI_V8_LIBRARY",
         &["NAPI_V8_V8_LIBRARY", "NAPI_V8_V8_MONOLITH_LIB"],
     );
-    let lib_dir_override = env::var("V8_LIB_DIR").ok().filter(|value| !value.trim().is_empty());
+    let lib_dir_override = env::var("V8_LIB_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     let extra_override = read_env_value("NAPI_V8_EXTRA_LIBS", &["NAPI_V8_V8_EXTRA_LIBS"]);
 
     if include_override.is_some() || library_override.is_some() || lib_dir_override.is_some() {
-        return resolve_explicit_v8(include_override, library_override, lib_dir_override, extra_override);
+        return resolve_explicit_v8(
+            include_override,
+            library_override,
+            lib_dir_override,
+            extra_override,
+        );
     }
 
     let requested_method = requested_v8_method();
     match requested_method {
-        V8Method::Local => resolve_local_v8(extra_override.as_deref())
-            .ok_or_else(|| "local V8 requested but no supported installation was found".to_string()),
-        V8Method::Prebuilt => resolve_prebuilt_v8(extra_override.as_deref()).or_else(|prebuilt_err| {
-            resolve_local_v8(extra_override.as_deref()).ok_or_else(|| {
-                format!(
-                    "failed to resolve V8 via prebuilt or local strategies: {prebuilt_err}"
-                )
-            })
+        V8Method::Local => resolve_local_v8(extra_override.as_deref()).ok_or_else(|| {
+            "local V8 requested but no supported installation was found".to_string()
         }),
+        V8Method::Prebuilt => {
+            resolve_prebuilt_v8(extra_override.as_deref()).or_else(|prebuilt_err| {
+                resolve_local_v8(extra_override.as_deref()).ok_or_else(|| {
+                    format!("failed to resolve V8 via prebuilt or local strategies: {prebuilt_err}")
+                })
+            })
+        }
         V8Method::Source => Err(
             "NAPI_V8_BUILD_METHOD=source is not supported by napi/wasmer cargo build.rs yet"
                 .to_string(),
@@ -260,7 +265,8 @@ fn resolve_prebuilt_v8(extra_override: Option<&str>) -> Result<V8Config, String>
     std::fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create {}: {err}", cache_dir.display()))?;
 
-    if !cache_dir.join("include/v8.h").exists() || resolve_primary_library(&cache_dir.join("lib")).is_none()
+    if !cache_dir.join("include/v8.h").exists()
+        || resolve_primary_library(&cache_dir.join("lib")).is_none()
     {
         download_prebuilt_archive(asset_name, &archive_path)?;
         unpack_prebuilt_archive(&archive_path, &cache_dir)?;
@@ -308,7 +314,11 @@ fn prebuilt_asset_name() -> Result<(&'static str, &'static str), String> {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
-    match (target_os.as_str(), target_arch.as_str(), target_env.as_str()) {
+    match (
+        target_os.as_str(),
+        target_arch.as_str(),
+        target_env.as_str(),
+    ) {
         ("macos", "aarch64", _) => Ok(("v8-darwin-arm64.tar.xz", "darwin-arm64")),
         ("macos", "x86_64", _) => Ok(("v8-darwin-amd64.tar.xz", "darwin-amd64")),
         ("linux", "x86_64", "gnu") => Ok(("v8-linux-amd64.tar.xz", "linux-amd64")),
@@ -373,7 +383,11 @@ fn default_local_extra_links(library_path: &Path) -> Vec<ExtraLink> {
         return extra_links;
     };
 
-    for candidate in ["libv8_libplatform.a", "libv8_libplatform.so", "libv8_libplatform.dylib"] {
+    for candidate in [
+        "libv8_libplatform.a",
+        "libv8_libplatform.so",
+        "libv8_libplatform.dylib",
+    ] {
         let path = lib_dir.join(candidate);
         if path.exists() {
             extra_links.push(ExtraLink::LibraryPath(path));
@@ -403,28 +417,6 @@ fn default_prebuilt_extra_links() -> Vec<ExtraLink> {
     }
 }
 
-fn emit_libuv_link(project_root: &Path) {
-    for candidate in [
-        project_root.join("node/out/Release/libuv.a"),
-        project_root.join("build-v8-napi/deps/uv/libuv.a"),
-        project_root.join("build-napi-v8/deps/uv/libuv.a"),
-        project_root.join("build-edge/deps/uv/libuv.a"),
-        project_root.join("build-wasix/deps/uv/libuv.a"),
-        project_root.join("build-ubi/deps/uv/libuv.a"),
-        PathBuf::from("/opt/homebrew/lib/libuv.dylib"),
-        PathBuf::from("/opt/homebrew/lib/libuv.a"),
-        PathBuf::from("/usr/local/lib/libuv.dylib"),
-        PathBuf::from("/usr/local/lib/libuv.a"),
-    ] {
-        if candidate.exists() {
-            emit_library_link(&candidate);
-            return;
-        }
-    }
-
-    println!("cargo:rustc-link-lib=uv");
-}
-
 fn parse_extra_links(raw: &str) -> Vec<ExtraLink> {
     raw.split(&[';', ','][..])
         .filter_map(|entry| {
@@ -448,10 +440,15 @@ fn parse_extra_links(raw: &str) -> Vec<ExtraLink> {
 }
 
 fn emit_library_link(path: &Path) {
-    let dir = path.parent().expect("linked library path has no parent directory");
+    let dir = path
+        .parent()
+        .expect("linked library path has no parent directory");
     println!("cargo:rustc-link-search=native={}", dir.display());
 
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
     let kind = if extension == "a" { "static" } else { "dylib" };
     let name = link_name_from_path(path);
     println!("cargo:rustc-link-lib={kind}={name}");
@@ -496,9 +493,11 @@ fn read_env_value(name: &str, aliases: &[&str]) -> Option<String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            aliases
-                .iter()
-                .find_map(|alias| env::var(alias).ok().filter(|value| !value.trim().is_empty()))
+            aliases.iter().find_map(|alias| {
+                env::var(alias)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
         })
 }
 
