@@ -9,6 +9,26 @@ OPENSSL_WASIX_DIR="${PROJECT_ROOT}/deps/openssl-wasix"
 
 export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-yes}"
 
+if ! command -v wasixcc >/dev/null 2>&1 && [[ -x "${HOME}/.wasixcc/bin/wasixcc" ]]; then
+  export PATH="${HOME}/.wasixcc/bin:${PATH}"
+fi
+
+# Cross-building to WASIX must not inherit host include/link search paths from
+# the shell environment, or CMake will persist them into linker flags.
+for host_toolchain_var in \
+  CPPFLAGS \
+  LDFLAGS \
+  LIBRARY_PATH \
+  CPATH \
+  C_INCLUDE_PATH \
+  CPLUS_INCLUDE_PATH \
+  OBJC_INCLUDE_PATH \
+  SDKROOT
+do
+  unset "${host_toolchain_var}" || true
+done
+unset host_toolchain_var
+
 optimize_wasm() {
   local input="$1"
   local output="$2"
@@ -55,6 +75,9 @@ cmake \
   -B "${BUILD_DIR}" \
   -U CMAKE_C_FLAGS \
   -U CMAKE_CXX_FLAGS \
+  -U CMAKE_EXE_LINKER_FLAGS \
+  -U CMAKE_SHARED_LINKER_FLAGS \
+  -U CMAKE_MODULE_LINKER_FLAGS \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
   -DEDGE_NAPI_PROVIDER=imports \
   -DEDGE_BUILD_CLI=ON \
