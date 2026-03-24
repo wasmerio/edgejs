@@ -19,9 +19,22 @@ use crate::{
 
 use super::util::*;
 
-fn guest_napi_wasm_init_env(_env: FunctionEnvMut<RuntimeEnv>) -> i32 {
-    let ok = unsafe { snapi_bridge_init() };
-    if ok != 0 { 1 } else { 0 }
+fn guest_napi_wasm_init_env(mut env: FunctionEnvMut<RuntimeEnv>) -> i32 {
+    let _ = unsafe { snapi_bridge_init() };
+
+    if let Some(env_id) = env.data().default_napi_env_id {
+        return env_id as i32;
+    }
+
+    let mut snapi_env_state: SnapiEnv = std::ptr::null_mut();
+    let status = unsafe { snapi_bridge_unofficial_create_env(8, &mut snapi_env_state) };
+    if status != 0 || snapi_env_state.is_null() {
+        return 0;
+    }
+
+    let (env_id, _scope_id) = env.data_mut().register_napi_env(snapi_env_state);
+    env.data_mut().default_napi_env_id = Some(env_id);
+    env_id as i32
 }
 
 fn guest_unofficial_napi_set_flags_from_string(

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use wasmer::{Memory, Table, TypedFunction};
 
-use crate::snapi::SnapiEnv;
+use crate::snapi::{SnapiEnv, snapi_bridge_unofficial_release_env};
 
 pub(crate) struct HostBufferCopy {
     pub(crate) handle_id: u32,
@@ -37,6 +37,7 @@ pub(crate) struct RuntimeEnv {
     /// native binding invocation (typically bracketed by napi_get_cb_info and a
     /// return-value creation call).
     pub(crate) host_buffer_method_frames: Vec<usize>,
+    pub(crate) default_napi_env_id: Option<u32>,
     pub(crate) next_napi_env_id: u32,
     pub(crate) next_napi_scope_id: u32,
     pub(crate) napi_envs: HashMap<u32, usize>,
@@ -60,6 +61,9 @@ impl RuntimeEnv {
 
     pub(crate) fn unregister_napi_scope(&mut self, scope_id: u32) -> Option<SnapiEnv> {
         let env_id = self.napi_scopes.remove(&scope_id)?;
+        if self.default_napi_env_id == Some(env_id) {
+            self.default_napi_env_id = None;
+        }
         let env = self.napi_envs.remove(&env_id)?;
         self.napi_state_to_guest_env.remove(&env);
         Some(env as SnapiEnv)
@@ -75,5 +79,18 @@ impl RuntimeEnv {
             .get(&env_id)
             .map(|env| *env as SnapiEnv)
             .unwrap_or(std::ptr::null_mut())
+    }
+}
+
+impl Drop for RuntimeEnv {
+    fn drop(&mut self) {
+        let scope_ids: Vec<u32> = self.napi_scopes.keys().copied().collect();
+        for scope_id in scope_ids {
+            if let Some(env) = self.unregister_napi_scope(scope_id) {
+                unsafe {
+                    let _ = snapi_bridge_unofficial_release_env(env);
+                }
+            }
+        }
     }
 }

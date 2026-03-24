@@ -1,9 +1,9 @@
 mod ctx;
+#[cfg(feature = "cli")]
+pub mod cli;
 mod env;
 mod guest;
 mod snapi;
-#[cfg(feature = "wasix")]
-mod wasix;
 
 pub use ctx::{NapiCtx, NapiCtxBuilder, NapiLimits, NapiRuntimeHooks, NapiSession};
 pub(crate) use env::{GuestBackingStoreMapping, HostBufferCopy, RuntimeEnv};

@@ -3,18 +3,26 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use virtual_fs::{AsyncReadExt, FileSystem};
+use wasmer::{Module, Store};
+use wasmer_types::ModuleHash;
 use wasmer_wasix::{
     Pipe, PluggableRuntime, WasiError,
     runners::wasi::{RuntimeOrEngine, WasiRunner},
     runtime::task_manager::tokio::TokioTaskManager,
 };
 
-use crate::{NapiCtx, load_wasix_module};
+use crate::NapiCtx;
 
 #[derive(Debug, Clone)]
 pub struct GuestMount {
     pub host_path: PathBuf,
     pub guest_path: PathBuf,
+}
+
+pub struct LoadedWasm {
+    pub store: Store,
+    pub module: Module,
+    pub module_hash: ModuleHash,
 }
 
 fn spawn_pipe_drain_thread(
@@ -42,6 +50,20 @@ fn spawn_pipe_drain_thread(
             captured.extend_from_slice(&chunk[..n]);
         }
         String::from_utf8(captured).context("WASIX stdio was not valid UTF-8")
+    })
+}
+
+pub fn load_wasix_module(wasm_path: &Path) -> Result<LoadedWasm> {
+    let wasm_bytes = std::fs::read(wasm_path)
+        .with_context(|| format!("failed to read wasm file at {}", wasm_path.display()))?;
+    let store = Store::default();
+    let module = Module::new(&store, &wasm_bytes).context("failed to compile wasm module")?;
+    let module_hash = ModuleHash::sha256(&wasm_bytes);
+
+    Ok(LoadedWasm {
+        store,
+        module,
+        module_hash,
     })
 }
 

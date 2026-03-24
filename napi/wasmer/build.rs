@@ -134,6 +134,7 @@ fn main() {
     for extra_link in &v8.extra_links {
         emit_extra_link(extra_link);
     }
+    emit_libuv_link(&project_root);
 
     if v8.origin == V8Origin::Prebuilt {
         println!("cargo:warning=using prebuilt V8 {}", PREBUILT_V8_VERSION);
@@ -397,6 +398,28 @@ fn default_prebuilt_extra_links() -> Vec<ExtraLink> {
     } else {
         Vec::new()
     }
+}
+
+fn emit_libuv_link(project_root: &Path) {
+    for candidate in [
+        project_root.join("node/out/Release/libuv.a"),
+        project_root.join("build-v8-napi/deps/uv/libuv.a"),
+        project_root.join("build-napi-v8/deps/uv/libuv.a"),
+        project_root.join("build-edge/deps/uv/libuv.a"),
+        project_root.join("build-wasix/deps/uv/libuv.a"),
+        project_root.join("build-ubi/deps/uv/libuv.a"),
+        PathBuf::from("/opt/homebrew/lib/libuv.dylib"),
+        PathBuf::from("/opt/homebrew/lib/libuv.a"),
+        PathBuf::from("/usr/local/lib/libuv.dylib"),
+        PathBuf::from("/usr/local/lib/libuv.a"),
+    ] {
+        if candidate.exists() {
+            emit_library_link(&candidate);
+            return;
+        }
+    }
+
+    println!("cargo:rustc-link-lib=uv");
 }
 
 fn parse_extra_links(raw: &str) -> Vec<ExtraLink> {
