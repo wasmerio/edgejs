@@ -6,9 +6,6 @@ use std::sync::{
 };
 use wasmer::{ExternType, FunctionEnv, Imports, Instance, Module, StoreMut, Table, Value};
 
-#[cfg(feature = "wasix")]
-use wasmer_wasix::{PluggableRuntime, runners::wasi::WasiRunner};
-
 use crate::{
     NAPI_EXTENSION_WASMER_MODULE_NAME, NAPI_MODULE_NAME, RuntimeEnv,
     guest::napi::{register_env_imports, register_napi_imports},
@@ -176,37 +173,6 @@ impl NapiCtx {
             }),
         })
     }
-
-    #[cfg(feature = "wasix")]
-    pub fn extend_runtime(&self, runtime: &mut PluggableRuntime) {
-        self.runtime_hooks().attach_to_runtime(runtime);
-    }
-
-    #[cfg(feature = "wasix")]
-    pub fn extend_wasi_runner(
-        &self,
-        runner: &mut WasiRunner,
-        runtime: &mut PluggableRuntime,
-        module: &Module,
-    ) {
-        if Self::module_needs_napi(module) {
-            runner
-                .capabilities_mut()
-                .threading
-                .enable_asynchronous_threading = false;
-        }
-        self.extend_runtime(runtime);
-    }
-
-    #[cfg(feature = "wasix")]
-    pub fn configure_runtime(
-        &self,
-        runtime: &mut PluggableRuntime,
-        _module: &Module,
-    ) -> Result<()> {
-        self.extend_runtime(runtime);
-        Ok(())
-    }
 }
 
 impl NapiRuntimeHooks {
@@ -262,18 +228,6 @@ impl NapiRuntimeHooks {
         };
 
         session.configure_instance(store, instance, imported_memory)
-    }
-
-    #[cfg(feature = "wasix")]
-    pub fn attach_to_runtime(&self, runtime: &mut PluggableRuntime) {
-        let hooks = self.clone();
-        runtime
-            .with_additional_imports(move |module, store| hooks.additional_imports(module, store));
-
-        let hooks = self.clone();
-        runtime.with_instance_setup(move |module, store, instance, imported_memory| {
-            hooks.configure_instance(module, store, instance, imported_memory)
-        });
     }
 }
 
@@ -343,17 +297,6 @@ impl NapiSession {
             func_env.as_mut(&mut *store).table = Some(table.clone());
         }
         Ok(())
-    }
-
-    #[cfg(feature = "wasix")]
-    pub fn attach_to_runtime(&self, runtime: &mut PluggableRuntime) {
-        let session = self.clone();
-        runtime.with_additional_imports(move |_module, store| session.create_imports(store));
-
-        let session = self.clone();
-        runtime.with_instance_setup(move |_module, store, instance, imported_memory| {
-            session.configure_instance(store, instance, imported_memory)
-        });
     }
 }
 

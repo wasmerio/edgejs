@@ -170,7 +170,21 @@ pub fn run_wasix_main_capture_stdio_with_ctx(
         let task_manager = Arc::new(TokioTaskManager::new(tokio::runtime::Handle::current()));
         let mut runtime = PluggableRuntime::new(task_manager);
         runtime.set_engine(engine.clone());
-        ctx.extend_wasi_runner(&mut runner, &mut runtime, &module);
+
+        if NapiCtx::module_needs_napi(&module) {
+            runner
+                .capabilities_mut()
+                .threading
+                .enable_asynchronous_threading = false;
+        }
+        let hooks = ctx.runtime_hooks();
+        runtime.with_additional_imports({
+            let hooks = hooks.clone();
+            move |module, store| hooks.additional_imports(module, store)
+        })
+        .with_instance_setup(move |module, store, instance, imported_memory| {
+            hooks.configure_instance(module, store, instance, imported_memory)
+        });
 
         match runner.run_wasm(
             RuntimeOrEngine::Runtime(Arc::new(runtime)),
