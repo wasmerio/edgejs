@@ -19,9 +19,17 @@ case "$BENCHMARK" in
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/console-log.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/console-log.js"
     ;;
+  json-parse-stringify)
+    EDGE_CMD="$EDGE_BIN benchmarks/workloads/json-parse-stringify.js"
+    NODE_CMD="$NODE_BIN benchmarks/workloads/json-parse-stringify.js"
+    ;;
+  promise-microtask-chain)
+    EDGE_CMD="$EDGE_BIN benchmarks/workloads/promise-microtask-chain.js"
+    NODE_CMD="$NODE_BIN benchmarks/workloads/promise-microtask-chain.js"
+    ;;
   *)
     echo "Unknown benchmark: $BENCHMARK"
-    echo "Available benchmarks: empty-startup, console-log"
+    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain"
     exit 1
     ;;
 esac
