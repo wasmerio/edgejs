@@ -8,3 +8,7 @@
 [submodule "wasmer-examples"]
 	path = wasmer-examples
 	url = git@github.com:wasmerio/examples.git
+[submodule "napi"]
+	path = napi
+	url = git@github.com:wasmerio/napi.git
+	branch = main
