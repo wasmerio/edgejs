@@ -14,7 +14,9 @@ if(NOT NAPI_V8_DEFINES AND NAPI_V8_V8_DEFINES)
 endif()
 set(NAPI_V8_GTEST_ROOT "${PROJECT_ROOT}/deps/googletest")
 include(GoogleTest)
-option(NAPI_V8_BUILD_NODE_API_TESTS "Build node-api fixture tests in napi-v8" OFF)
+option(NAPI_V8_BUILD_NODE_API_TESTS
+  "Build standalone node-api fixture tests in napi-v8 when dedicated runners exist"
+  OFF)
 
 if(NAPI_V8_LIBRARY)
   add_library(napi_v8_gtest STATIC
@@ -38,6 +40,17 @@ if(NAPI_V8_LIBRARY)
        target_name MATCHES "^napi_v8_test_(20_node_general|21_general|22_node_exception|23_instance_data_ref_then_set|24_instance_data_set_then_ref|28_node_instance_data|38_finalizer|42_node_async|43_node_hello_world|44_node_async_cleanup_hook|45_node_async_context|46_node_buffer|47_node_buffer_finalizer|48_node_callback_scope|49_node_cleanup_hook|50_node_env_teardown_gc|51_node_fatal|52_node_fatal_exception|53_node_init_order|54_node_make_callback|55_node_make_callback_recurse|56_node_reference_by_api_v9|57_node_reference_by_api_v10|58_node_threadsafe_function|59_node_threadsafe_function_shutdown|60_node_uv_loop|61_node_uv_threadpool_size|62_node_worker_buffer_callback|63_node_worker_terminate|64_node_worker_terminate_finalization)$")
       return()
     endif()
+
+    foreach(_src IN LISTS ARGN)
+      if(_src MATCHES "^runners/")
+        set(_runner_path "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
+        if(NOT EXISTS "${_runner_path}")
+          message(STATUS
+            "Skipping ${target_name}: ${_src} is not tracked as standalone napi/v8 coverage")
+          return()
+        endif()
+      endif()
+    endforeach()
 
     add_executable(${target_name} ${ARGN})
     target_include_directories(${target_name}

@@ -7,7 +7,10 @@
 
  - Public surface: N-API headers and ABI (`js_native_api.h`, `node_api.h`).
  - Internal implementation: V8-backed code only in `src/`.
- - Test strategy: port portable tests from `node/test/js-native-api` first.
+ - Host/runtime services such as `libuv` loops and memory queries are owned by
+   Edge native code and injected through unofficial embedder hooks.
+ - Test strategy: keep standalone `napi/v8` coverage focused on portable V8
+   adapter behavior first.
 
  ## Porting Policy
 
@@ -21,14 +24,16 @@
 
 - `../include/`: shared public C headers (engine-agnostic surface)
 - `../tests/`: shared canonical Node-API fixtures
-- `src/`: V8-backed implementation and environment glue
+- `src/`: V8-backed implementation and environment glue, with no direct
+  `libuv` ownership
 - `tests/`: V8-specific test assets and compatibility test docs
 
  ## Current Phase
 
- This directory implements the initial `napi/v8` scaffold, a core runtime slice,
-and a first portable test subset (`2_function_arguments`, `3_callbacks`) using
-GoogleTest.
+ This directory implements the standalone V8 adapter plus a portable test
+ subset. Runtime-owned Node-API behavior that depends on host event-loop or
+ `libuv` services is validated from the Edge runtime build rather than this
+ package.
 
 See `tests/README.md` for build/run instructions and
 `tests/PORTABILITY_MATRIX.md` for the current portability classification.

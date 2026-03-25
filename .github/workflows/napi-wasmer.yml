@@ -1,166 +1,148 @@
-name: napi-wasmer (disabled)
+name: napi-wasmer
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  disabled:
-    name: disabled
+  wasmer-linux:
+    name: wasmer-linux
     runs-on: ubuntu-latest
+    env:
+      LLVM_DIR: llvm
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
     steps:
-      - name: Explain why this workflow is disabled
-        run: |
-          echo "The old napi/wasmer Rust CI was disabled after napi/wasmer moved out of this repo."
-          echo "The historical workflow is preserved below as comments for future re-enabling."
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-# Historical workflow preserved below.
-# Last active version before disabling:
-#
-# name: napi-wasmer
-#
-# on:
-#   push:
-#     branches:
-#       - main
-#   pull_request:
-#   workflow_dispatch:
-#
-# jobs:
-#   wasmer-linux:
-#     name: wasmer-linux
-#     runs-on: ubuntu-latest
-#     env:
-#       LLVM_DIR: llvm
-#       SCCACHE_GHA_ENABLED: "true"
-#       RUSTC_WRAPPER: sccache
-#     steps:
-#       - uses: actions/checkout@v4
-#         with:
-#           submodules: recursive
-#       - name: Setup sccache
-#         uses: mozilla-actions/sccache-action@v0.0.9
-#       - name: Setup Rust
-#         uses: dtolnay/rust-toolchain@stable
-#
-#       - name: Install LLVM
-#         shell: bash
-#         run: |
-#           set -euo pipefail
-#           curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-#             --retry 3 --proto '=https' --tlsv1.2 -sSf \
-#             "https://github.com/wasmerio/llvm-custom-builds/releases/download/21.x/llvm-linux-amd64.tar.xz" \
-#             -L -o llvm.tar.xz
-#           LLVM_DIR="$(pwd)/${LLVM_DIR}"
-#           mkdir -p "${LLVM_DIR}"
-#           tar xf llvm.tar.xz --strip-components=1 -C "${LLVM_DIR}"
-#           echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
-#           echo "${LLVM_DIR}/usr/bin" >> "$GITHUB_PATH"
-#           echo "LLVM_SYS_211_PREFIX=${LLVM_DIR}" >> "$GITHUB_ENV"
-#           echo "ENABLE_LLVM=1" >> "$GITHUB_ENV"
-#
-#       - name: Setup Prebuilt V8
-#         shell: bash
-#         run: |
-#           set -euo pipefail
-#           V8_VERSION="11.9.2"
-#           ASSET="v8-linux-amd64.tar.xz"
-#           V8_ROOT="$PWD/.ci/v8/${V8_VERSION}/linux-amd64"
-#           mkdir -p "$V8_ROOT"
-#           curl -fsSL "https://github.com/wasmerio/v8-custom-builds/releases/download/${V8_VERSION}/${ASSET}" -o "$V8_ROOT/${ASSET}"
-#           tar -xJf "$V8_ROOT/${ASSET}" -C "$V8_ROOT"
-#
-#           # napi/wasmer links dynamic V8 libs.
-#           c++ -shared \
-#             -Wl,--whole-archive "$V8_ROOT/lib/libv8.a" -Wl,--no-whole-archive \
-#             -o "$V8_ROOT/lib/libv8.so" \
-#             -ldl -pthread -lm -lrt || true
-#           cat > "$V8_ROOT/lib/v8_libplatform_stub.cc" <<'EOF'
-#           extern "C" void __dummy_v8_libplatform() {}
-#           EOF
-#           c++ -shared "$V8_ROOT/lib/v8_libplatform_stub.cc" -o "$V8_ROOT/lib/libv8_libplatform.so"
-#           cat > "$V8_ROOT/lib/v8_libbase_stub.cc" <<'EOF'
-#           extern "C" void __dummy_v8_libbase() {}
-#           EOF
-#           c++ -shared "$V8_ROOT/lib/v8_libbase_stub.cc" -o "$V8_ROOT/lib/libv8_libbase.so"
-#
-#           echo "V8_INCLUDE_DIR=$V8_ROOT/include" >> "$GITHUB_ENV"
-#           echo "V8_LIB_DIR=$V8_ROOT/lib" >> "$GITHUB_ENV"
-#           echo "V8_DEFINES=V8_COMPRESS_POINTERS" >> "$GITHUB_ENV"
-#           echo "LD_LIBRARY_PATH=$V8_ROOT/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-#
-#       - name: Test napi-wasmer
-#         run: cargo test --manifest-path napi/wasmer/Cargo.toml --lib -- --nocapture
-#
-#       - name: sccache stats
-#         if: always()
-#         run: sccache --show-stats || true
-#
-#   wasmer-macos:
-#     name: wasmer-macos
-#     runs-on: macos-latest
-#     env:
-#       LLVM_DIR: llvm
-#       SCCACHE_GHA_ENABLED: "true"
-#       RUSTC_WRAPPER: sccache
-#     steps:
-#       - uses: actions/checkout@v4
-#         with:
-#           submodules: recursive
-#       - name: Setup sccache
-#         uses: mozilla-actions/sccache-action@v0.0.9
-#       - name: Setup Rust
-#         uses: dtolnay/rust-toolchain@stable
-#
-#       - name: Install LLVM
-#         shell: bash
-#         run: |
-#           set -euo pipefail
-#           curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-#             --retry 3 --proto '=https' --tlsv1.2 -sSf \
-#             "https://github.com/wasmerio/llvm-custom-builds/releases/download/21.x/llvm-darwin-aarch64.tar.xz" \
-#             -L -o llvm.tar.xz
-#           LLVM_DIR="$(pwd)/${LLVM_DIR}"
-#           mkdir -p "${LLVM_DIR}"
-#           tar xf llvm.tar.xz --strip-components=1 -C "${LLVM_DIR}"
-#           echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
-#           echo "${LLVM_DIR}/usr/bin" >> "$GITHUB_PATH"
-#           echo "LLVM_SYS_211_PREFIX=${LLVM_DIR}" >> "$GITHUB_ENV"
-#           echo "ENABLE_LLVM=1" >> "$GITHUB_ENV"
-#
-#       - name: Setup Prebuilt V8
-#         shell: bash
-#         run: |
-#           set -euo pipefail
-#           V8_VERSION="11.9.2"
-#           ASSET="v8-darwin-arm64.tar.xz"
-#           V8_ROOT="$PWD/.ci/v8/${V8_VERSION}/darwin-arm64"
-#           mkdir -p "$V8_ROOT"
-#           curl -fsSL "https://github.com/wasmerio/v8-custom-builds/releases/download/${V8_VERSION}/${ASSET}" -o "$V8_ROOT/${ASSET}"
-#           tar -xJf "$V8_ROOT/${ASSET}" -C "$V8_ROOT"
-#
-#           # napi/wasmer links dynamic V8 libs.
-#           /usr/bin/clang++ -dynamiclib \
-#             -Wl,-undefined,dynamic_lookup \
-#             -Wl,-all_load "$V8_ROOT/lib/libv8.a" \
-#             -framework CoreFoundation \
-#             -o "$V8_ROOT/lib/libv8.dylib"
-#           cat > "$V8_ROOT/lib/v8_libplatform_stub.cc" <<'EOF'
-#           extern "C" void __dummy_v8_libplatform() {}
-#           EOF
-#           /usr/bin/clang++ -dynamiclib "$V8_ROOT/lib/v8_libplatform_stub.cc" -o "$V8_ROOT/lib/libv8_libplatform.dylib"
-#           cat > "$V8_ROOT/lib/v8_libbase_stub.cc" <<'EOF'
-#           extern "C" void __dummy_v8_libbase() {}
-#           EOF
-#           /usr/bin/clang++ -dynamiclib "$V8_ROOT/lib/v8_libbase_stub.cc" -o "$V8_ROOT/lib/libv8_libbase.dylib"
-#
-#           echo "V8_INCLUDE_DIR=$V8_ROOT/include" >> "$GITHUB_ENV"
-#           echo "V8_LIB_DIR=$V8_ROOT/lib" >> "$GITHUB_ENV"
-#           echo "V8_DEFINES=V8_COMPRESS_POINTERS" >> "$GITHUB_ENV"
-#           echo "DYLD_LIBRARY_PATH=$V8_ROOT/lib:${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-#
-#       - name: Test napi-wasmer
-#         run: cargo test --manifest-path napi/wasmer/Cargo.toml --lib -- --nocapture
-#
-#       - name: sccache stats
-#         if: always()
-#         run: sccache --show-stats || true
+      - name: Install LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            --retry 3 --proto '=https' --tlsv1.2 -sSf \
+            "https://github.com/wasmerio/llvm-custom-builds/releases/download/21.x/llvm-linux-amd64.tar.xz" \
+            -L -o llvm.tar.xz
+          LLVM_DIR="$(pwd)/${LLVM_DIR}"
+          mkdir -p "${LLVM_DIR}"
+          tar xf llvm.tar.xz --strip-components=1 -C "${LLVM_DIR}"
+          echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
+          echo "${LLVM_DIR}/usr/bin" >> "$GITHUB_PATH"
+          echo "LLVM_SYS_211_PREFIX=${LLVM_DIR}" >> "$GITHUB_ENV"
+          echo "ENABLE_LLVM=1" >> "$GITHUB_ENV"
+
+      - name: Setup Prebuilt V8
+        shell: bash
+        run: |
+          set -euo pipefail
+          V8_VERSION="11.9.2"
+          ASSET="v8-linux-amd64.tar.xz"
+          V8_ROOT="$PWD/.ci/v8/${V8_VERSION}/linux-amd64"
+          mkdir -p "$V8_ROOT"
+          curl -fsSL "https://github.com/wasmerio/v8-custom-builds/releases/download/${V8_VERSION}/${ASSET}" -o "$V8_ROOT/${ASSET}"
+          tar -xJf "$V8_ROOT/${ASSET}" -C "$V8_ROOT"
+
+          # napi/wasmer links dynamic V8 libs.
+          c++ -shared \
+            -Wl,--whole-archive "$V8_ROOT/lib/libv8.a" -Wl,--no-whole-archive \
+            -o "$V8_ROOT/lib/libv8.so" \
+            -ldl -pthread -lm -lrt || true
+          cat > "$V8_ROOT/lib/v8_libplatform_stub.cc" <<'EOF'
+          extern "C" void __dummy_v8_libplatform() {}
+          EOF
+          c++ -shared "$V8_ROOT/lib/v8_libplatform_stub.cc" -o "$V8_ROOT/lib/libv8_libplatform.so"
+          cat > "$V8_ROOT/lib/v8_libbase_stub.cc" <<'EOF'
+          extern "C" void __dummy_v8_libbase() {}
+          EOF
+          c++ -shared "$V8_ROOT/lib/v8_libbase_stub.cc" -o "$V8_ROOT/lib/libv8_libbase.so"
+
+          echo "V8_INCLUDE_DIR=$V8_ROOT/include" >> "$GITHUB_ENV"
+          echo "V8_LIB_DIR=$V8_ROOT/lib" >> "$GITHUB_ENV"
+          echo "V8_DEFINES=V8_COMPRESS_POINTERS" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$V8_ROOT/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Test napi-wasmer
+        run: cargo test --manifest-path napi/wasmer/Cargo.toml --lib -- --nocapture
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  wasmer-macos:
+    name: wasmer-macos
+    runs-on: macos-latest
+    env:
+      LLVM_DIR: llvm
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            --retry 3 --proto '=https' --tlsv1.2 -sSf \
+            "https://github.com/wasmerio/llvm-custom-builds/releases/download/21.x/llvm-darwin-aarch64.tar.xz" \
+            -L -o llvm.tar.xz
+          LLVM_DIR="$(pwd)/${LLVM_DIR}"
+          mkdir -p "${LLVM_DIR}"
+          tar xf llvm.tar.xz --strip-components=1 -C "${LLVM_DIR}"
+          echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
+          echo "${LLVM_DIR}/usr/bin" >> "$GITHUB_PATH"
+          echo "LLVM_SYS_211_PREFIX=${LLVM_DIR}" >> "$GITHUB_ENV"
+          echo "ENABLE_LLVM=1" >> "$GITHUB_ENV"
+
+      - name: Setup Prebuilt V8
+        shell: bash
+        run: |
+          set -euo pipefail
+          V8_VERSION="11.9.2"
+          ASSET="v8-darwin-arm64.tar.xz"
+          V8_ROOT="$PWD/.ci/v8/${V8_VERSION}/darwin-arm64"
+          mkdir -p "$V8_ROOT"
+          curl -fsSL "https://github.com/wasmerio/v8-custom-builds/releases/download/${V8_VERSION}/${ASSET}" -o "$V8_ROOT/${ASSET}"
+          tar -xJf "$V8_ROOT/${ASSET}" -C "$V8_ROOT"
+
+          # napi/wasmer links dynamic V8 libs.
+          /usr/bin/clang++ -dynamiclib \
+            -Wl,-undefined,dynamic_lookup \
+            -Wl,-all_load "$V8_ROOT/lib/libv8.a" \
+            -framework CoreFoundation \
+            -o "$V8_ROOT/lib/libv8.dylib"
+          cat > "$V8_ROOT/lib/v8_libplatform_stub.cc" <<'EOF'
+          extern "C" void __dummy_v8_libplatform() {}
+          EOF
+          /usr/bin/clang++ -dynamiclib "$V8_ROOT/lib/v8_libplatform_stub.cc" -o "$V8_ROOT/lib/libv8_libplatform.dylib"
+          cat > "$V8_ROOT/lib/v8_libbase_stub.cc" <<'EOF'
+          extern "C" void __dummy_v8_libbase() {}
+          EOF
+          /usr/bin/clang++ -dynamiclib "$V8_ROOT/lib/v8_libbase_stub.cc" -o "$V8_ROOT/lib/libv8_libbase.dylib"
+
+          echo "V8_INCLUDE_DIR=$V8_ROOT/include" >> "$GITHUB_ENV"
+          echo "V8_LIB_DIR=$V8_ROOT/lib" >> "$GITHUB_ENV"
+          echo "V8_DEFINES=V8_COMPRESS_POINTERS" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$V8_ROOT/lib:${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Test napi-wasmer
+        run: cargo test --manifest-path napi/wasmer/Cargo.toml --lib -- --nocapture
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true

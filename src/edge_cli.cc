@@ -30,6 +30,7 @@
 #include "edge_environment_runtime.h"
 #include "edge_env_loop.h"
 #include "edge_handle_wrap.h"
+#include "edge_napi_embedder_hooks.h"
 #include "edge_option_helpers.h"
 #include "edge_compat_exec.h"
 #include "edge_process.h"
@@ -97,6 +98,8 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner, std::string* err
   if (!EdgeInitializeOpenSslForCli(error_out)) {
     return 1;
   }
+
+  EdgeInstallNapiEmbedderHooks();
 
   napi_env env = nullptr;
   void* env_scope = nullptr;

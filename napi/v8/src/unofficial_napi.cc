@@ -23,17 +23,6 @@
 #include <v8.h>
 #include <v8-profiler.h>
 
-extern "C" uint64_t uv_get_total_memory(void);
-extern "C" uint64_t uv_get_constrained_memory(void);
-struct uv_loop_s;
-using uv_loop_t = struct uv_loop_s;
-enum uv_run_mode {
-  UV_RUN_DEFAULT = 0,
-  UV_RUN_ONCE,
-  UV_RUN_NOWAIT
-};
-extern "C" int uv_run(uv_loop_t* loop, uv_run_mode mode);
-
 #include "internal/node_v8_default_flags.h"
 #include "internal/napi_v8_env.h"
 #include "internal/unofficial_napi_bridge.h"
@@ -45,6 +34,10 @@ namespace {
 struct SharedRuntime {
   std::unique_ptr<EdgeV8Platform> platform;
   uint32_t refcount = 0;
+};
+
+struct EmbedderHooksState {
+  unofficial_napi_embedder_hooks hooks{};
 };
 
 class TrackingArrayBufferAllocator;
@@ -88,6 +81,7 @@ struct PrepareStackTraceState {
 
 std::mutex g_runtime_mu;
 SharedRuntime g_runtime;
+EmbedderHooksState g_embedder_hooks;
 std::unordered_map<v8::Isolate*, napi_env> g_env_by_isolate;
 std::unordered_map<v8::Isolate*, uint64_t> g_hash_seeds;
 std::unordered_map<v8::Isolate*, v8::Global<v8::Function>> g_promise_reject_callbacks;
@@ -123,6 +117,26 @@ struct ProfilerState {
 };
 
 std::unordered_map<napi_env, ProfilerState> g_profiler_states;
+
+unofficial_napi_embedder_hooks CopyEmbedderHooks() {
+  std::lock_guard<std::mutex> lock(g_runtime_mu);
+  return g_embedder_hooks.hooks;
+}
+
+bool QueryEmbedderMemoryInfo(unofficial_napi_embedder_memory_info* out) {
+  if (out == nullptr) return false;
+  *out = unofficial_napi_embedder_memory_info{};
+  const unofficial_napi_embedder_hooks hooks = CopyEmbedderHooks();
+  if (hooks.memory_info_callback == nullptr) return false;
+  return hooks.memory_info_callback(hooks.memory_info_target, out) == napi_ok;
+}
+
+bool PumpEmbedderShutdown(void* handle) {
+  if (handle == nullptr) return false;
+  const unofficial_napi_embedder_hooks hooks = CopyEmbedderHooks();
+  if (hooks.shutdown_pump_callback == nullptr) return false;
+  return hooks.shutdown_pump_callback(hooks.shutdown_pump_target, handle) == napi_ok;
+}
 
 class StringOutputStream final : public v8::OutputStream {
  public:
@@ -502,11 +516,14 @@ class TrackingArrayBufferAllocator final : public v8::ArrayBuffer::Allocator {
 void ApplyNodeIsolateCreateParams(v8::Isolate::CreateParams* params) {
   if (params == nullptr) return;
 
-  const uint64_t constrained_memory = uv_get_constrained_memory();
+  unofficial_napi_embedder_memory_info memory_info{};
+  if (!QueryEmbedderMemoryInfo(&memory_info)) return;
+
+  const uint64_t constrained_memory = memory_info.constrained_memory;
   const uint64_t total_memory =
       constrained_memory > 0
-          ? std::min<uint64_t>(uv_get_total_memory(), constrained_memory)
-          : uv_get_total_memory();
+          ? std::min<uint64_t>(memory_info.total_memory, constrained_memory)
+          : memory_info.total_memory;
   if (total_memory > 0 &&
       params->constraints.max_old_generation_size_in_bytes() == 0) {
     params->constraints.ConfigureDefaults(total_memory, 0);
@@ -549,13 +566,15 @@ void OnPlatformShutdownFinished(void* data) {
 }
 
 void WaitForPlatformShutdown(PlatformShutdownWaiter* waiter,
-                             uv_loop_t* loop) {
+                             void* shutdown_pump_handle) {
   if (waiter == nullptr) return;
   std::unique_lock<std::mutex> lock(waiter->mutex);
   while (!waiter->finished) {
-    if (loop != nullptr) {
+    if (shutdown_pump_handle != nullptr) {
       lock.unlock();
-      (void)uv_run(loop, UV_RUN_ONCE);
+      if (!PumpEmbedderShutdown(shutdown_pump_handle)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
       lock.lock();
       continue;
     }
@@ -565,7 +584,7 @@ void WaitForPlatformShutdown(PlatformShutdownWaiter* waiter,
 
 void DisposeIsolateAndWait(EdgeV8Platform* platform,
                            v8::Isolate* isolate,
-                           uv_loop_t* loop = nullptr) {
+                           void* shutdown_pump_handle = nullptr) {
   if (isolate == nullptr) return;
 
   PlatformShutdownWaiter waiter;
@@ -577,7 +596,7 @@ void DisposeIsolateAndWait(EdgeV8Platform* platform,
     waiter.finished = true;
     isolate->Dispose();
   }
-  WaitForPlatformShutdown(&waiter, loop);
+  WaitForPlatformShutdown(&waiter, shutdown_pump_handle);
 }
 
 void ApplyDefaultV8Flags() {
@@ -1604,6 +1623,17 @@ void NapiV8ApplyPromiseHooksToContext(napi_env env, v8::Local<v8::Context> conte
 
 extern "C" {
 
+napi_status NAPI_CDECL unofficial_napi_set_embedder_hooks(
+    const unofficial_napi_embedder_hooks* hooks) {
+  std::lock_guard<std::mutex> lock(g_runtime_mu);
+  if (hooks == nullptr) {
+    g_embedder_hooks.hooks = unofficial_napi_embedder_hooks{};
+  } else {
+    g_embedder_hooks.hooks = *hooks;
+  }
+  return napi_ok;
+}
+
 napi_status NAPI_CDECL unofficial_napi_set_enqueue_foreground_task_callback(
     napi_env env,
     unofficial_napi_enqueue_foreground_task_callback callback,
@@ -1882,7 +1912,7 @@ napi_status NAPI_CDECL unofficial_napi_create_env_with_options(
   return napi_ok;
 }
 
-napi_status ReleaseEnvScope(void* scope_ptr, uv_loop_t* loop) {
+napi_status ReleaseEnvScope(void* scope_ptr, void* shutdown_pump_handle) {
   if (scope_ptr == nullptr) return napi_invalid_arg;
   auto* scope = static_cast<UnofficialEnvScope*>(scope_ptr);
 
@@ -1902,7 +1932,7 @@ napi_status ReleaseEnvScope(void* scope_ptr, uv_loop_t* loop) {
       std::lock_guard<std::mutex> lock(g_runtime_mu);
       platform = g_runtime.platform.get();
     }
-    DisposeIsolateAndWait(platform, isolate, loop);
+    DisposeIsolateAndWait(platform, isolate, shutdown_pump_handle);
   }
   if (allocator != nullptr) {
     {
@@ -1919,8 +1949,8 @@ napi_status NAPI_CDECL unofficial_napi_release_env(void* scope_ptr) {
 }
 
 napi_status NAPI_CDECL unofficial_napi_release_env_with_loop(void* scope_ptr,
-                                                             uv_loop_t* loop) {
-  return ReleaseEnvScope(scope_ptr, loop);
+                                                             struct uv_loop_s* loop) {
+  return ReleaseEnvScope(scope_ptr, static_cast<void*>(loop));
 }
 
 napi_status NAPI_CDECL unofficial_napi_low_memory_notification(napi_env env) {

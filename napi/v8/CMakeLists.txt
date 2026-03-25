@@ -23,38 +23,20 @@ set(NAPI_V8_NODE_ROOT
 )
 napi_v8_resolve_configuration()
 
-set(NAPI_V8_STANDALONE_BUILD OFF)
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  set(NAPI_V8_STANDALONE_BUILD ON)
-endif()
-
-set(NAPI_V8_LIBUV_ROOT "${PROJECT_ROOT}/deps/uv")
-if(CMAKE_SYSTEM_NAME MATCHES "WASI|WASIX" OR
-   CMAKE_C_COMPILER MATCHES "wasixcc" OR
-   CMAKE_CXX_COMPILER MATCHES "wasixcc\\+\\+")
-  set(NAPI_V8_LIBUV_ROOT "${PROJECT_ROOT}/deps/libuv-wasix")
-endif()
-
-if(NAPI_V8_STANDALONE_BUILD)
-  if(NOT TARGET uv_a)
-    set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-    set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(LIBUV_BUILD_BENCH OFF CACHE BOOL "" FORCE)
-    add_subdirectory("${NAPI_V8_LIBUV_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
+file(GLOB_RECURSE NAPI_V8_SRC_FILES
+  "${NAPI_V8_ROOT}/src/*.h"
+  "${NAPI_V8_ROOT}/src/*.cc"
+  "${NAPI_V8_ROOT}/src/*.c"
+)
+foreach(NAPI_V8_SRC_FILE IN LISTS NAPI_V8_SRC_FILES)
+  file(READ "${NAPI_V8_SRC_FILE}" NAPI_V8_SRC_CONTENTS)
+  if(NAPI_V8_SRC_CONTENTS MATCHES "#include <uv\\.h>" OR
+     NAPI_V8_SRC_CONTENTS MATCHES "#include \"uv\\.h\"")
+    message(FATAL_ERROR
+      "libuv usage is forbidden in napi/v8/src. "
+      "Found in: ${NAPI_V8_SRC_FILE}")
   endif()
-
-  add_library(edge_environment_core STATIC
-    "${PROJECT_ROOT}/src/edge_environment.cc"
-  )
-  target_include_directories(edge_environment_core
-    PUBLIC
-      "${PROJECT_ROOT}/src"
-    PRIVATE
-      "${NAPI_INCLUDE_ROOT}"
-  )
-  target_link_libraries(edge_environment_core PUBLIC uv_a)
-  target_compile_definitions(edge_environment_core PUBLIC EDGE_BUNDLED_NAPI_V8=1)
-endif()
+endforeach()
 
 add_library(napi_v8 STATIC
   src/js_native_api_v8.cc
@@ -70,7 +52,6 @@ target_include_directories(napi_v8
   PRIVATE
     "${NAPI_V8_ROOT}/src"
     "${NAPI_V8_INCLUDE_DIR}"
-    "${NAPI_V8_LIBUV_ROOT}/include"
 )
 
 target_compile_definitions(napi_v8

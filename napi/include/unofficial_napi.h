@@ -19,6 +19,25 @@ typedef struct {
   void* stack_limit;
 } unofficial_napi_env_create_options;
 
+typedef struct {
+  uint64_t total_memory;
+  uint64_t constrained_memory;
+} unofficial_napi_embedder_memory_info;
+
+typedef napi_status (*unofficial_napi_embedder_memory_info_callback)(
+    void* target,
+    unofficial_napi_embedder_memory_info* info_out);
+typedef napi_status (*unofficial_napi_embedder_shutdown_pump_callback)(
+    void* target,
+    void* handle);
+
+typedef struct {
+  unofficial_napi_embedder_memory_info_callback memory_info_callback;
+  void* memory_info_target;
+  unofficial_napi_embedder_shutdown_pump_callback shutdown_pump_callback;
+  void* shutdown_pump_target;
+} unofficial_napi_embedder_hooks;
+
 NAPI_EXTENSION_WASMER_EXTERN napi_status unofficial_napi_create_env(int32_t module_api_version,
                                                    napi_env* env_out,
                                                    void** scope_out);
@@ -27,6 +46,8 @@ NAPI_EXTENSION_WASMER_EXTERN napi_status unofficial_napi_create_env_with_options
     const unofficial_napi_env_create_options* options,
     napi_env* env_out,
     void** scope_out);
+NAPI_EXTENSION_WASMER_EXTERN napi_status unofficial_napi_set_embedder_hooks(
+    const unofficial_napi_embedder_hooks* hooks);
 NAPI_EXTENSION_WASMER_EXTERN napi_status unofficial_napi_set_edge_environment(napi_env env, void* environment);
 NAPI_EXTENSION_WASMER_EXTERN void* unofficial_napi_get_edge_environment(napi_env env);
 using unofficial_napi_env_cleanup_callback = void (*)(napi_env env, void* data);
