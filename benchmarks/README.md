@@ -71,6 +71,21 @@ What it does not measure:
 - large real-world archive throughput
 - long-running server workloads
 
+### `string-compare-split`
+
+Repeatedly splits the same delimited string and performs deterministic string comparisons over the resulting parts, then prints a checksum.
+
+What it isolates:
+- short-lived string splitting cost
+- simple string comparison work on repeated in-memory inputs
+- a runtime surface that maps to the roadmap’s string optimization lane
+
+What it does not measure:
+- regex-heavy parsing
+- large-text search workloads
+- filesystem or network I/O
+- long-running application throughput
+
 ## Runtime prerequisites
 
 Install and verify the comparison runtimes you want to use:

@@ -60,9 +60,14 @@ case "$BENCHMARK" in
     NODE_CMD="$NODE_BIN benchmarks/workloads/zlib-deflate-sync.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/zlib-deflate-sync.js"
     ;;
+  string-compare-split)
+    EDGE_CMD="$EDGE_BIN benchmarks/workloads/string-compare-split.js"
+    NODE_CMD="$NODE_BIN benchmarks/workloads/string-compare-split.js"
+    BUN_CMD="$BUN_BIN benchmarks/workloads/string-compare-split.js"
+    ;;
   *)
     echo "Unknown benchmark: $BENCHMARK"
-    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain, zlib-deflate-sync"
+    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain, zlib-deflate-sync, string-compare-split"
     exit 1
     ;;
 esac
