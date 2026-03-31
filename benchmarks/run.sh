@@ -5,6 +5,7 @@ BENCHMARK="${1:-console-log}"
 EDGE_BIN="${EDGE_BIN:-./build-edge/edge}"
 NODE_BIN="${NODE_BIN:-node}"
 BUN_BIN="${BUN_BIN:-bun}"
+DENO_BIN="${DENO_BIN:-deno}"
 WARMUP="${WARMUP:-3}"
 RUNS="${RUNS:-20}"
 RESULTS_DIR="${RESULTS_DIR:-benchmarks/results}"
@@ -34,36 +35,48 @@ command -v "$BUN_BIN" >/dev/null 2>&1 || {
   exit 1
 }
 
+command -v "$DENO_BIN" >/dev/null 2>&1 || {
+  echo "Missing deno binary: $DENO_BIN"
+  echo "Install Deno first, then re-run this script."
+  exit 1
+}
+
 case "$BENCHMARK" in
   empty-startup)
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/empty-startup.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/empty-startup.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/empty-startup.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/empty-startup.js"
     ;;
   console-log)
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/console-log.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/console-log.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/console-log.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/console-log.js"
     ;;
   json-parse-stringify)
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/json-parse-stringify.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/json-parse-stringify.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/json-parse-stringify.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/json-parse-stringify.js"
     ;;
   promise-microtask-chain)
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/promise-microtask-chain.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/promise-microtask-chain.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/promise-microtask-chain.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/promise-microtask-chain.js"
     ;;
   zlib-deflate-sync)
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/zlib-deflate-sync.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/zlib-deflate-sync.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/zlib-deflate-sync.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/zlib-deflate-sync.js"
     ;;
   string-compare-split)
     EDGE_CMD="$EDGE_BIN benchmarks/workloads/string-compare-split.js"
     NODE_CMD="$NODE_BIN benchmarks/workloads/string-compare-split.js"
     BUN_CMD="$BUN_BIN benchmarks/workloads/string-compare-split.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/string-compare-split.js"
     ;;
   *)
     echo "Unknown benchmark: $BENCHMARK"
@@ -84,7 +97,8 @@ hyperfine \
   --export-markdown "$MD_OUT" \
   --command-name edge "$EDGE_CMD" \
   --command-name node "$NODE_CMD" \
-  --command-name bun "$BUN_CMD"
+  --command-name bun "$BUN_CMD" \
+  --command-name deno "$DENO_CMD"
 
 echo
 echo "Exported:"
