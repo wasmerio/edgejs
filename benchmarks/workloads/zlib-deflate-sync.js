@@ -1,6 +1,6 @@
 "use strict";
 
-const { deflateSync } = require("node:zlib");
+import { deflateSync } from "node:zlib";
 
 const PAYLOAD = JSON.stringify({
   meta: {
