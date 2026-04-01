@@ -2818,6 +2818,24 @@ static napi_value GetUtilPrivateSymbolByName(napi_env env, const char* key_name)
   return symbol;
 }
 
+static napi_value GetPerIsolateSymbolByName(napi_env env, const char* key_name) {
+  if (env == nullptr || key_name == nullptr) return nullptr;
+  ModuleLoaderState* state = GetModuleLoaderState(env);
+  if (state == nullptr || state->finalized) return nullptr;
+
+  napi_value per_isolate_symbols = GetStatePerIsolateSymbols(env, state);
+  if (per_isolate_symbols == nullptr || IsUndefinedValue(env, per_isolate_symbols)) {
+    return nullptr;
+  }
+
+  napi_value symbol = nullptr;
+  if (napi_get_named_property(env, per_isolate_symbols, key_name, &symbol) != napi_ok || symbol == nullptr ||
+      IsUndefinedValue(env, symbol)) {
+    return nullptr;
+  }
+  return symbol;
+}
+
 static void SetHostDefinedOptionSymbol(napi_env env, napi_value target, napi_value id_value) {
   if (env == nullptr || target == nullptr) return;
   napi_value symbol = GetUtilPrivateSymbolByName(env, "host_defined_option_symbol");
@@ -2834,6 +2852,33 @@ static napi_value GetNamedPropertyOrUndefined(napi_env env, napi_value object, c
   }
   napi_get_undefined(env, &value);
   return value;
+}
+
+static napi_value CreateContextifyCjsLoaderResult(napi_env env,
+                                                  napi_value compile_result_or_null,
+                                                  bool can_parse_as_esm) {
+  napi_value out = nullptr;
+  if (napi_create_object(env, &out) != napi_ok || out == nullptr) return nullptr;
+
+  napi_value function_value = GetNamedPropertyOrUndefined(env, compile_result_or_null, "function");
+  napi_value source_url = GetNamedPropertyOrUndefined(env, compile_result_or_null, "sourceURL");
+  napi_value source_map_url = GetNamedPropertyOrUndefined(env, compile_result_or_null, "sourceMapURL");
+  napi_value cached_data_rejected = nullptr;
+  napi_value can_parse_value = nullptr;
+  if (napi_get_boolean(env, false, &cached_data_rejected) != napi_ok || cached_data_rejected == nullptr ||
+      napi_get_boolean(env, can_parse_as_esm, &can_parse_value) != napi_ok || can_parse_value == nullptr) {
+    return nullptr;
+  }
+
+  if (napi_set_named_property(env, out, "function", function_value) != napi_ok ||
+      napi_set_named_property(env, out, "sourceURL", source_url) != napi_ok ||
+      napi_set_named_property(env, out, "sourceMapURL", source_map_url) != napi_ok ||
+      napi_set_named_property(env, out, "cachedDataRejected", cached_data_rejected) != napi_ok ||
+      napi_set_named_property(env, out, "canParseAsESM", can_parse_value) != napi_ok) {
+    return nullptr;
+  }
+
+  return out;
 }
 
 static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callback_info info) {
@@ -3259,18 +3304,58 @@ static napi_value ContextifyCompileFunctionForCJSLoaderCallback(napi_env env, na
   if (argc >= 3 && argv[2] != nullptr) {
     napi_get_value_bool(env, argv[2], &is_sea_main);
   }
+  (void)is_sea_main;
   bool should_detect_module = false;
   if (argc >= 4 && argv[3] != nullptr) {
     napi_get_value_bool(env, argv[3], &should_detect_module);
   }
 
-  napi_value out = nullptr;
-  if (unofficial_napi_contextify_compile_function_for_cjs_loader(
-          env, code, filename, is_sea_main, should_detect_module, &out) != napi_ok ||
-      out == nullptr) {
+  napi_value undefined = UndefinedValue(env);
+  napi_value params = nullptr;
+  if (!CreateStringArray(env, {"exports", "require", "module", "__filename", "__dirname"}, &params)) {
     return nullptr;
   }
-  return out;
+  napi_value host_defined_option_id = GetPerIsolateSymbolByName(env, "vm_dynamic_import_default_internal");
+  if (host_defined_option_id == nullptr) host_defined_option_id = undefined;
+
+  napi_value compile_result = nullptr;
+  napi_status status = unofficial_napi_contextify_compile_function(env,
+                                                                   code,
+                                                                   filename,
+                                                                   0,
+                                                                   0,
+                                                                   undefined,
+                                                                   false,
+                                                                   undefined,
+                                                                   undefined,
+                                                                   params,
+                                                                   host_defined_option_id,
+                                                                   &compile_result);
+  if (status == napi_ok && compile_result != nullptr) {
+    return CreateContextifyCjsLoaderResult(env, compile_result, false);
+  }
+  if (status != napi_pending_exception || !should_detect_module) {
+    return nullptr;
+  }
+
+  napi_value compile_error = nullptr;
+  bool has_pending_exception = false;
+  if (napi_is_exception_pending(env, &has_pending_exception) == napi_ok && has_pending_exception) {
+    (void)napi_get_and_clear_last_exception(env, &compile_error);
+  }
+
+  bool can_parse_as_esm = false;
+  if (unofficial_napi_contextify_contains_module_syntax(
+          env, code, filename, undefined, true, &can_parse_as_esm) != napi_ok) {
+    if (compile_error != nullptr) napi_throw(env, compile_error);
+    return nullptr;
+  }
+  if (!can_parse_as_esm) {
+    if (compile_error != nullptr) napi_throw(env, compile_error);
+    return nullptr;
+  }
+
+  return CreateContextifyCjsLoaderResult(env, nullptr, true);
 }
 
 static napi_value ContextifyContainsModuleSyntaxCallback(napi_env env, napi_callback_info info) {
