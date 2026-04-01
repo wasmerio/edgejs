@@ -105,6 +105,7 @@ std::vector<std::string> BuildDefaultSafeModeCommand(std::string_view wasmer_bin
       resolved_wasmer_package,
       "--volume=.",
       "--net",
+      "--",
   };
 }
 
