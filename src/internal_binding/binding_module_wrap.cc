@@ -148,6 +148,36 @@ bool CallFunction(napi_env env,
   return true;
 }
 
+napi_value CreateFrozenNullProtoObject(napi_env env) {
+  napi_value object_ctor = GetGlobalNamed(env, "Object");
+  if (!IsFunctionValue(env, object_ctor)) return nullptr;
+
+  napi_value create_fn = nullptr;
+  if (!GetNamedProperty(env, object_ctor, "create", &create_fn) || !IsFunctionValue(env, create_fn)) {
+    return nullptr;
+  }
+  napi_value freeze_fn = nullptr;
+  if (!GetNamedProperty(env, object_ctor, "freeze", &freeze_fn) || !IsFunctionValue(env, freeze_fn)) {
+    return nullptr;
+  }
+
+  napi_value null_value = nullptr;
+  if (napi_get_null(env, &null_value) != napi_ok || null_value == nullptr) return nullptr;
+
+  napi_value object = nullptr;
+  napi_value create_argv[1] = {null_value};
+  if (!CallFunction(env, object_ctor, create_fn, 1, create_argv, &object) || object == nullptr) {
+    return nullptr;
+  }
+
+  napi_value freeze_argv[1] = {object};
+  napi_value frozen = nullptr;
+  if (!CallFunction(env, object_ctor, freeze_fn, 1, freeze_argv, &frozen) || frozen == nullptr) {
+    return nullptr;
+  }
+  return frozen;
+}
+
 std::string ValueToUtf8(napi_env env, napi_value value);
 
 napi_value GetSymbolsBindingProperty(napi_env env, const char* property_name) {
@@ -636,14 +666,34 @@ napi_value ModuleWrapSetInitializeImportMetaObjectCallback(napi_env env, napi_ca
 }
 
 napi_value ModuleWrapImportModuleDynamically(napi_env env, napi_callback_info info) {
+  auto* state = GetBindingState(env);
+  if (state == nullptr) return Undefined(env);
   size_t argc = 5;
   napi_value argv[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (argc < 1 || argv[0] == nullptr) return Undefined(env);
+
+  napi_value callback = GetRefValue(env, state->import_module_dynamically_ref);
+  if (!IsFunctionValue(env, callback)) return Undefined(env);
+
+  napi_value global = GetGlobal(env);
+  if (global == nullptr) return Undefined(env);
+
   napi_value result = nullptr;
-  if (unofficial_napi_module_wrap_import_module_dynamically(env, argc, argv, &result) != napi_ok) {
-    return nullptr;
+  if (argc >= 5) {
+    if (!CallFunction(env, global, callback, 5, argv, &result)) return nullptr;
+    return result != nullptr ? result : Undefined(env);
   }
+
+  napi_value referrer_symbol = GetSymbolsBindingProperty(env, "vm_dynamic_import_default_internal");
+  if (referrer_symbol == nullptr) return nullptr;
+  napi_value phase = nullptr;
+  if (napi_create_int32(env, kEvaluationPhase, &phase) != napi_ok || phase == nullptr) return nullptr;
+  napi_value attrs = CreateFrozenNullProtoObject(env);
+  if (attrs == nullptr) return nullptr;
+  napi_value referrer_name = argc >= 2 ? argv[1] : nullptr;
+  napi_value call_argv[5] = {referrer_symbol, argv[0], phase, attrs, referrer_name};
+  if (!CallFunction(env, global, callback, 5, call_argv, &result)) return nullptr;
   return result != nullptr ? result : Undefined(env);
 }
 
