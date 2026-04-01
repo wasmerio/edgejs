@@ -25,7 +25,7 @@ namespace {
 constexpr const char kSafeModeInstallUrl[] = "https://docs.wasmer.io/install";
 
 #ifndef EDGE_DEFAULT_WASMER_PACKAGE
-#define EDGE_DEFAULT_WASMER_PACKAGE "wasmer/edge@=" EDGE_VERSION_STRING
+#define EDGE_DEFAULT_WASMER_PACKAGE "wasmer/edgejs@=" EDGE_VERSION_STRING
 #endif
 
 struct CommandResult {
