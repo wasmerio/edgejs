@@ -333,7 +333,9 @@ TEST_F(Test1CliPhase01, EdgeenvAlwaysPrefixesPathAndBypassesCliParsing) {
 #else
   namespace fs = std::filesystem;
   const auto edgeenv_path = ResolveBuiltEdgeenvBinary();
+  const auto edge_path = ResolveBuiltEdgeBinary();
   ASSERT_FALSE(edgeenv_path.empty()) << "Failed to resolve built edgeenv binary";
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
 
   const auto temp_root = fs::temp_directory_path() / "edge_phase01_edgeenv_wrap";
   const auto build_dir = temp_root / "build-edge-rename";
@@ -387,9 +389,70 @@ TEST_F(Test1CliPhase01, EdgeenvAlwaysPrefixesPathAndBypassesCliParsing) {
   EXPECT_TRUE(stderr_output.empty()) << "stderr=" << stderr_output;
   EXPECT_NE(stdout_output.find("args=-p 42"), std::string::npos) << stdout_output;
   EXPECT_NE(stdout_output.find("path0=" + compat_dir.string()), std::string::npos) << stdout_output;
-  EXPECT_NE(stdout_output.find("edge_binary_path=" + (build_dir / "edgeenv").string()),
+  EXPECT_NE(stdout_output.find("edge_binary_path=" + edge_path.string()),
             std::string::npos)
       << stdout_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, EdgeenvRunsNodeThroughCompatWrapper) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "edgeenv subprocess check is POSIX-oriented";
+#else
+  namespace fs = std::filesystem;
+  const auto edgeenv_path = ResolveBuiltEdgeenvBinary();
+  ASSERT_FALSE(edgeenv_path.empty()) << "Failed to resolve built edgeenv binary";
+
+  const auto temp_root = fs::temp_directory_path() / "edge_phase01_edgeenv_node_alias";
+  const auto version_stdout_path = temp_root / "version_stdout.txt";
+  const auto version_stderr_path = temp_root / "version_stderr.txt";
+  const auto stdin_stdout_path = temp_root / "stdin_stdout.txt";
+  const auto stdin_stderr_path = temp_root / "stdin_stderr.txt";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(temp_root, ec);
+  ASSERT_FALSE(ec) << "Failed to create temp directory";
+
+  const std::string version_cmd =
+      ShellSingleQuoted(edgeenv_path.string()) + " node --version >" +
+      ShellSingleQuoted(version_stdout_path.string()) + " 2>" +
+      ShellSingleQuoted(version_stderr_path.string());
+  const int version_status = std::system(version_cmd.c_str());
+  ASSERT_NE(version_status, -1);
+  ASSERT_TRUE(WIFEXITED(version_status)) << "status=" << version_status;
+
+  std::ifstream version_stdout_in(version_stdout_path);
+  const std::string version_stdout_output((std::istreambuf_iterator<char>(version_stdout_in)),
+                                          std::istreambuf_iterator<char>());
+  std::ifstream version_stderr_in(version_stderr_path);
+  const std::string version_stderr_output((std::istreambuf_iterator<char>(version_stderr_in)),
+                                          std::istreambuf_iterator<char>());
+
+  EXPECT_EQ(WEXITSTATUS(version_status), 0) << "stderr=" << version_stderr_output;
+  EXPECT_TRUE(version_stderr_output.empty()) << "stderr=" << version_stderr_output;
+  EXPECT_NE(version_stdout_output.find(NODE_VERSION_STRING), std::string::npos)
+      << version_stdout_output;
+
+  const std::string stdin_cmd =
+      ShellSingleQuoted(edgeenv_path.string()) + " node </dev/null >" +
+      ShellSingleQuoted(stdin_stdout_path.string()) + " 2>" +
+      ShellSingleQuoted(stdin_stderr_path.string());
+  const int stdin_status = std::system(stdin_cmd.c_str());
+  ASSERT_NE(stdin_status, -1);
+  ASSERT_TRUE(WIFEXITED(stdin_status)) << "status=" << stdin_status;
+
+  std::ifstream stdin_stdout_in(stdin_stdout_path);
+  const std::string stdin_stdout_output((std::istreambuf_iterator<char>(stdin_stdout_in)),
+                                        std::istreambuf_iterator<char>());
+  std::ifstream stdin_stderr_in(stdin_stderr_path);
+  const std::string stdin_stderr_output((std::istreambuf_iterator<char>(stdin_stderr_in)),
+                                        std::istreambuf_iterator<char>());
+
+  fs::remove_all(temp_root, ec);
+
+  EXPECT_EQ(WEXITSTATUS(stdin_status), 0) << "stderr=" << stdin_stderr_output;
+  EXPECT_TRUE(stdin_stdout_output.empty()) << "stdout=" << stdin_stdout_output;
+  EXPECT_TRUE(stdin_stderr_output.empty()) << "stderr=" << stdin_stderr_output;
 #endif
 }
 

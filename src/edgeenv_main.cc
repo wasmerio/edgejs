@@ -17,10 +17,26 @@
 #include <mach-o/dyld.h>
 #endif
 #endif
-
-#include "edge_cli.h"
-
 namespace {
+
+std::vector<std::filesystem::path> BuildCandidateInstallDirs(const std::string& actual_exec_path,
+                                                             const std::string& logical_exec_path) {
+  namespace fs = std::filesystem;
+  std::vector<fs::path> candidate_dirs;
+  auto append_dir = [&](const std::string& exec_path) {
+    if (exec_path.empty()) return;
+    const fs::path dir = fs::path(exec_path).parent_path();
+    if (dir.empty()) return;
+    for (const auto& existing : candidate_dirs) {
+      if (existing == dir) return;
+    }
+    candidate_dirs.push_back(dir);
+  };
+
+  append_dir(logical_exec_path);
+  append_dir(actual_exec_path);
+  return candidate_dirs;
+}
 
 std::string FallbackExecPath(const char* argv0) {
   namespace fs = std::filesystem;
@@ -112,16 +128,7 @@ std::string DetectLogicalExecPath(const std::string& actual_exec_path) {
 std::string ResolveEdgeBinaryPath(const std::string& actual_exec_path,
                                   const std::string& logical_exec_path) {
   namespace fs = std::filesystem;
-  std::vector<fs::path> candidate_dirs;
-  if (!actual_exec_path.empty()) {
-    candidate_dirs.push_back(fs::path(actual_exec_path).parent_path());
-  }
-  if (!logical_exec_path.empty()) {
-    const fs::path logical_dir = fs::path(logical_exec_path).parent_path();
-    if (logical_dir != fs::path(actual_exec_path).parent_path()) {
-      candidate_dirs.push_back(logical_dir);
-    }
-  }
+  std::vector<fs::path> candidate_dirs = BuildCandidateInstallDirs(actual_exec_path, logical_exec_path);
 
 #if defined(_WIN32)
   constexpr const char* kEdgeBinaryName = "edge.exe";
@@ -145,21 +152,61 @@ std::string ResolveEdgeBinaryPath(const std::string& actual_exec_path,
   return (fallback_dir / kEdgeBinaryName).lexically_normal().string();
 }
 
-bool SetEdgeExecPath(const std::string& logical_exec_path, std::string* error_out) {
+std::string BuildCompatWrappedPathPrefix(const std::string& logical_exec_path) {
+  namespace fs = std::filesystem;
+  fs::path exec_path = logical_exec_path.empty() ? fs::path("edgeenv") : fs::path(logical_exec_path);
+  fs::path exec_dir = exec_path.parent_path();
+  std::vector<fs::path> compat_candidates = {
+      (exec_dir / ".." / "bin-compat").lexically_normal(),
+      (exec_dir / "bin-compat").lexically_normal(),
+  };
+
+  std::error_code ec;
+  fs::path compat_dir;
+  for (const auto& candidate : compat_candidates) {
+    ec.clear();
+    if (!fs::exists(candidate, ec) || ec) continue;
+    ec.clear();
+    if (fs::is_directory(candidate, ec) && !ec) {
+      compat_dir = candidate;
+      break;
+    }
+  }
+
+  if (compat_dir.empty()) {
+    compat_dir = !compat_candidates.empty() ? compat_candidates.front() : fs::path("bin-compat");
+  }
+
 #if defined(_WIN32)
-  if (_putenv_s("EDGE_EXEC_PATH", logical_exec_path.c_str()) == 0) {
+  constexpr char kPathSeparator = ';';
+#else
+  constexpr char kPathSeparator = ':';
+#endif
+
+  std::string updated_path = compat_dir.lexically_normal().string();
+  const char* current_path = std::getenv("PATH");
+  if (current_path != nullptr && current_path[0] != '\0') {
+    updated_path.push_back(kPathSeparator);
+    updated_path += current_path;
+  }
+  return updated_path;
+}
+
+bool SetEnvVar(const char* key, const std::string& value, std::string* error_out) {
+#if defined(_WIN32)
+  if (_putenv_s(key, value.c_str()) == 0) {
     return true;
   }
   if (error_out != nullptr) {
-    *error_out = "failed to set EDGE_EXEC_PATH";
+    *error_out = std::string("failed to set ") + key;
   }
   return false;
 #else
-  if (setenv("EDGE_EXEC_PATH", logical_exec_path.c_str(), 1) == 0) {
+  if (setenv(key, value.c_str(), 1) == 0) {
     return true;
   }
   if (error_out != nullptr) {
-    *error_out = std::string("failed to set EDGE_EXEC_PATH: ") + std::strerror(errno);
+    *error_out = std::string("failed to set ") + key + ": " + std::strerror(errno);
   }
   return false;
 #endif
@@ -171,35 +218,36 @@ int main(int argc, char** argv) {
   const std::string actual_exec_path = DetectActualExecPath(argc > 0 ? argv[0] : nullptr);
   const std::string logical_exec_path = DetectLogicalExecPath(actual_exec_path);
   const std::string edge_binary_path = ResolveEdgeBinaryPath(actual_exec_path, logical_exec_path);
+  const std::string compat_path = BuildCompatWrappedPathPrefix(logical_exec_path);
+
+  if (argc <= 1 || argv == nullptr || argv[1] == nullptr) {
+    std::cerr << "Missing wrapped command\n";
+    return 1;
+  }
 
   std::string error;
-  if (!SetEdgeExecPath(logical_exec_path, &error)) {
+  if (!SetEnvVar("PATH", compat_path, &error) ||
+      !SetEnvVar("EDGE_BINARY_PATH", edge_binary_path, &error)) {
     std::cerr << error << "\n";
     return 1;
   }
 
-  std::vector<std::string> child_args;
-  child_args.reserve(static_cast<size_t>(argc) + 1);
-  child_args.push_back(argc > 0 && argv != nullptr && argv[0] != nullptr ? argv[0] : logical_exec_path);
-  child_args.emplace_back(kEdgeInternalEnvCliDispatchFlag);
-  for (int i = 1; i < argc; ++i) {
-    if (argv[i] != nullptr) child_args.emplace_back(argv[i]);
-  }
-
   std::vector<char*> child_argv;
-  child_argv.reserve(child_args.size() + 1);
-  for (auto& arg : child_args) {
-    child_argv.push_back(arg.data());
+  child_argv.reserve(static_cast<size_t>(argc));
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] != nullptr) child_argv.push_back(argv[i]);
   }
   child_argv.push_back(nullptr);
 
 #if defined(_WIN32)
-  _execv(edge_binary_path.c_str(), child_argv.data());
-  std::cerr << "failed to exec edge: " << std::strerror(errno) << "\n";
+  _execvp(child_argv[0], child_argv.data());
+  std::cerr << "exec failed for compat command: " << child_argv[0] << ": "
+            << std::strerror(errno) << "\n";
   return errno == ENOENT ? 127 : 1;
 #else
-  execv(edge_binary_path.c_str(), child_argv.data());
-  std::cerr << "failed to exec edge: " << std::strerror(errno) << "\n";
+  execvp(child_argv[0], child_argv.data());
+  std::cerr << "exec failed for compat command: " << child_argv[0] << ": "
+            << std::strerror(errno) << "\n";
   return errno == ENOENT ? 127 : 1;
 #endif
 }
