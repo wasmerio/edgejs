@@ -57,7 +57,7 @@ jobs:
           echo "LD_LIBRARY_PATH=$V8_ROOT/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Test napi-wasmer
-        run: cargo test --manifest-path napi/Cargo.standalone.toml --lib -- --nocapture
+        run: ./napi/cargo-standalone.sh test --lib -- --nocapture
 
       - name: sccache stats
         if: always()
@@ -112,7 +112,7 @@ jobs:
           echo "DYLD_LIBRARY_PATH=$V8_ROOT/lib:${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Test napi-wasmer
-        run: cargo test --manifest-path napi/Cargo.standalone.toml --lib -- --nocapture
+        run: ./napi/cargo-standalone.sh test --lib -- --nocapture
 
       - name: sccache stats
         if: always()
