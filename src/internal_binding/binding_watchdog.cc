@@ -1,4 +1,5 @@
 #include "internal_binding/dispatch.h"
+#include "internal_binding/watchdog.h"
 
 #include <algorithm>
 #include <atomic>
@@ -112,7 +113,7 @@ void PrintTraceSigintStack(napi_env env) {
   std::fputs("KEYBOARD_INTERRUPT: Script execution was interrupted by `SIGINT`\n", stderr);
 
   napi_value callsites = nullptr;
-  if (unofficial_napi_get_current_stack_trace(env, 10, &callsites) != napi_ok || callsites == nullptr) {
+  if (unofficial_napi_get_call_sites(env, 10, 0, &callsites) != napi_ok || callsites == nullptr) {
     std::fflush(stderr);
     return;
   }
@@ -233,15 +234,19 @@ bool StartSigintWatchdogHelperLocked() {
   return true;
 }
 
-void StopSigintWatchdogHelperLocked() {
-  if (g_sigint_watchdog_state.start_stop_count <= 0) return;
+bool StopSigintWatchdogHelperLocked() {
+  if (g_sigint_watchdog_state.start_stop_count <= 0) return false;
+  bool had_pending_signal = false;
   if (--g_sigint_watchdog_state.start_stop_count > 0) {
+    std::lock_guard<std::mutex> lock(g_sigint_watchdog_state.list_mutex);
+    had_pending_signal = g_sigint_watchdog_state.has_pending_signal;
     g_sigint_watchdog_state.has_pending_signal = false;
-    return;
+    return had_pending_signal;
   }
 
   {
     std::lock_guard<std::mutex> lock(g_sigint_watchdog_state.list_mutex);
+    had_pending_signal = g_sigint_watchdog_state.has_pending_signal;
     g_sigint_watchdog_state.stopping = true;
     g_sigint_watchdog_state.watchdogs.clear();
   }
@@ -254,6 +259,7 @@ void StopSigintWatchdogHelperLocked() {
 
   g_sigint_watchdog_state.has_pending_signal = false;
   RestoreDefaultSigintHandler();
+  return had_pending_signal;
 }
 
 void HandleWatchdogInterrupt(napi_env env, void* data) {
@@ -269,7 +275,7 @@ void HandleWatchdogInterrupt(napi_env env, void* data) {
     std::lock_guard<std::mutex> action_lock(g_sigint_watchdog_state.action_mutex);
     if (wrap->started.exchange(false)) {
       UnregisterWatchdogLocked(wrap);
-      StopSigintWatchdogHelperLocked();
+      (void)StopSigintWatchdogHelperLocked();
     }
   }
 
@@ -284,7 +290,7 @@ void TraceSigintWatchdogFinalize(napi_env /*env*/, void* data, void* /*hint*/) {
   if (wrap->started.exchange(false)) {
     std::lock_guard<std::mutex> action_lock(g_sigint_watchdog_state.action_mutex);
     UnregisterWatchdogLocked(wrap);
-    StopSigintWatchdogHelperLocked();
+    (void)StopSigintWatchdogHelperLocked();
   }
 #endif
   delete wrap;
@@ -345,12 +351,39 @@ napi_value TraceSigintWatchdogStop(napi_env env, napi_callback_info info) {
 #if !defined(_WIN32)
   std::lock_guard<std::mutex> action_lock(g_sigint_watchdog_state.action_mutex);
   UnregisterWatchdogLocked(wrap);
-  StopSigintWatchdogHelperLocked();
+  (void)StopSigintWatchdogHelperLocked();
 #endif
   return Undefined(env);
 }
 
 }  // namespace
+
+bool StartSigintWatchdog() {
+#if !defined(_WIN32)
+  std::lock_guard<std::mutex> action_lock(g_sigint_watchdog_state.action_mutex);
+  return StartSigintWatchdogHelperLocked();
+#else
+  return true;
+#endif
+}
+
+bool StopSigintWatchdog() {
+#if !defined(_WIN32)
+  std::lock_guard<std::mutex> action_lock(g_sigint_watchdog_state.action_mutex);
+  return StopSigintWatchdogHelperLocked();
+#else
+  return false;
+#endif
+}
+
+bool WatchdogHasPendingSigint() {
+#if !defined(_WIN32)
+  std::lock_guard<std::mutex> lock(g_sigint_watchdog_state.list_mutex);
+  return g_sigint_watchdog_state.has_pending_signal;
+#else
+  return false;
+#endif
+}
 
 napi_value ResolveWatchdog(napi_env env, const ResolveOptions& /*options*/) {
   napi_value binding = nullptr;

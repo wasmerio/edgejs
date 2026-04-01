@@ -1417,7 +1417,8 @@ napi_value CloneRootJSTransferableValueForQueue(napi_env env, napi_value value) 
   if (marker == nullptr) return nullptr;
 
   napi_value cloned = nullptr;
-  if (unofficial_napi_structured_clone(env, marker, &cloned) != napi_ok || cloned == nullptr) {
+  if (unofficial_napi_structured_clone(env, marker, nullptr, &cloned) != napi_ok ||
+      cloned == nullptr) {
     return nullptr;
   }
 
@@ -1497,7 +1498,8 @@ bool CreateTransferredJSTransferableMarkerForQueue(
   }
 
   napi_value cloned_marker = nullptr;
-  if (unofficial_napi_structured_clone(env, marker, &cloned_marker) != napi_ok || cloned_marker == nullptr) {
+  if (unofficial_napi_structured_clone(env, marker, nullptr, &cloned_marker) != napi_ok ||
+      cloned_marker == nullptr) {
     return false;
   }
 
@@ -1697,7 +1699,8 @@ bool TransferRootJSTransferableValueForQueue(
   }
 
   napi_value cloned = nullptr;
-  if (unofficial_napi_structured_clone(env, marker, &cloned) != napi_ok || cloned == nullptr) {
+  if (unofficial_napi_structured_clone(env, marker, nullptr, &cloned) != napi_ok ||
+      cloned == nullptr) {
     return false;
   }
 
@@ -1715,7 +1718,8 @@ napi_value StructuredCloneJSTransferableValue(napi_env env, napi_value value) {
   }
 
   napi_value cloned_data = nullptr;
-  if (unofficial_napi_structured_clone(env, prepared_data, &cloned_data) != napi_ok || cloned_data == nullptr) {
+  if (unofficial_napi_structured_clone(env, prepared_data, nullptr, &cloned_data) != napi_ok ||
+      cloned_data == nullptr) {
     return nullptr;
   }
 
@@ -2685,10 +2689,7 @@ napi_value CloneMessageValueWithTransfers(napi_env env, napi_value value, napi_v
     napi_value arraybuffer_transfer_list = CreateArrayBufferTransferList(env, normalized_transfer_arg);
     napi_value cloned = nullptr;
     const napi_status clone_status =
-        arraybuffer_transfer_list != nullptr
-            ? unofficial_napi_structured_clone_with_transfer(
-                  env, clone_input, arraybuffer_transfer_list, &cloned)
-            : unofficial_napi_structured_clone(env, clone_input, &cloned);
+        unofficial_napi_structured_clone(env, clone_input, arraybuffer_transfer_list, &cloned);
     if (clone_status != napi_ok || cloned == nullptr) {
       bool has_pending = false;
       if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
@@ -2739,7 +2740,8 @@ napi_value CloneMessageValue(napi_env env, napi_value value, napi_value transfer
 
   auto clone_prepared_value = [&](napi_value prepared_value) -> napi_value {
     napi_value cloned = nullptr;
-    const napi_status clone_status = unofficial_napi_structured_clone(env, prepared_value, &cloned);
+    const napi_status clone_status =
+        unofficial_napi_structured_clone(env, prepared_value, nullptr, &cloned);
     if (clone_status != napi_ok || cloned == nullptr) {
       bool has_pending = false;
       if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {

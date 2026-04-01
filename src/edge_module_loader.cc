@@ -30,6 +30,7 @@
 #include "edge_worker_env.h"
 #include "edge_option_helpers.h"
 #include "internal_binding/dispatch.h"
+#include "internal_binding/watchdog.h"
 #include "builtin_catalog.h"
 
 #include <algorithm>
@@ -3068,32 +3069,20 @@ static napi_value ContextifyScriptCreateCachedDataCallback(napi_env env, napi_ca
 }
 
 static napi_value ContextifyStartSigintWatchdogCallback(napi_env env, napi_callback_info /*info*/) {
-  bool started = false;
-  if (unofficial_napi_contextify_start_sigint_watchdog(env, &started) != napi_ok) {
-    return nullptr;
-  }
   napi_value out = nullptr;
-  napi_get_boolean(env, started, &out);
+  napi_get_boolean(env, internal_binding::StartSigintWatchdog(), &out);
   return out;
 }
 
 static napi_value ContextifyStopSigintWatchdogCallback(napi_env env, napi_callback_info /*info*/) {
-  bool had_pending_signal = false;
-  if (unofficial_napi_contextify_stop_sigint_watchdog(env, &had_pending_signal) != napi_ok) {
-    return nullptr;
-  }
   napi_value out = nullptr;
-  napi_get_boolean(env, had_pending_signal, &out);
+  napi_get_boolean(env, internal_binding::StopSigintWatchdog(), &out);
   return out;
 }
 
 static napi_value ContextifyWatchdogHasPendingSigintCallback(napi_env env, napi_callback_info /*info*/) {
-  bool has_pending_signal = false;
-  if (unofficial_napi_contextify_watchdog_has_pending_sigint(env, &has_pending_signal) != napi_ok) {
-    return nullptr;
-  }
   napi_value out = nullptr;
-  napi_get_boolean(env, has_pending_signal, &out);
+  napi_get_boolean(env, internal_binding::WatchdogHasPendingSigint(), &out);
   return out;
 }
 
