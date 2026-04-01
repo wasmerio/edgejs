@@ -863,11 +863,11 @@ add_library(edge_runtime STATIC
 )
 
 file(GLOB_RECURSE EDGE_BUILTIN_LIB_SOURCES CONFIGURE_DEPENDS
-  "${PROJECT_ROOT}/node/lib/*.js"
+  "${PROJECT_ROOT}/lib/*.js"
 )
 file(GLOB_RECURSE EDGE_BUILTIN_DEP_SOURCES CONFIGURE_DEPENDS
-  "${PROJECT_ROOT}/node/deps/*.js"
-  "${PROJECT_ROOT}/node/deps/*.mjs"
+  "${PROJECT_ROOT}/deps/*.js"
+  "${PROJECT_ROOT}/deps/*.mjs"
 )
 set(EDGE_BUILTIN_CATALOG_HEADER "${CMAKE_CURRENT_BINARY_DIR}/edge_builtin_catalog_data.h")
 add_custom_command(
@@ -983,13 +983,15 @@ if(EDGE_BUILD_CLI)
     )
   endif()
 
-  add_executable(edgeenv
-    "${EDGE_ROOT}/src/edgeenv_main.cc"
-  )
-  target_include_directories(edgeenv
-    PRIVATE
-      "${EDGE_ROOT}/src"
-  )
+  if(NOT EDGE_IS_WASIX_TARGET)
+    add_executable(edgeenv
+      "${EDGE_ROOT}/src/edgeenv_main.cc"
+    )
+    target_include_directories(edgeenv
+      PRIVATE
+        "${EDGE_ROOT}/src"
+    )
+  endif()
 endif()
 
 if(NOT EDGE_IS_WASIX_TARGET)

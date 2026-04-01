@@ -4,6 +4,7 @@
 #include "edge_process.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -20,6 +21,7 @@ namespace {
 
 constexpr std::string_view kNodePrefix = "node:";
 constexpr std::string_view kInternalDepsPrefix = "internal/deps/";
+constexpr const char kNodeLibRootEnvVar[] = "EDGEJS_LIB_DIR";
 
 bool PathExistsDirectory(const fs::path& path) {
   std::error_code ec;
@@ -31,11 +33,19 @@ void AppendPathCandidate(std::vector<fs::path>* out, const fs::path& candidate) 
   out->push_back(candidate);
 }
 
+void AppendEnvPathCandidate(std::vector<fs::path>* out, const char* env_var) {
+  if (out == nullptr || env_var == nullptr || *env_var == '\0') return;
+  const char* value = std::getenv(env_var);
+  if (value == nullptr || *value == '\0') return;
+  AppendPathCandidate(out, fs::path(value));
+}
+
 std::vector<fs::path> NodeLibRootCandidates() {
   const fs::path source_root =
       fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
   std::vector<fs::path> candidates;
 
+  AppendEnvPathCandidate(&candidates, kNodeLibRootEnvVar);
   AppendPathCandidate(&candidates, fs::path("/node-lib"));
 
   const fs::path exec_path = fs::path(EdgeGetProcessExecPath()).lexically_normal();
@@ -61,6 +71,11 @@ std::vector<fs::path> NodeDepsRootCandidates() {
       fs::absolute(fs::path(__FILE__).parent_path() / "..").lexically_normal();
   std::vector<fs::path> candidates;
 
+  const char* node_lib_root_env = std::getenv(kNodeLibRootEnvVar);
+  if (node_lib_root_env != nullptr && *node_lib_root_env != '\0') {
+    AppendPathCandidate(&candidates, fs::path(node_lib_root_env) / "internal" / "deps");
+  }
+
   const fs::path exec_path = fs::path(EdgeGetProcessExecPath()).lexically_normal();
   if (!exec_path.empty()) {
     const fs::path install_root = exec_path.parent_path().parent_path();
@@ -68,13 +83,13 @@ std::vector<fs::path> NodeDepsRootCandidates() {
     AppendPathCandidate(&candidates, install_root / "node" / "deps");
   }
 
-  AppendPathCandidate(&candidates, source_root / "node" / "deps");
+  AppendPathCandidate(&candidates, source_root / "deps");
 
   std::error_code ec;
   const fs::path cwd = fs::current_path(ec);
   if (!ec && !cwd.empty()) {
-    AppendPathCandidate(&candidates, cwd / "node" / "deps");
-    AppendPathCandidate(&candidates, cwd.parent_path() / "node" / "deps");
+    AppendPathCandidate(&candidates, cwd / "deps");
+    AppendPathCandidate(&candidates, cwd.parent_path() / "deps");
   }
   return candidates;
 }

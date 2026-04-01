@@ -36,7 +36,7 @@ def make_raw_string_literal(text: str) -> str:
 def collect_builtin_entries(project_root: Path) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
 
-    lib_root = project_root / "node" / "lib"
+    lib_root = project_root / "lib"
     for path in sorted(lib_root.rglob("*.js")):
         relative_path = path.relative_to(lib_root)
         entries.append(
@@ -48,7 +48,7 @@ def collect_builtin_entries(project_root: Path) -> list[dict[str, object]]:
             }
         )
 
-    deps_root = project_root / "node" / "deps"
+    deps_root = project_root / "deps"
     for dep_root in NODE_DEPS_BUILTIN_ROOTS:
         root = deps_root / dep_root
         if not root.exists():

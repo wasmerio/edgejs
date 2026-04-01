@@ -6,7 +6,6 @@ BUILD_DIR ?= build-edge
 DIST_DIR ?= dist
 DIST_BIN_DIR ?= $(DIST_DIR)/bin
 DIST_BIN_COMPAT_DIR ?= $(DIST_DIR)/bin-compat
-DIST_LIB_DIR ?= $(DIST_DIR)/lib
 ZIP_NAME ?= edge.zip
 CMAKE_BUILD_TYPE ?= Release
 JOBS ?= 8
@@ -109,17 +108,17 @@ dist-only:
 	rm -rf $(DIST_DIR)
 	rm -f $(ZIP_NAME)
 	mkdir -p $(DIST_BIN_DIR)
-	cp $(EDGE_BINARY) $(DIST_BIN_DIR)/edge
-	cp $(EDGEENV_BINARY) $(DIST_BIN_DIR)/edgeenv
+	if [ "$(BUILD_DIR)" = "build-wasix" ]; then \
+		cp "$(BUILD_DIR)/edgejs.wasm" "$(DIST_BIN_DIR)/edgejs"; \
+		cp wasmer.toml "$(DIST_DIR)/wasmer.toml"; \
+		perl -0pi -e 's#^source = ".*"#source = "./bin/edgejs"#m' "$(DIST_DIR)/wasmer.toml"; \
+	else \
+		cp "$(EDGE_BINARY)" "$(DIST_BIN_DIR)/edge"; \
+		cp "$(EDGEENV_BINARY)" "$(DIST_BIN_DIR)/edgeenv"; \
+	fi
 	cp -R bin-compat $(DIST_BIN_COMPAT_DIR)
 	cp README.md $(DIST_DIR)/README.md
-	cp -R lib $(DIST_LIB_DIR)
-	mkdir -p $(DIST_LIB_DIR)/internal/deps
-	for dep in undici acorn minimatch cjs-module-lexer amaro; do \
-		mkdir -p "$(DIST_LIB_DIR)/internal/deps/$$(dirname "$$dep")"; \
-		cp -R "deps/$$dep" "$(DIST_LIB_DIR)/internal/deps/$$dep"; \
-	done
-	if [ "$(UNAME_S)" = "Darwin" ]; then \
+	if [ "$(UNAME_S)" = "Darwin" ] && [ "$(BUILD_DIR)" != "build-wasix" ]; then \
 		for bin in $(DIST_BIN_DIR)/edge $(DIST_BIN_DIR)/edgeenv; do \
 			deps=$$(otool -L "$$bin" | tail -n +2 | awk '{print $$1}' | grep '^/' | grep -Ev '^(/System/Library/|/usr/lib/)' || true); \
 			if [ -n "$$deps" ]; then \
@@ -130,7 +129,11 @@ dist-only:
 			fi; \
 		done; \
 	fi
-	cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md lib
+	if [ "$(BUILD_DIR)" = "build-wasix" ]; then \
+		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml; \
+	else \
+		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
+	fi
 
 framework-test: $(EDGE_BINARY)
 	@"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)

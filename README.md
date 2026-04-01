@@ -57,6 +57,13 @@ $ edge pnpm run dev
 
 ## Development
 
+First, clone the repo and initialize only the `napi` submodule:
+```bash
+git clone git@github.com:wasmerio/edgejs.git
+cd edgejs
+git submodule update --init napi
+```
+
 Build the CLI locally:
 
 ```bash

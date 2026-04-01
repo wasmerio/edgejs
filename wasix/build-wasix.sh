@@ -96,8 +96,4 @@ else
   exit 1
 fi
 
-if [[ -f "${BUILD_DIR}/edgeenv" ]]; then
-  optimize_wasm "${BUILD_DIR}/edgeenv" "${BUILD_DIR}/edgeenv.wasm"
-fi
-
 echo "Built WASIX targets at ${BUILD_DIR}/edge.wasm and ${BUILD_DIR}/edgejs.wasm"
