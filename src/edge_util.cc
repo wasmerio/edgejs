@@ -33,6 +33,9 @@ namespace {
 constexpr int32_t kPromisePending = 0;
 constexpr int32_t kPromiseFulfilled = 1;
 constexpr int32_t kPromiseRejected = 2;
+constexpr uint32_t kMaxCallSitesFrames = 200;
+constexpr uint32_t kMaxRawCallSitesFrames = kMaxCallSitesFrames + 1;
+constexpr uint32_t kEdgeInternalCallSiteFrames = 1;
 
 constexpr int32_t kExitInfoKExiting = 0;
 constexpr int32_t kExitInfoKExitCode = 1;
@@ -231,6 +234,43 @@ bool CreateLocationFromCallSite(napi_env env, napi_value callsite, napi_value* l
   }
 
   *location_out = location;
+  return true;
+}
+
+uint32_t RawCallSiteFramesForEdge(uint32_t frames) {
+  if (frames == 0) return 0;
+  if (frames >= kMaxCallSitesFrames) return kMaxRawCallSitesFrames;
+  return frames + kEdgeInternalCallSiteFrames;
+}
+
+bool CreateSkippedCallSitesArray(napi_env env,
+                                 napi_value raw_callsites,
+                                 uint32_t skip_frames,
+                                 napi_value* out) {
+  if (raw_callsites == nullptr || out == nullptr) return false;
+
+  bool is_array = false;
+  if (napi_is_array(env, raw_callsites, &is_array) != napi_ok || !is_array) return false;
+
+  uint32_t length = 0;
+  if (napi_get_array_length(env, raw_callsites, &length) != napi_ok) return false;
+
+  const uint32_t start = std::min(skip_frames, length);
+  const uint32_t count = length - start;
+  napi_value result = nullptr;
+  if (napi_create_array_with_length(env, count, &result) != napi_ok || result == nullptr) {
+    return false;
+  }
+
+  for (uint32_t i = 0; i < count; ++i) {
+    napi_value callsite = nullptr;
+    if (napi_get_element(env, raw_callsites, start + i, &callsite) != napi_ok ||
+        napi_set_element(env, result, i, callsite) != napi_ok) {
+      return false;
+    }
+  }
+
+  *out = result;
   return true;
 }
 
@@ -496,15 +536,16 @@ napi_value IsInsideNodeModulesCallback(napi_env env, napi_callback_info info) {
   bool result = false;
   uint32_t frames = static_cast<uint32_t>(frame_limit + 32);
   if (frames < 64) frames = 64;
-  if (frames > 200) frames = 200;
+  if (frames > kMaxCallSitesFrames) frames = kMaxCallSitesFrames;
+  const uint32_t raw_frames = RawCallSiteFramesForEdge(frames);
 
   napi_value callsites = nullptr;
-  if (unofficial_napi_get_call_sites(env, frames, 1, &callsites) == napi_ok && callsites != nullptr) {
+  if (unofficial_napi_get_call_sites(env, raw_frames, &callsites) == napi_ok && callsites != nullptr) {
     bool is_array = false;
     if (napi_is_array(env, callsites, &is_array) == napi_ok && is_array) {
       uint32_t length = 0;
       if (napi_get_array_length(env, callsites, &length) == napi_ok) {
-        for (uint32_t i = 0; i < length; ++i) {
+        for (uint32_t i = std::min(kEdgeInternalCallSiteFrames, length); i < length; ++i) {
           napi_value callsite = nullptr;
           if (napi_get_element(env, callsites, i, &callsite) != napi_ok || callsite == nullptr) continue;
 
@@ -887,7 +928,8 @@ napi_value GetProxyDetailsCallback(napi_env env, napi_callback_info info) {
 
 napi_value GetCallerLocationCallback(napi_env env, napi_callback_info /*info*/) {
   napi_value callsites = nullptr;
-  if (unofficial_napi_get_call_sites(env, 64, 1, &callsites) != napi_ok || callsites == nullptr) {
+  if (unofficial_napi_get_call_sites(env, RawCallSiteFramesForEdge(64), &callsites) != napi_ok ||
+      callsites == nullptr) {
     return Undefined(env);
   }
 
@@ -897,7 +939,7 @@ napi_value GetCallerLocationCallback(napi_env env, napi_callback_info /*info*/) 
   uint32_t length = 0;
   if (napi_get_array_length(env, callsites, &length) != napi_ok || length == 0) return Undefined(env);
 
-  for (uint32_t i = 0; i < length; ++i) {
+  for (uint32_t i = std::min(kEdgeInternalCallSiteFrames, length); i < length; ++i) {
     napi_value callsite = nullptr;
     if (napi_get_element(env, callsites, i, &callsite) != napi_ok || callsite == nullptr) continue;
     napi_value location = nullptr;
@@ -1114,9 +1156,16 @@ napi_value GetCallSitesCallback(napi_env env, napi_callback_info info) {
 
   uint32_t frames = 0;
   if (napi_get_value_uint32(env, argv[0], &frames) != napi_ok) return Undefined(env);
+  if (frames == 0 || frames > kMaxCallSitesFrames) return Undefined(env);
+
+  const uint32_t raw_frames = RawCallSiteFramesForEdge(frames);
+  napi_value raw_out = nullptr;
+  if (unofficial_napi_get_call_sites(env, raw_frames, &raw_out) != napi_ok || raw_out == nullptr) {
+    return Undefined(env);
+  }
 
   napi_value out = nullptr;
-  if (unofficial_napi_get_call_sites(env, frames, 1, &out) != napi_ok || out == nullptr) {
+  if (!CreateSkippedCallSitesArray(env, raw_out, kEdgeInternalCallSiteFrames, &out) || out == nullptr) {
     return Undefined(env);
   }
   return out;

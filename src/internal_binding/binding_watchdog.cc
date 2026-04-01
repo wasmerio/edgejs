@@ -113,7 +113,7 @@ void PrintTraceSigintStack(napi_env env) {
   std::fputs("KEYBOARD_INTERRUPT: Script execution was interrupted by `SIGINT`\n", stderr);
 
   napi_value callsites = nullptr;
-  if (unofficial_napi_get_call_sites(env, 10, 0, &callsites) != napi_ok || callsites == nullptr) {
+  if (unofficial_napi_get_call_sites(env, 10, &callsites) != napi_ok || callsites == nullptr) {
     std::fflush(stderr);
     return;
   }
