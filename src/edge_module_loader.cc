@@ -123,6 +123,32 @@ struct RequireContext {
 };
 using TraceEventsBindingState = ModuleLoaderState::TraceEventsBindingState;
 
+constexpr char kEdgeBuiltinIdsMarker[] = "__edge_builtin_ids_marker__";
+constexpr char kEdgeLazyBuiltinEntriesMarker[] = "__edge_lazy_builtin_entries__";
+constexpr char kEdgeLazyBuiltinEntriesIdsKey[] = "__edge_lazy_builtin_entries_ids__";
+constexpr char kEdgeLazyBuiltinEntriesFactoryKey[] = "__edge_lazy_builtin_entries_factory__";
+constexpr char kEdgeLazyBuiltinEntriesThisArgKey[] = "__edge_lazy_builtin_entries_this_arg__";
+
+struct LazyBuiltinMapData {
+  explicit LazyBuiltinMapData(napi_env env_in) : env(env_in) {}
+
+  napi_env env = nullptr;
+  napi_ref ids_array_ref = nullptr;
+  napi_ref factory_ref = nullptr;
+  napi_ref callback_this_arg_ref = nullptr;
+  std::vector<std::string> ids;
+  std::unordered_map<std::string, size_t> index_by_id;
+  std::vector<napi_ref> value_refs;
+};
+
+struct LazyBuiltinRealmPatchState {
+  napi_ref original_array_prototype_map_ref = nullptr;
+  napi_ref original_safe_map_ref = nullptr;
+  napi_ref patched_primordials_ref = nullptr;
+};
+
+thread_local LazyBuiltinRealmPatchState* g_lazy_builtin_realm_patch_state = nullptr;
+
 void DeleteRefIfPresent(napi_env env, napi_ref* ref) {
   if (env == nullptr || ref == nullptr || *ref == nullptr) return;
   napi_delete_reference(env, *ref);
@@ -308,7 +334,7 @@ void EnsureVariablesField(std::string* text, const char* key, const char* value)
   text->insert(object_open + 1, needle + ":" + value + ",");
 }
 
-std::string LoadBuiltinsConfigJson(bool has_intl) {
+const std::string& LoadBuiltinsConfigJson(bool has_intl) {
   static std::array<std::string, 2> cached;
   std::string& cached_value = cached[has_intl ? 1 : 0];
   if (!cached_value.empty()) return cached_value;
@@ -1089,6 +1115,35 @@ static napi_value BuiltinsNativesSourceGetter(napi_env env, napi_callback_info i
   return source_value;
 }
 
+static napi_value CreateBuiltinsNativesObject(napi_env env, const std::vector<std::string>& builtin_ids);
+
+static napi_value BuiltinsNativesGetterCallback(napi_env env, napi_callback_info info) {
+  napi_value this_arg = nullptr;
+  size_t argc = 0;
+  if (napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr) != napi_ok) {
+    return nullptr;
+  }
+
+  const std::vector<std::string>& builtin_ids = CollectRuntimeBuiltinIds();
+  napi_value natives = CreateBuiltinsNativesObject(env, builtin_ids);
+  if (natives == nullptr) {
+    return nullptr;
+  }
+
+  if (this_arg != nullptr) {
+    napi_property_descriptor descriptor{};
+    descriptor.utf8name = "natives";
+    descriptor.value = natives;
+    descriptor.attributes =
+        static_cast<napi_property_attributes>(napi_enumerable | napi_configurable);
+    if (napi_define_properties(env, this_arg, 1, &descriptor) != napi_ok) {
+      return nullptr;
+    }
+  }
+
+  return natives;
+}
+
 static napi_value CreateBuiltinsNativesObject(napi_env env, const std::vector<std::string>& builtin_ids) {
   napi_value natives = nullptr;
   if (napi_create_object(env, &natives) != napi_ok || natives == nullptr) return nullptr;
@@ -1320,6 +1375,469 @@ static napi_value GetStateInternalBinding(napi_env env, ModuleLoaderState* state
   return GetRefValue(env, state->internal_binding_ref);
 }
 
+static bool DefineValueProperty(napi_env env,
+                                napi_value target,
+                                const char* key,
+                                napi_value value,
+                                napi_property_attributes attributes) {
+  if (target == nullptr || key == nullptr || value == nullptr) return false;
+  napi_property_descriptor descriptor{};
+  descriptor.utf8name = key;
+  descriptor.value = value;
+  descriptor.attributes = attributes;
+  return napi_define_properties(env, target, 1, &descriptor) == napi_ok;
+}
+
+static bool DefineHiddenValueProperty(napi_env env,
+                                      napi_value target,
+                                      const char* key,
+                                      napi_value value) {
+  return DefineValueProperty(
+      env,
+      target,
+      key,
+      value,
+      static_cast<napi_property_attributes>(napi_writable | napi_configurable));
+}
+
+static bool HasNamedProperty(napi_env env, napi_value object, const char* key) {
+  if (object == nullptr || key == nullptr) return false;
+  bool has_property = false;
+  return napi_has_named_property(env, object, key, &has_property) == napi_ok && has_property;
+}
+
+static bool TryGetNamedProperty(napi_env env, napi_value object, const char* key, napi_value* out) {
+  if (out == nullptr) return false;
+  *out = nullptr;
+  if (!HasNamedProperty(env, object, key)) return false;
+  return napi_get_named_property(env, object, key, out) == napi_ok && *out != nullptr;
+}
+
+static napi_value CreateObjectWithPrototype(napi_env env, napi_value prototype) {
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
+  napi_value object_ctor = nullptr;
+  if (napi_get_named_property(env, global, "Object", &object_ctor) != napi_ok ||
+      object_ctor == nullptr) {
+    return nullptr;
+  }
+  napi_value create_fn = nullptr;
+  if (napi_get_named_property(env, object_ctor, "create", &create_fn) != napi_ok ||
+      create_fn == nullptr) {
+    return nullptr;
+  }
+  napi_valuetype t = napi_undefined;
+  if (napi_typeof(env, create_fn, &t) != napi_ok || t != napi_function) return nullptr;
+  napi_value argv[1] = {prototype};
+  napi_value out = nullptr;
+  if (napi_call_function(env, object_ctor, create_fn, 1, argv, &out) != napi_ok || out == nullptr) {
+    return nullptr;
+  }
+  return out;
+}
+
+static std::vector<std::string> ValueArrayToUtf8Vector(napi_env env, napi_value array_value) {
+  std::vector<std::string> out;
+  if (array_value == nullptr) return out;
+  bool is_array = false;
+  if (napi_is_array(env, array_value, &is_array) != napi_ok || !is_array) return out;
+  uint32_t length = 0;
+  if (napi_get_array_length(env, array_value, &length) != napi_ok) return out;
+  out.reserve(length);
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_value item = nullptr;
+    if (napi_get_element(env, array_value, i, &item) != napi_ok || item == nullptr) continue;
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, item, &type) != napi_ok || type != napi_string) continue;
+    out.push_back(ValueToUtf8(env, item));
+  }
+  return out;
+}
+
+static void ResetLazyBuiltinRealmPatchState(napi_env env, LazyBuiltinRealmPatchState* state) {
+  if (state == nullptr) return;
+  napi_value patched_primordials = GetRefValue(env, state->patched_primordials_ref);
+  napi_value original_array_prototype_map = GetRefValue(env, state->original_array_prototype_map_ref);
+  napi_value original_safe_map = GetRefValue(env, state->original_safe_map_ref);
+  if (patched_primordials != nullptr &&
+      IsFunctionValue(env, original_array_prototype_map) &&
+      IsFunctionValue(env, original_safe_map)) {
+    DefineValueProperty(env,
+                        patched_primordials,
+                        "ArrayPrototypeMap",
+                        original_array_prototype_map,
+                        static_cast<napi_property_attributes>(napi_writable | napi_configurable));
+    DefineValueProperty(env,
+                        patched_primordials,
+                        "SafeMap",
+                        original_safe_map,
+                        static_cast<napi_property_attributes>(napi_writable | napi_configurable));
+  }
+  DeleteRefIfPresent(env, &state->patched_primordials_ref);
+  DeleteRefIfPresent(env, &state->original_array_prototype_map_ref);
+  DeleteRefIfPresent(env, &state->original_safe_map_ref);
+}
+
+static void LazyBuiltinMapFinalize(napi_env env, void* data, void* /*hint*/) {
+  auto* map_data = static_cast<LazyBuiltinMapData*>(data);
+  if (map_data == nullptr) return;
+  DeleteRefIfPresent(env, &map_data->ids_array_ref);
+  DeleteRefIfPresent(env, &map_data->factory_ref);
+  DeleteRefIfPresent(env, &map_data->callback_this_arg_ref);
+  for (napi_ref& value_ref : map_data->value_refs) {
+    DeleteRefIfPresent(env, &value_ref);
+  }
+  delete map_data;
+}
+
+static LazyBuiltinMapData* UnwrapLazyBuiltinMap(napi_env env, napi_value this_arg) {
+  void* data = nullptr;
+  if (this_arg == nullptr || napi_unwrap(env, this_arg, &data) != napi_ok || data == nullptr) {
+    return nullptr;
+  }
+  return static_cast<LazyBuiltinMapData*>(data);
+}
+
+static bool EnsureLazyBuiltinMapValue(napi_env env,
+                                      LazyBuiltinMapData* data,
+                                      size_t index,
+                                      napi_value* out) {
+  if (out == nullptr) return false;
+  *out = nullptr;
+  if (data == nullptr || index >= data->ids.size()) {
+    napi_get_undefined(env, out);
+    return true;
+  }
+
+  if (index < data->value_refs.size() && data->value_refs[index] != nullptr) {
+    *out = GetRefValue(env, data->value_refs[index]);
+    if (*out != nullptr) return true;
+    DeleteRefIfPresent(env, &data->value_refs[index]);
+  }
+
+  napi_value factory = GetRefValue(env, data->factory_ref);
+  napi_value ids_array = GetRefValue(env, data->ids_array_ref);
+  if (!IsFunctionValue(env, factory) || ids_array == nullptr) return false;
+
+  napi_value this_arg = GetRefValue(env, data->callback_this_arg_ref);
+  if (this_arg == nullptr) napi_get_undefined(env, &this_arg);
+
+  napi_value id_value = nullptr;
+  napi_value index_value = nullptr;
+  if (napi_create_string_utf8(env, data->ids[index].c_str(), NAPI_AUTO_LENGTH, &id_value) != napi_ok ||
+      id_value == nullptr ||
+      napi_create_uint32(env, static_cast<uint32_t>(index), &index_value) != napi_ok ||
+      index_value == nullptr) {
+    return false;
+  }
+
+  napi_value argv[3] = {id_value, index_value, ids_array};
+  napi_value entry = nullptr;
+  if (napi_call_function(env, this_arg, factory, 3, argv, &entry) != napi_ok || entry == nullptr) {
+    return false;
+  }
+
+  bool is_array = false;
+  if (napi_is_array(env, entry, &is_array) != napi_ok || !is_array) {
+    napi_get_undefined(env, out);
+    return true;
+  }
+
+  napi_value value = nullptr;
+  if (napi_get_element(env, entry, 1, &value) != napi_ok || value == nullptr) {
+    napi_get_undefined(env, out);
+    return true;
+  }
+
+  if (!IsUndefinedValue(env, value)) {
+    if (index >= data->value_refs.size()) {
+      data->value_refs.resize(data->ids.size(), nullptr);
+    }
+    if (data->value_refs[index] == nullptr &&
+        napi_create_reference(env, value, 1, &data->value_refs[index]) != napi_ok) {
+      data->value_refs[index] = nullptr;
+    }
+  }
+
+  *out = value;
+  return true;
+}
+
+static napi_value LazyBuiltinMapHasCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) return nullptr;
+
+  auto* data = UnwrapLazyBuiltinMap(env, this_arg);
+  bool has = false;
+  if (data != nullptr && argc >= 1 && argv[0] != nullptr) {
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, argv[0], &type) == napi_ok && type == napi_string) {
+      has = data->index_by_id.find(ValueToUtf8(env, argv[0])) != data->index_by_id.end();
+    }
+  }
+
+  napi_value out = nullptr;
+  napi_get_boolean(env, has, &out);
+  return out;
+}
+
+static napi_value LazyBuiltinMapGetCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) return nullptr;
+
+  auto* data = UnwrapLazyBuiltinMap(env, this_arg);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  if (data == nullptr || argc < 1 || argv[0] == nullptr) return undefined;
+
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string) return undefined;
+
+  const auto it = data->index_by_id.find(ValueToUtf8(env, argv[0]));
+  if (it == data->index_by_id.end()) return undefined;
+
+  napi_value value = nullptr;
+  if (!EnsureLazyBuiltinMapValue(env, data, it->second, &value)) return nullptr;
+  return value != nullptr ? value : undefined;
+}
+
+static napi_value LazyBuiltinMapValuesCallback(napi_env env, napi_callback_info info) {
+  napi_value this_arg = nullptr;
+  size_t argc = 0;
+  if (napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr) != napi_ok) return nullptr;
+
+  auto* data = UnwrapLazyBuiltinMap(env, this_arg);
+  if (data == nullptr) return nullptr;
+
+  napi_value values_array = nullptr;
+  if (napi_create_array_with_length(env, data->ids.size(), &values_array) != napi_ok ||
+      values_array == nullptr) {
+    return nullptr;
+  }
+
+  for (size_t i = 0; i < data->ids.size(); ++i) {
+    napi_value value = nullptr;
+    if (!EnsureLazyBuiltinMapValue(env, data, i, &value) ||
+        napi_set_element(env, values_array, static_cast<uint32_t>(i), value) != napi_ok) {
+      return nullptr;
+    }
+  }
+
+  napi_value values_fn = nullptr;
+  if (napi_get_named_property(env, values_array, "values", &values_fn) != napi_ok ||
+      !IsFunctionValue(env, values_fn)) {
+    return nullptr;
+  }
+
+  napi_value iterator = nullptr;
+  if (napi_call_function(env, values_array, values_fn, 0, nullptr, &iterator) != napi_ok) {
+    return nullptr;
+  }
+  return iterator;
+}
+
+static napi_value CreateLazyBuiltinMap(napi_env env, napi_value token) {
+  napi_value ids_array = nullptr;
+  napi_value factory = nullptr;
+  napi_value callback_this_arg = nullptr;
+  if (!TryGetNamedProperty(env, token, kEdgeLazyBuiltinEntriesIdsKey, &ids_array) ||
+      !TryGetNamedProperty(env, token, kEdgeLazyBuiltinEntriesFactoryKey, &factory) ||
+      !TryGetNamedProperty(env, token, kEdgeLazyBuiltinEntriesThisArgKey, &callback_this_arg) ||
+      !IsFunctionValue(env, factory)) {
+    return nullptr;
+  }
+
+  auto* data = new LazyBuiltinMapData(env);
+  data->ids = ValueArrayToUtf8Vector(env, ids_array);
+  data->value_refs.resize(data->ids.size(), nullptr);
+  data->index_by_id.reserve(data->ids.size());
+  for (size_t i = 0; i < data->ids.size(); ++i) {
+    data->index_by_id.emplace(data->ids[i], i);
+  }
+
+  if (napi_create_reference(env, ids_array, 1, &data->ids_array_ref) != napi_ok ||
+      data->ids_array_ref == nullptr ||
+      napi_create_reference(env, factory, 1, &data->factory_ref) != napi_ok ||
+      data->factory_ref == nullptr) {
+    LazyBuiltinMapFinalize(env, data, nullptr);
+    return nullptr;
+  }
+  if (!IsUndefinedValue(env, callback_this_arg) &&
+      napi_create_reference(env, callback_this_arg, 1, &data->callback_this_arg_ref) != napi_ok) {
+    LazyBuiltinMapFinalize(env, data, nullptr);
+    return nullptr;
+  }
+
+  napi_value map_object = nullptr;
+  if (napi_create_object(env, &map_object) != napi_ok || map_object == nullptr) {
+    LazyBuiltinMapFinalize(env, data, nullptr);
+    return nullptr;
+  }
+
+  napi_property_descriptor descriptors[] = {
+      {"has", nullptr, LazyBuiltinMapHasCallback, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"get", nullptr, LazyBuiltinMapGetCallback, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"values", nullptr, LazyBuiltinMapValuesCallback, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+  };
+  if (napi_define_properties(env, map_object, std::size(descriptors), descriptors) != napi_ok ||
+      napi_wrap(env, map_object, data, LazyBuiltinMapFinalize, nullptr, nullptr) != napi_ok) {
+    LazyBuiltinMapFinalize(env, data, nullptr);
+    return nullptr;
+  }
+
+  return map_object;
+}
+
+static napi_value CreateLazyBuiltinEntriesToken(napi_env env,
+                                                napi_value ids_array,
+                                                napi_value factory,
+                                                napi_value callback_this_arg) {
+  napi_value token = nullptr;
+  if (napi_create_object(env, &token) != napi_ok || token == nullptr) return nullptr;
+
+  napi_value true_value = nullptr;
+  if (napi_get_boolean(env, true, &true_value) != napi_ok || true_value == nullptr) return nullptr;
+  if (!DefineHiddenValueProperty(env, token, kEdgeLazyBuiltinEntriesMarker, true_value) ||
+      !DefineHiddenValueProperty(env, token, kEdgeLazyBuiltinEntriesIdsKey, ids_array) ||
+      !DefineHiddenValueProperty(env, token, kEdgeLazyBuiltinEntriesFactoryKey, factory) ||
+      !DefineHiddenValueProperty(env, token, kEdgeLazyBuiltinEntriesThisArgKey, callback_this_arg)) {
+    return nullptr;
+  }
+  return token;
+}
+
+static napi_value RealmLazyBuiltinArrayPrototypeMapCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
+
+  if (argc >= 2 &&
+      argv[0] != nullptr &&
+      argv[1] != nullptr &&
+      HasNamedProperty(env, argv[0], kEdgeBuiltinIdsMarker) &&
+      IsFunctionValue(env, argv[1])) {
+    napi_value callback_this_arg = nullptr;
+    if (argc >= 3 && argv[2] != nullptr) {
+      callback_this_arg = argv[2];
+    } else {
+      napi_get_undefined(env, &callback_this_arg);
+    }
+    return CreateLazyBuiltinEntriesToken(env, argv[0], argv[1], callback_this_arg);
+  }
+
+  auto* patch_state = g_lazy_builtin_realm_patch_state;
+  if (patch_state == nullptr) return nullptr;
+  napi_value original = GetRefValue(env, patch_state->original_array_prototype_map_ref);
+  if (!IsFunctionValue(env, original)) return nullptr;
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value out = nullptr;
+  if (napi_call_function(env, undefined, original, argc, argv, &out) != napi_ok) return nullptr;
+  return out;
+}
+
+static napi_value RealmLazySafeMapConstructorCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) return nullptr;
+
+  napi_value new_target = nullptr;
+  if (napi_get_new_target(env, info, &new_target) != napi_ok) return nullptr;
+
+  if (argc >= 1 &&
+      argv[0] != nullptr &&
+      HasNamedProperty(env, argv[0], kEdgeLazyBuiltinEntriesMarker)) {
+    return CreateLazyBuiltinMap(env, argv[0]);
+  }
+
+  auto* patch_state = g_lazy_builtin_realm_patch_state;
+  if (patch_state == nullptr) return nullptr;
+  napi_value original = GetRefValue(env, patch_state->original_safe_map_ref);
+  if (!IsFunctionValue(env, original)) return nullptr;
+
+  if (new_target != nullptr) {
+    napi_value out = nullptr;
+    if (napi_new_instance(env, original, argc, argv, &out) != napi_ok) return nullptr;
+    return out;
+  }
+
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value out = nullptr;
+  if (napi_call_function(env, undefined, original, argc, argv, &out) != napi_ok) return nullptr;
+  return out;
+}
+
+static napi_value CreatePatchedRealmPrimordials(napi_env env,
+                                                napi_value primordials,
+                                                LazyBuiltinRealmPatchState* patch_state) {
+  if (primordials == nullptr || patch_state == nullptr) return nullptr;
+
+  napi_value original_array_prototype_map = nullptr;
+  napi_value original_safe_map = nullptr;
+  if (!TryGetNamedProperty(env, primordials, "ArrayPrototypeMap", &original_array_prototype_map) ||
+      !TryGetNamedProperty(env, primordials, "SafeMap", &original_safe_map) ||
+      !IsFunctionValue(env, original_array_prototype_map) ||
+      !IsFunctionValue(env, original_safe_map)) {
+    return nullptr;
+  }
+
+  if (napi_create_reference(
+          env, original_array_prototype_map, 1, &patch_state->original_array_prototype_map_ref) != napi_ok ||
+      patch_state->original_array_prototype_map_ref == nullptr ||
+      napi_create_reference(env, original_safe_map, 1, &patch_state->original_safe_map_ref) != napi_ok ||
+      patch_state->original_safe_map_ref == nullptr) {
+    ResetLazyBuiltinRealmPatchState(env, patch_state);
+    return nullptr;
+  }
+
+  napi_value patched_primordials = CreateObjectWithPrototype(env, primordials);
+  if (patched_primordials == nullptr) {
+    ResetLazyBuiltinRealmPatchState(env, patch_state);
+    return nullptr;
+  }
+
+  napi_value patched_array_prototype_map = nullptr;
+  napi_value patched_safe_map = nullptr;
+  if (napi_create_function(env,
+                           "ArrayPrototypeMap",
+                           NAPI_AUTO_LENGTH,
+                           RealmLazyBuiltinArrayPrototypeMapCallback,
+                           nullptr,
+                           &patched_array_prototype_map) != napi_ok ||
+      patched_array_prototype_map == nullptr ||
+      napi_create_function(
+          env, "SafeMap", NAPI_AUTO_LENGTH, RealmLazySafeMapConstructorCallback, nullptr, &patched_safe_map) !=
+          napi_ok ||
+      patched_safe_map == nullptr ||
+      !DefineValueProperty(env,
+                           patched_primordials,
+                           "ArrayPrototypeMap",
+                           patched_array_prototype_map,
+                           static_cast<napi_property_attributes>(napi_writable | napi_configurable)) ||
+      !DefineValueProperty(env,
+                           patched_primordials,
+                           "SafeMap",
+                           patched_safe_map,
+                           static_cast<napi_property_attributes>(napi_writable | napi_configurable))) {
+    ResetLazyBuiltinRealmPatchState(env, patch_state);
+    return nullptr;
+  }
+
+  if (napi_create_reference(env, patched_primordials, 1, &patch_state->patched_primordials_ref) != napi_ok ||
+      patch_state->patched_primordials_ref == nullptr) {
+    ResetLazyBuiltinRealmPatchState(env, patch_state);
+    return nullptr;
+  }
+
+  return patched_primordials;
+}
+
 static bool CreateStringArray(napi_env env,
                               std::initializer_list<const char*> values,
                               napi_value* out) {
@@ -1514,8 +2032,32 @@ static bool ExecuteBuiltinFromNative(napi_env env, ModuleLoaderState* state, con
     return ThrowNativeBuiltinExecutionError(env, id, "compiled function is unavailable");
   }
 
+  LazyBuiltinRealmPatchState lazy_builtin_patch_state;
+  const bool patch_realm_builtins_map = id == "internal/bootstrap/realm";
+  if (patch_realm_builtins_map) {
+    if (argv.size() < 4) {
+      return ThrowNativeBuiltinExecutionError(env, id, "realm primordials argument is unavailable");
+    }
+    napi_value patched_primordials =
+        CreatePatchedRealmPrimordials(env, argv[3], &lazy_builtin_patch_state);
+    if (patched_primordials == nullptr) {
+      return ThrowNativeBuiltinExecutionError(env, id, "failed to prepare lazy builtin realm primordials");
+    }
+    argv[3] = patched_primordials;
+  }
+
+  LazyBuiltinRealmPatchState* previous_patch_state = g_lazy_builtin_realm_patch_state;
+  if (patch_realm_builtins_map) {
+    g_lazy_builtin_realm_patch_state = &lazy_builtin_patch_state;
+  }
   napi_value call_result = nullptr;
-  if (napi_call_function(env, undefined, compiled_fn, argv.size(), argv.data(), &call_result) != napi_ok) {
+  const napi_status call_status =
+      napi_call_function(env, undefined, compiled_fn, argv.size(), argv.data(), &call_result);
+  if (patch_realm_builtins_map) {
+    g_lazy_builtin_realm_patch_state = previous_patch_state;
+    ResetLazyBuiltinRealmPatchState(env, &lazy_builtin_patch_state);
+  }
+  if (call_status != napi_ok) {
     return false;
   }
 
@@ -3430,17 +3972,27 @@ static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderSta
       return nullptr;
     }
   }
+  napi_value true_value = nullptr;
+  if (napi_get_boolean(env, true, &true_value) != napi_ok ||
+      true_value == nullptr ||
+      !DefineHiddenValueProperty(env, builtin_ids_array, kEdgeBuiltinIdsMarker, true_value)) {
+    return nullptr;
+  }
   if (napi_set_named_property(env, binding, "builtinIds", builtin_ids_array) != napi_ok) {
     return nullptr;
   }
 
-  napi_value natives = CreateBuiltinsNativesObject(env, builtin_ids);
-  if (natives == nullptr || napi_set_named_property(env, binding, "natives", natives) != napi_ok) {
+  napi_property_descriptor natives_descriptor{};
+  natives_descriptor.utf8name = "natives";
+  natives_descriptor.getter = BuiltinsNativesGetterCallback;
+  natives_descriptor.attributes =
+      static_cast<napi_property_attributes>(napi_enumerable | napi_configurable);
+  if (napi_define_properties(env, binding, 1, &natives_descriptor) != napi_ok) {
     return nullptr;
   }
 
   napi_value config_json = nullptr;
-  std::string builtins_config_json = LoadBuiltinsConfigJson(RuntimeHasIntl(env));
+  const std::string& builtins_config_json = LoadBuiltinsConfigJson(RuntimeHasIntl(env));
   if (napi_create_string_utf8(env, builtins_config_json.c_str(), NAPI_AUTO_LENGTH, &config_json) != napi_ok ||
       config_json == nullptr ||
       napi_set_named_property(env, binding, "config", config_json) != napi_ok) {

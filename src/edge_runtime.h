@@ -6,6 +6,24 @@
 
 #include "node_api.h"
 
+#if !defined(EDGE_ENABLE_STARTUP_PROFILE)
+#define EDGE_ENABLE_STARTUP_PROFILE 0
+#endif
+
+enum class EdgeBootstrapProfile {
+  kMainModule,
+  kRepl,
+  kTest,
+  kWatch,
+  kWorker,
+};
+
+struct EdgeExecutionCapabilities {
+  EdgeBootstrapProfile bootstrap_profile = EdgeBootstrapProfile::kMainModule;
+  bool requires_eager_openssl_init = false;
+  bool requires_ipc_or_cluster_bootstrapping = false;
+};
+
 napi_status EdgeInstallConsole(napi_env env);
 napi_status EdgeInstallProcessObject(napi_env env,
                                       const std::string& current_script_path,
@@ -32,6 +50,23 @@ bool EdgeInitializeOpenSslForCli(std::string* error_out);
 void EdgeSetCurrentScriptPath(const std::string& script_path);
 void EdgeSetScriptArgv(const std::vector<std::string>& script_argv);
 void EdgeSetExecArgv(const std::vector<std::string>& exec_argv);
+void EdgeSetExecutionCapabilities(const EdgeExecutionCapabilities& capabilities);
+const EdgeExecutionCapabilities& EdgeGetExecutionCapabilities();
+#if EDGE_ENABLE_STARTUP_PROFILE
+bool EdgeStartupProfileCompiledIn();
+void EdgeStartupProfileReset();
+bool EdgeStartupProfileEnabled();
+void EdgeStartupProfileAddDuration(const char* key, double duration_ms);
+void EdgeStartupProfileCaptureRuntimeState(napi_env env);
+void EdgeStartupProfileEmit();
+#else
+inline bool EdgeStartupProfileCompiledIn() { return false; }
+inline void EdgeStartupProfileReset() {}
+inline bool EdgeStartupProfileEnabled() { return false; }
+inline void EdgeStartupProfileAddDuration(const char* /*key*/, double /*duration_ms*/) {}
+inline void EdgeStartupProfileCaptureRuntimeState(napi_env /*env*/) {}
+inline void EdgeStartupProfileEmit() {}
+#endif
 bool EdgeExecArgvHasFlag(const char* flag);
 bool EdgeReadExecArgvUint64Option(const char* prefix, uint64_t* out, bool* found);
 bool EdgeFinalizeFatalExceptionNow(napi_env env,

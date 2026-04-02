@@ -61,6 +61,10 @@ option(EDGE_SHARED_OPENSSL
   "Link against a shared/system OpenSSL instead of the vendored OpenSSL"
   OFF
 )
+option(EDGE_ENABLE_STARTUP_PROFILE
+  "Embed the internal startup profiler (EDGE_STARTUP_PROFILE) into the binary"
+  OFF
+)
 set(EDGE_SHARED_OPENSSL_INCLUDES
   ""
   CACHE PATH "Directory containing OpenSSL headers when EDGE_SHARED_OPENSSL is ON"
@@ -950,6 +954,7 @@ target_compile_definitions(edge_runtime
     EDGE_HAS_ICU=1
     EDGE_HAS_SMALL_ICU=1
     EDGE_NODE_SHARED_OPENSSL=${EDGE_NODE_SHARED_OPENSSL}
+    EDGE_ENABLE_STARTUP_PROFILE=$<BOOL:${EDGE_ENABLE_STARTUP_PROFILE}>
     EDGE_EMBEDDED_V8_VERSION="${EDGE_EMBEDDED_V8_VERSION}"
     EDGE_VERSION_COMMIT="${EDGE_VERSION_COMMIT}"
     EDGE_VERSION_SUFFIX="${EDGE_VERSION_SUFFIX}"
@@ -981,14 +986,15 @@ target_link_libraries(edge_cli
 )
 target_compile_definitions(edge_cli
   PRIVATE
+    EDGE_ENABLE_STARTUP_PROFILE=$<BOOL:${EDGE_ENABLE_STARTUP_PROFILE}>
     EDGE_VERSION_COMMIT="${EDGE_VERSION_COMMIT}"
     EDGE_VERSION_SUFFIX="${EDGE_VERSION_SUFFIX}"
 )
 if(NOT EDGE_DEFAULT_WASMER_PACKAGE STREQUAL "")
-  target_compile_definitions(edge_cli
-    PRIVATE
-      EDGE_DEFAULT_WASMER_PACKAGE="${EDGE_DEFAULT_WASMER_PACKAGE}"
-  )
+target_compile_definitions(edge_cli
+  PRIVATE
+    EDGE_DEFAULT_WASMER_PACKAGE="${EDGE_DEFAULT_WASMER_PACKAGE}"
+)
 endif()
 
 option(EDGE_BUILD_CLI "Build edge CLI binary" ON)

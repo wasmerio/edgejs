@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "test_env.h"
 #include "node_version.h"
 #include "edge_cli.h"
+#include "edge_runtime.h"
 #include "edge_version.h"
 
 class Test1CliPhase01 : public FixtureTestBase {};
@@ -38,6 +40,10 @@ void RemoveTempScript(const std::string& path) {
 std::string GetEnvOrEmpty(const char* name) {
   const char* value = std::getenv(name);
   return value != nullptr ? std::string(value) : std::string();
+}
+
+bool StartupProfilerCompiledInForTest() {
+  return EdgeStartupProfileCompiledIn();
 }
 
 std::filesystem::path ResolveBuiltBinary(const char* name) {
@@ -158,6 +164,80 @@ CommandResult RunBuiltBinaryAndCapture(const std::filesystem::path& binary,
 
   fs::remove_all(temp_root, ec);
   return result;
+}
+
+CommandResult RunBuiltBinaryAndCaptureWithEnv(
+    const std::filesystem::path& binary,
+    const std::vector<std::string>& args,
+    const std::vector<std::pair<std::string, std::string>>& env,
+    const std::string& stem) {
+  namespace fs = std::filesystem;
+  std::string unique_key = binary.string();
+  for (const auto& arg : args) {
+    unique_key.append("\n");
+    unique_key.append(arg);
+  }
+  for (const auto& [name, value] : env) {
+    unique_key.append("\n");
+    unique_key.append(name);
+    unique_key.push_back('=');
+    unique_key.append(value);
+  }
+
+  const fs::path temp_root =
+      fs::temp_directory_path() /
+      (stem + "_" + std::to_string(static_cast<unsigned long long>(std::hash<std::string>{}(unique_key))));
+  const fs::path stdout_path = temp_root / "stdout.txt";
+  const fs::path stderr_path = temp_root / "stderr.txt";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(temp_root, ec);
+
+  std::string cmd;
+  for (const auto& [name, value] : env) {
+    cmd += name;
+    cmd.push_back('=');
+    cmd += ShellSingleQuoted(value);
+    cmd.push_back(' ');
+  }
+  cmd += ShellSingleQuoted(binary.string());
+  for (const auto& arg : args) {
+    cmd.push_back(' ');
+    cmd += ShellSingleQuoted(arg);
+  }
+  cmd += " >" + ShellSingleQuoted(stdout_path.string()) + " 2>" + ShellSingleQuoted(stderr_path.string());
+
+  CommandResult result;
+  result.status = std::system(cmd.c_str());
+
+  std::ifstream stdout_in(stdout_path);
+  result.stdout_output.assign(std::istreambuf_iterator<char>(stdout_in), std::istreambuf_iterator<char>());
+  std::ifstream stderr_in(stderr_path);
+  result.stderr_output.assign(std::istreambuf_iterator<char>(stderr_in), std::istreambuf_iterator<char>());
+
+  fs::remove_all(temp_root, ec);
+  return result;
+}
+
+std::optional<int> ExtractJsonIntField(const std::string& input, const std::string& key) {
+  const std::string needle = "\"" + key + "\":";
+  const size_t start = input.find(needle);
+  if (start == std::string::npos) return std::nullopt;
+
+  size_t cursor = start + needle.size();
+  while (cursor < input.size() && (input[cursor] == ' ' || input[cursor] == '\t')) {
+    ++cursor;
+  }
+  size_t end = cursor;
+  while (end < input.size() && input[end] >= '0' && input[end] <= '9') {
+    ++end;
+  }
+  if (end == cursor) return std::nullopt;
+  return std::stoi(input.substr(cursor, end - cursor));
+}
+
+bool JsonHasField(const std::string& input, const std::string& key) {
+  return input.find("\"" + key + "\":") != std::string::npos;
 }
 
 }  // namespace
@@ -729,6 +809,237 @@ TEST_F(Test1CliPhase01, EvalModeExposesNodeStyleEvalGlobals) {
               result.stderr_output.find("internal/test/binding") != std::string::npos)
       << "stderr=" << result.stderr_output;
   EXPECT_NE(result.stdout_output.find("eval-globals:ok"), std::string::npos) << result.stdout_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, PrintLiteralUsesMainModuleBootstrapProfile) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "startup profiler subprocess check is POSIX-only";
+#else
+  if (!StartupProfilerCompiledInForTest()) {
+    GTEST_SKIP() << "startup profiler is not compiled into this build";
+  }
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCaptureWithEnv(
+      edge_path,
+      {"-p", "1"},
+      {{"EDGE_STARTUP_PROFILE", "1"}},
+      "edge_phase01_cli_main_module_profile");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_EQ(result.stdout_output, "1\n") << "stdout=" << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find("\"bootstrap_profile\":\"main_module\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find("\"bootstrap_profile\":\"eval_fast\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "process_start_to_profile_reset_ms"))
+      << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "embedder_hooks_install_ms"))
+      << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "env_create_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "env_attach_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "openssl_init_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "process_object_install_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "module_loader_install_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "per_context_core_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "realm_bootstrap_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "per_context_bootstrap_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "bootstrap_node_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "web_bootstrap_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "switch_bootstrap_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "dynamic_import_bridge_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "bootstrap_finalize_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "runtime_main_dispatch_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "cleanup_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "env_release_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "profile_window_ms")) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(JsonHasField(result.stderr_output, "total_profiled_wall_ms")) << "stderr=" << result.stderr_output;
+
+  const auto module_load_list = ExtractJsonIntField(result.stderr_output, "module_load_list");
+  ASSERT_TRUE(module_load_list.has_value()) << "stderr=" << result.stderr_output;
+  EXPECT_GT(*module_load_list, 0) << "stderr=" << result.stderr_output;
+
+  const auto native_modules = ExtractJsonIntField(result.stderr_output, "native_modules");
+  ASSERT_TRUE(native_modules.has_value()) << "stderr=" << result.stderr_output;
+  EXPECT_GT(*native_modules, 0) << "stderr=" << result.stderr_output;
+
+  const auto internal_bindings = ExtractJsonIntField(result.stderr_output, "internal_bindings");
+  ASSERT_TRUE(internal_bindings.has_value()) << "stderr=" << result.stderr_output;
+  EXPECT_GE(*internal_bindings, 0) << "stderr=" << result.stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, RequireFlagUsesMainModuleBootstrapProfile) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "startup profiler subprocess check is POSIX-only";
+#else
+  if (!StartupProfilerCompiledInForTest()) {
+    GTEST_SKIP() << "startup profiler is not compiled into this build";
+  }
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCaptureWithEnv(
+      edge_path,
+      {"-r", "node:fs", "-p", "1"},
+      {{"EDGE_STARTUP_PROFILE", "1"}},
+      "edge_phase01_cli_require_main_profile");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_EQ(result.stdout_output, "1\n") << "stdout=" << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find("\"bootstrap_profile\":\"main_module\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+  EXPECT_EQ(result.stderr_output.find("\"bootstrap_profile\":\"eval_fast\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, EvalSupportsLazyNodeGlobalsOnSharedBootstrap) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "startup profiler subprocess check is POSIX-only";
+#else
+  if (!StartupProfilerCompiledInForTest()) {
+    GTEST_SKIP() << "startup profiler is not compiled into this build";
+  }
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCaptureWithEnv(
+      edge_path,
+      {"-e",
+       "const assert = require('assert');"
+       "assert.strictEqual(typeof require('fs').readFileSync, 'function');"
+       "assert.strictEqual(typeof globalThis['Buffer'], 'function');"
+       "assert.strictEqual(typeof globalThis['set' + 'Immediate'], 'function');"
+       "assert.strictEqual(typeof process['stdout'], 'object');"
+       "assert.strictEqual(typeof process['next' + 'Tick'], 'function');"
+       "assert.strictEqual(typeof process['emit' + 'Warning'], 'function');"
+       "assert.strictEqual(typeof process['report'], 'object');"
+       "assert.strictEqual(typeof process['sourceMapsEnabled'], 'boolean');"
+       "assert.strictEqual(typeof process['setSourceMapsEnabled'], 'function');"
+       "assert.strictEqual(typeof process['getBuiltinModule'], 'function');"
+        "console.log('eval-main-globals:ok');"},
+      {{"EDGE_STARTUP_PROFILE", "1"}},
+      "edge_phase01_cli_eval_main_globals");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_NE(result.stdout_output.find("eval-main-globals:ok"), std::string::npos) << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find("\"bootstrap_profile\":\"main_module\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, EvalSupportsWarningsOnSharedBootstrap) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "startup profiler subprocess check is POSIX-only";
+#else
+  if (!StartupProfilerCompiledInForTest()) {
+    GTEST_SKIP() << "startup profiler is not compiled into this build";
+  }
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCaptureWithEnv(
+      edge_path,
+      {"-e", "process['on']('warning', () => {}); process['emitWarning']('x');"},
+      {{"EDGE_STARTUP_PROFILE", "1"}},
+      "edge_phase01_cli_eval_main_warning");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find("Warning: x"), std::string::npos) << "stderr=" << result.stderr_output;
+  EXPECT_NE(result.stderr_output.find("\"bootstrap_profile\":\"main_module\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, EvalSupportsModuleSyntaxOnSharedBootstrap) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "startup profiler subprocess check is POSIX-only";
+#else
+  if (!StartupProfilerCompiledInForTest()) {
+    GTEST_SKIP() << "startup profiler is not compiled into this build";
+  }
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCaptureWithEnv(
+      edge_path,
+      {"-e", "export default 1"},
+      {{"EDGE_STARTUP_PROFILE", "1"}},
+      "edge_phase01_cli_eval_main_module_syntax");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(result.stdout_output.empty()) << "stdout=" << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find("\"bootstrap_profile\":\"main_module\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, EvalSupportsDynamicImportOnSharedBootstrap) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "startup profiler subprocess check is POSIX-only";
+#else
+  if (!StartupProfilerCompiledInForTest()) {
+    GTEST_SKIP() << "startup profiler is not compiled into this build";
+  }
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCaptureWithEnv(
+      edge_path,
+      {"-e",
+       "import('node:fs').then((fs) => {"
+       "  if (typeof fs.readFileSync !== 'function') throw new Error('missing readFileSync');"
+       "  console.log('eval-dynamic-import:ok');"
+       "}).catch((err) => {"
+       "  console.error(err && err.stack ? err.stack : err);"
+       "  process.exit(1);"
+       "});"},
+      {{"EDGE_STARTUP_PROFILE", "1"}},
+      "edge_phase01_cli_eval_main_dynamic_import");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_NE(result.stdout_output.find("eval-dynamic-import:ok"), std::string::npos) << result.stdout_output;
+  EXPECT_NE(result.stderr_output.find("\"bootstrap_profile\":\"main_module\""), std::string::npos)
+      << "stderr=" << result.stderr_output;
+#endif
+}
+
+TEST_F(Test1CliPhase01, ModuleSyncBuiltinExportsWorksOnSharedBootstrap) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "CLI subprocess check is POSIX-only";
+#else
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const CommandResult result = RunBuiltBinaryAndCapture(
+      edge_path,
+      {"-e",
+       "require('node:module').syncBuiltinESMExports();"
+       "console.log('sync-builtin-exports:ok');"},
+      "edge_phase01_cli_sync_builtin_exports");
+
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(result.stderr_output.empty()) << "stderr=" << result.stderr_output;
+  EXPECT_NE(result.stdout_output.find("sync-builtin-exports:ok"), std::string::npos)
+      << result.stdout_output;
 #endif
 }
 

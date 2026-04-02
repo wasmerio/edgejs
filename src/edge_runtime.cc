@@ -76,13 +76,59 @@ thread_local std::vector<std::string> g_edge_effective_exec_argv;
 std::vector<std::string> g_edge_cli_exec_argv;
 thread_local std::string g_edge_process_title;
 thread_local std::vector<std::string> g_edge_script_argv;
+thread_local EdgeExecutionCapabilities g_edge_execution_capabilities;
+using Clock = std::chrono::steady_clock;
+#if EDGE_ENABLE_STARTUP_PROFILE
 const auto g_process_start_time = std::chrono::steady_clock::now();
+#endif
 std::once_flag g_process_stdio_init_once;
 constexpr int kExitCodeInvalidFatalExceptionMonkeyPatching = 6;
 constexpr int kExitCodeExceptionInFatalExceptionHandler = 7;
 constexpr int kExitCodeUnsettledTopLevelAwait = 13;
 
+#if EDGE_ENABLE_STARTUP_PROFILE
+struct EdgeStartupProfileState {
+  bool enabled = false;
+  Clock::time_point start_time = Clock::now();
+  std::map<std::string, double> phase_durations_ms;
+  std::string bootstrap_profile;
+  uint32_t module_load_list_count = 0;
+  uint32_t native_module_count = 0;
+  uint32_t internal_binding_count = 0;
+  bool has_module_load_stats = false;
+};
+
+thread_local EdgeStartupProfileState g_edge_startup_profile;
+#endif
+
+#if EDGE_ENABLE_STARTUP_PROFILE
+#define EDGE_PROFILE_TIMESTAMP(name) const auto name = Clock::now()
+#define EDGE_PROFILE_RECORD(name, key)                                                     \
+  EdgeStartupProfileAddDuration(                                                           \
+      key, std::chrono::duration<double, std::milli>(Clock::now() - (name)).count())
+#else
+#define EDGE_PROFILE_TIMESTAMP(name)
+#define EDGE_PROFILE_RECORD(name, key) ((void)0)
+#endif
+
+std::string EdgeBootstrapProfileName(EdgeBootstrapProfile profile) {
+  switch (profile) {
+    case EdgeBootstrapProfile::kMainModule:
+      return "main_module";
+    case EdgeBootstrapProfile::kRepl:
+      return "repl";
+    case EdgeBootstrapProfile::kTest:
+      return "test";
+    case EdgeBootstrapProfile::kWatch:
+      return "watch";
+    case EdgeBootstrapProfile::kWorker:
+      return "worker";
+  }
+  return "main_module";
+}
+
 void ResetDomainHelperRef(napi_env env, napi_ref* ref);
+void WriteTextToFd(int fd, const std::string& text);
 
 struct DomainCallbackCache {
   explicit DomainCallbackCache(napi_env env_in) : env(env_in) {}
@@ -115,6 +161,66 @@ void InstallDefaultSignalBehavior() {
     signal(SIGPIPE, SIG_IGN);
 #endif
   });
+}
+#endif
+
+#if EDGE_ENABLE_STARTUP_PROFILE
+void EdgeStartupProfileReadModuleLoadStats(napi_env env) {
+  if (!g_edge_startup_profile.enabled || env == nullptr) return;
+
+  napi_value global = nullptr;
+  napi_value process_obj = nullptr;
+  napi_value module_load_list = nullptr;
+  bool is_array = false;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "process", &process_obj) != napi_ok || process_obj == nullptr ||
+      napi_get_named_property(env, process_obj, "moduleLoadList", &module_load_list) != napi_ok ||
+      module_load_list == nullptr ||
+      napi_is_array(env, module_load_list, &is_array) != napi_ok ||
+      !is_array) {
+    return;
+  }
+
+  uint32_t length = 0;
+  napi_get_array_length(env, module_load_list, &length);
+  g_edge_startup_profile.module_load_list_count = length;
+  g_edge_startup_profile.native_module_count = 0;
+  g_edge_startup_profile.internal_binding_count = 0;
+  for (uint32_t index = 0; index < length; ++index) {
+    napi_value entry = nullptr;
+    if (napi_get_element(env, module_load_list, index, &entry) != napi_ok || entry == nullptr) continue;
+    size_t len = 0;
+    if (napi_get_value_string_utf8(env, entry, nullptr, 0, &len) != napi_ok || len == 0) continue;
+    std::string value(len + 1, '\0');
+    size_t copied = 0;
+    if (napi_get_value_string_utf8(env, entry, value.data(), value.size(), &copied) != napi_ok || copied == 0) {
+      continue;
+    }
+    value.resize(copied);
+    if (value.rfind("NativeModule ", 0) == 0) {
+      g_edge_startup_profile.native_module_count += 1;
+    } else if (value.rfind("Internal Binding ", 0) == 0) {
+      g_edge_startup_profile.internal_binding_count += 1;
+    }
+  }
+  g_edge_startup_profile.has_module_load_stats = true;
+}
+
+void EdgeStartupProfileEmitJson() {
+  if (!g_edge_startup_profile.enabled) return;
+
+  std::ostringstream out;
+  out << "{\"bootstrap_profile\":\"" << g_edge_startup_profile.bootstrap_profile << "\"";
+  for (const auto& [key, value] : g_edge_startup_profile.phase_durations_ms) {
+    out << ",\"" << key << "\":" << value;
+  }
+  if (g_edge_startup_profile.has_module_load_stats) {
+    out << ",\"module_load_list\":" << g_edge_startup_profile.module_load_list_count;
+    out << ",\"native_modules\":" << g_edge_startup_profile.native_module_count;
+    out << ",\"internal_bindings\":" << g_edge_startup_profile.internal_binding_count;
+  }
+  out << "}\n";
+  WriteTextToFd(2, out.str());
 }
 #endif
 
@@ -2390,6 +2496,38 @@ napi_value ConsoleErrorCallback(napi_env env, napi_callback_info info) {
   return undefined;
 }
 
+bool InstallBasicConsoleObject(napi_env env, napi_value global) {
+  if (env == nullptr || global == nullptr) return false;
+
+  napi_value console_obj = nullptr;
+  if (napi_create_object(env, &console_obj) != napi_ok || console_obj == nullptr) {
+    return false;
+  }
+
+  napi_value log_fn = nullptr;
+  if (napi_create_function(env, "log", NAPI_AUTO_LENGTH, ConsoleLogCallback, nullptr, &log_fn) != napi_ok ||
+      log_fn == nullptr) {
+    return false;
+  }
+  if (napi_set_named_property(env, console_obj, "log", log_fn) != napi_ok ||
+      napi_set_named_property(env, console_obj, "info", log_fn) != napi_ok ||
+      napi_set_named_property(env, console_obj, "debug", log_fn) != napi_ok) {
+    return false;
+  }
+
+  napi_value err_fn = nullptr;
+  if (napi_create_function(env, "error", NAPI_AUTO_LENGTH, ConsoleErrorCallback, nullptr, &err_fn) != napi_ok ||
+      err_fn == nullptr) {
+    return false;
+  }
+  if (napi_set_named_property(env, console_obj, "error", err_fn) != napi_ok ||
+      napi_set_named_property(env, console_obj, "warn", err_fn) != napi_ok) {
+    return false;
+  }
+
+  return napi_set_named_property(env, global, "console", console_obj) == napi_ok;
+}
+
 napi_value ReturnUndefinedCallback(napi_env env, napi_callback_info /*info*/) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
@@ -2616,6 +2754,7 @@ int RunScriptWithGlobals(napi_env env,
     return 1;
   }
 
+  EDGE_PROFILE_TIMESTAMP(process_install_start);
   napi_status status = EdgeInstallProcessObject(
       env, g_edge_current_script_path, g_edge_exec_argv, g_edge_script_argv, g_edge_process_title);
   if (status != napi_ok) {
@@ -2624,8 +2763,10 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  EDGE_PROFILE_RECORD(process_install_start, "process_object_install_ms");
   if (should_abort_worker_bootstrap()) return 1;
 
+  EDGE_PROFILE_TIMESTAMP(module_loader_start);
   status = EdgeInstallModuleLoader(env, entry_script_path);
   if (status != napi_ok) {
     if (error_out != nullptr) {
@@ -2633,6 +2774,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  EDGE_PROFILE_RECORD(module_loader_start, "module_loader_install_ms");
   if (should_abort_worker_bootstrap()) return 1;
 
   // Create empty primordials container on the native side first (Node-aligned).
@@ -2754,18 +2896,18 @@ int RunScriptWithGlobals(napi_env env,
       get_linked_binding != nullptr) {
     define_hidden_global("getLinkedBinding", get_linked_binding);
   }
-  if (!execute_bootstrapper("internal/per_context/primordials", nullptr)) {
+  EDGE_PROFILE_TIMESTAMP(per_context_core_start);
+  if (!execute_bootstrapper("internal/per_context/primordials", nullptr) ||
+      !execute_bootstrapper("internal/per_context/domexception", nullptr) ||
+      !execute_bootstrapper("internal/per_context/messageport", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
-  if (!execute_bootstrapper("internal/per_context/domexception", nullptr)) {
-    if (should_abort_worker_bootstrap()) return 1;
-    return 1;
-  }
-  if (!execute_bootstrapper("internal/per_context/messageport", nullptr)) {
-    if (should_abort_worker_bootstrap()) return 1;
-    return 1;
-  }
+#if EDGE_ENABLE_STARTUP_PROFILE
+  const double per_context_core_ms =
+      std::chrono::duration<double, std::milli>(Clock::now() - per_context_core_start).count();
+  EdgeStartupProfileAddDuration("per_context_core_ms", per_context_core_ms);
+#endif
   if (napi_set_named_property(env, global, "primordials", primordials_container) != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to expose primordials during bootstrap";
@@ -2773,10 +2915,17 @@ int RunScriptWithGlobals(napi_env env,
     return 1;
   }
 
+  EDGE_PROFILE_TIMESTAMP(realm_bootstrap_start);
   if (!execute_bootstrapper("internal/bootstrap/realm", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+#if EDGE_ENABLE_STARTUP_PROFILE
+  const double realm_bootstrap_ms =
+      std::chrono::duration<double, std::milli>(Clock::now() - realm_bootstrap_start).count();
+  EdgeStartupProfileAddDuration("realm_bootstrap_ms", realm_bootstrap_ms);
+  EdgeStartupProfileAddDuration("per_context_bootstrap_ms", per_context_core_ms + realm_bootstrap_ms);
+#endif
 
   {
     napi_value primordials_key = nullptr;
@@ -2874,17 +3023,32 @@ int RunScriptWithGlobals(napi_env env,
   const char* process_state_switch_module = mode == EdgeBootstrapMode::kWorkerThread
                                                 ? "internal/bootstrap/switches/does_not_own_process_state"
                                                 : "internal/bootstrap/switches/does_own_process_state";
-  if (!execute_bootstrapper("internal/bootstrap/node", nullptr) ||
-      !execute_bootstrapper("internal/bootstrap/web/exposed-wildcard", nullptr) ||
-      !execute_bootstrapper("internal/bootstrap/web/exposed-window-or-worker", nullptr) ||
-      !execute_bootstrapper(thread_switch_module, nullptr) ||
+  EDGE_PROFILE_TIMESTAMP(bootstrap_node_start);
+  if (!execute_bootstrapper("internal/bootstrap/node", nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
+    return 1;
+  }
+  EDGE_PROFILE_RECORD(bootstrap_node_start, "bootstrap_node_ms");
+
+  EDGE_PROFILE_TIMESTAMP(web_bootstrap_start);
+  if (!execute_bootstrapper("internal/bootstrap/web/exposed-wildcard", nullptr) ||
+      !execute_bootstrapper("internal/bootstrap/web/exposed-window-or-worker", nullptr)) {
+    if (should_abort_worker_bootstrap()) return 1;
+    return 1;
+  }
+  EDGE_PROFILE_RECORD(web_bootstrap_start, "web_bootstrap_ms");
+
+  EDGE_PROFILE_TIMESTAMP(switch_bootstrap_start);
+  if (!execute_bootstrapper(thread_switch_module, nullptr) ||
       !execute_bootstrapper(process_state_switch_module, nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+  EDGE_PROFILE_RECORD(switch_bootstrap_start, "switch_bootstrap_ms");
 
   // Bridge V8 host dynamic import (napi/v8) into Node's module_wrap callback
   // registry so import('node:...') from CJS follows Node's ESM pathway.
+  EDGE_PROFILE_TIMESTAMP(dynamic_import_bridge_start);
   {
     napi_value module_wrap_name = nullptr;
     if (napi_create_string_utf8(env, "module_wrap", NAPI_AUTO_LENGTH, &module_wrap_name) != napi_ok ||
@@ -2939,9 +3103,11 @@ int RunScriptWithGlobals(napi_env env,
       return 1;
     }
   }
+  EDGE_PROFILE_RECORD(dynamic_import_bridge_start, "dynamic_import_bridge_ms");
 
   // Bootstrapped JS may assign these via plain property sets; enforce
   // Node-like hidden bootstrap hooks before user code starts.
+  EDGE_PROFILE_TIMESTAMP(bootstrap_finalize_start);
   if (!define_hidden_global("internalBinding", internal_binding) ||
       !define_hidden_global("getInternalBinding", native_internal_binding) ||
       (get_linked_binding != nullptr && !define_hidden_global("getLinkedBinding", get_linked_binding))) {
@@ -2979,8 +3145,10 @@ int RunScriptWithGlobals(napi_env env,
     delete_global_named("__filename");
     delete_global_named("__dirname");
   }
+  EDGE_PROFILE_RECORD(bootstrap_finalize_start, "bootstrap_finalize_ms");
 
   napi_value result = nullptr;
+  EDGE_PROFILE_TIMESTAMP(main_dispatch_start);
   if (selected_main_builtin_id != nullptr && selected_main_builtin_id[0] != '\0') {
     if (EdgeExecuteBuiltin(env, selected_main_builtin_id, &result)) {
       status = napi_ok;
@@ -2989,7 +3157,7 @@ int RunScriptWithGlobals(napi_env env,
       if (napi_is_exception_pending(env, &has_pending_exception) == napi_ok && has_pending_exception) {
         status = napi_pending_exception;
       } else {
-        if (error_out != nullptr) {
+        if (error_out != nullptr && error_out->empty()) {
           *error_out = std::string("Failed to execute ") + selected_main_builtin_id;
         }
         return 1;
@@ -3006,6 +3174,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     status = napi_run_script(env, script, &result);
   }
+  EDGE_PROFILE_RECORD(main_dispatch_start, "runtime_main_dispatch_ms");
   if (status == napi_ok) {
     napi_value wait_target = result;
     if (DebugExceptionsEnabled()) {
@@ -3420,31 +3589,7 @@ napi_status EdgeInstallConsole(napi_env env) {
     napi_value exc = nullptr;
     napi_get_and_clear_last_exception(env, &exc);
   }
-
-  napi_value console_obj = nullptr;
-  if (napi_create_object(env, &console_obj) != napi_ok || console_obj == nullptr) {
-    return napi_generic_failure;
-  }
-  napi_value log_fn = nullptr;
-  if (napi_create_function(env, "log", NAPI_AUTO_LENGTH, ConsoleLogCallback, nullptr, &log_fn) != napi_ok ||
-      log_fn == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, console_obj, "log", log_fn) != napi_ok ||
-      napi_set_named_property(env, console_obj, "info", log_fn) != napi_ok ||
-      napi_set_named_property(env, console_obj, "debug", log_fn) != napi_ok) {
-    return napi_generic_failure;
-  }
-  napi_value err_fn = nullptr;
-  if (napi_create_function(env, "error", NAPI_AUTO_LENGTH, ConsoleErrorCallback, nullptr, &err_fn) != napi_ok ||
-      err_fn == nullptr) {
-    return napi_generic_failure;
-  }
-  if (napi_set_named_property(env, console_obj, "error", err_fn) != napi_ok ||
-      napi_set_named_property(env, console_obj, "warn", err_fn) != napi_ok) {
-    return napi_generic_failure;
-  }
-  return napi_set_named_property(env, global, "console", console_obj);
+  return InstallBasicConsoleObject(env, global) ? napi_ok : napi_generic_failure;
 }
 
 int EdgeRunScriptSourceWithLoop(napi_env env,
@@ -3558,6 +3703,10 @@ int EdgeRunWorkerThreadMain(napi_env env,
   g_edge_effective_exec_argv = exec_argv;
   g_edge_process_title.clear();
   g_edge_script_argv.clear();
+  EdgeExecutionCapabilities worker_capabilities;
+  worker_capabilities.bootstrap_profile = EdgeBootstrapProfile::kWorker;
+  worker_capabilities.requires_ipc_or_cluster_bootstrapping = false;
+  EdgeSetExecutionCapabilities(worker_capabilities);
 
   return RunScriptWithGlobals(
       env,
@@ -3582,6 +3731,82 @@ bool EdgeInitializeOpenSslForCli(std::string* error_out) {
   }
   return true;
 }
+
+void EdgeSetExecutionCapabilities(const EdgeExecutionCapabilities& capabilities) {
+  g_edge_execution_capabilities = capabilities;
+}
+
+const EdgeExecutionCapabilities& EdgeGetExecutionCapabilities() {
+  return g_edge_execution_capabilities;
+}
+
+#if EDGE_ENABLE_STARTUP_PROFILE
+bool EdgeStartupProfileCompiledIn() {
+  return true;
+}
+
+void EdgeStartupProfileReset() {
+  g_edge_startup_profile = {};
+  const char* value = std::getenv("EDGE_STARTUP_PROFILE");
+  g_edge_startup_profile.enabled =
+      value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  g_edge_startup_profile.start_time = Clock::now();
+  g_edge_startup_profile.bootstrap_profile =
+      EdgeBootstrapProfileName(g_edge_execution_capabilities.bootstrap_profile);
+  if (!g_edge_startup_profile.enabled) return;
+
+  static constexpr const char* kTrackedPhaseKeys[] = {
+      "process_start_to_profile_reset_ms",
+      "embedder_hooks_install_ms",
+      "env_create_ms",
+      "env_attach_ms",
+      "openssl_init_ms",
+      "process_object_install_ms",
+      "module_loader_install_ms",
+      "per_context_core_ms",
+      "realm_bootstrap_ms",
+      "per_context_bootstrap_ms",
+      "bootstrap_node_ms",
+      "web_bootstrap_ms",
+      "switch_bootstrap_ms",
+      "dynamic_import_bridge_ms",
+      "bootstrap_finalize_ms",
+      "runtime_main_dispatch_ms",
+      "cleanup_ms",
+      "env_release_ms",
+      "profile_window_ms",
+      "total_profiled_wall_ms",
+  };
+  for (const char* key : kTrackedPhaseKeys) {
+    g_edge_startup_profile.phase_durations_ms.emplace(key, 0.0);
+  }
+  g_edge_startup_profile.phase_durations_ms["process_start_to_profile_reset_ms"] =
+      std::chrono::duration<double, std::milli>(g_edge_startup_profile.start_time - g_process_start_time).count();
+}
+
+bool EdgeStartupProfileEnabled() {
+  return g_edge_startup_profile.enabled;
+}
+
+void EdgeStartupProfileAddDuration(const char* key, double duration_ms) {
+  if (!g_edge_startup_profile.enabled || key == nullptr || key[0] == '\0') return;
+  g_edge_startup_profile.phase_durations_ms[key] += duration_ms;
+}
+
+void EdgeStartupProfileCaptureRuntimeState(napi_env env) {
+  if (!g_edge_startup_profile.enabled) return;
+  EdgeStartupProfileReadModuleLoadStats(env);
+}
+
+void EdgeStartupProfileEmit() {
+  if (!g_edge_startup_profile.enabled) return;
+  g_edge_startup_profile.phase_durations_ms["profile_window_ms"] =
+      std::chrono::duration<double, std::milli>(Clock::now() - g_edge_startup_profile.start_time).count();
+  g_edge_startup_profile.phase_durations_ms["total_profiled_wall_ms"] =
+      std::chrono::duration<double, std::milli>(Clock::now() - g_process_start_time).count();
+  EdgeStartupProfileEmitJson();
+}
+#endif
 
 void EdgeSetCurrentScriptPath(const std::string& script_path) {
   g_edge_current_script_path = script_path;

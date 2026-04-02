@@ -1,6 +1,7 @@
 #include "edge_cli.h"
 
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -52,6 +53,16 @@ void SignalExit(int signal, siginfo_t* info, void* ucontext);
 #endif
 
 namespace {
+
+#if EDGE_ENABLE_STARTUP_PROFILE
+#define EDGE_CLI_PROFILE_TIMESTAMP(name) const auto name = std::chrono::steady_clock::now()
+#define EDGE_CLI_PROFILE_RECORD(name, key)                                                 \
+  EdgeStartupProfileAddDuration(                                                           \
+      key, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - (name)).count())
+#else
+#define EDGE_CLI_PROFILE_TIMESTAMP(name)
+#define EDGE_CLI_PROFILE_RECORD(name, key) ((void)0)
+#endif
 
 constexpr const char kUsage[] = "Usage: edge <script.js>";
 constexpr unsigned kMaxSignal = 32;
@@ -109,14 +120,25 @@ void ResetSignalHandlersLikeNode() {
 }
 
 int RunWithFreshEnv(const std::function<int(napi_env)>& runner, std::string* error_out) {
-  if (!EdgeInitializeOpenSslForCli(error_out)) {
-    return 1;
+#if EDGE_ENABLE_STARTUP_PROFILE
+  EdgeStartupProfileReset();
+#endif
+
+  if (EdgeGetExecutionCapabilities().requires_eager_openssl_init) {
+    EDGE_CLI_PROFILE_TIMESTAMP(openssl_start);
+    if (!EdgeInitializeOpenSslForCli(error_out)) {
+      return 1;
+    }
+    EDGE_CLI_PROFILE_RECORD(openssl_start, "openssl_init_ms");
   }
 
+  EDGE_CLI_PROFILE_TIMESTAMP(embedder_hooks_start);
   EdgeInstallNapiEmbedderHooks();
+  EDGE_CLI_PROFILE_RECORD(embedder_hooks_start, "embedder_hooks_install_ms");
 
   napi_env env = nullptr;
   void* env_scope = nullptr;
+  EDGE_CLI_PROFILE_TIMESTAMP(env_create_start);
   const napi_status create_status = unofficial_napi_create_env(8, &env, &env_scope);
   if (create_status != napi_ok || env == nullptr || env_scope == nullptr) {
     if (error_out != nullptr) {
@@ -124,27 +146,34 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner, std::string* err
     }
     return 1;
   }
+  EDGE_CLI_PROFILE_RECORD(env_create_start, "env_create_ms");
 
+  EDGE_CLI_PROFILE_TIMESTAMP(env_attach_start);
   if (!EdgeAttachEnvironmentForRuntime(env)) {
+    EDGE_CLI_PROFILE_RECORD(env_attach_start, "env_attach_ms");
     (void)unofficial_napi_release_env(env_scope);
     if (error_out != nullptr) {
       *error_out = "Failed to attach runtime environment";
     }
     return 1;
   }
-
-  if (EdgeRuntimePlatformInstallHooks(env) != napi_ok) {
-    (void)unofficial_napi_release_env(env_scope);
-    if (error_out != nullptr) {
-      *error_out = "Failed to attach runtime platform hooks";
-    }
-    return 1;
-  }
+  EDGE_CLI_PROFILE_RECORD(env_attach_start, "env_attach_ms");
 
   const int exit_code = runner(env);
+#if EDGE_ENABLE_STARTUP_PROFILE
+  EdgeStartupProfileCaptureRuntimeState(env);
+#endif
+  EDGE_CLI_PROFILE_TIMESTAMP(cleanup_start);
   EdgeEnvironmentRunCleanup(env);
   EdgeEnvironmentRunAtExitCallbacks(env);
+  EDGE_CLI_PROFILE_RECORD(cleanup_start, "cleanup_ms");
+
+  EDGE_CLI_PROFILE_TIMESTAMP(env_release_start);
   const napi_status release_status = unofficial_napi_release_env(env_scope);
+  EDGE_CLI_PROFILE_RECORD(env_release_start, "env_release_ms");
+#if EDGE_ENABLE_STARTUP_PROFILE
+  EdgeStartupProfileEmit();
+#endif
   if (release_status != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to release runtime environment";
@@ -1081,6 +1110,9 @@ void EdgeInitializeCliProcess() {
 
 int EdgeRunCliScript(const char* script_path, std::string* error_out) {
   EdgeInitializeCliProcess();
+  EdgeExecutionCapabilities capabilities = EdgeGetExecutionCapabilities();
+  capabilities.bootstrap_profile = EdgeBootstrapProfile::kMainModule;
+  EdgeSetExecutionCapabilities(capabilities);
   if (error_out != nullptr) {
     error_out->clear();
   }
@@ -1508,6 +1540,65 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       return 9;
     }
   }
+
+  auto raw_has_option_or_inline_value = [&](const char* option) {
+    const std::string prefix = std::string(option) + "=";
+    for (const auto& token : raw_exec_argv) {
+      if (token == option || token.rfind(prefix, 0) == 0) return true;
+    }
+    return false;
+  };
+
+  auto env_var_is_set = [](const char* key) {
+    const char* value = std::getenv(key);
+    return value != nullptr && value[0] != '\0';
+  };
+
+  auto has_eager_openssl_requirements = [&]() {
+    static const std::vector<const char*> kOpenSslFlags = {
+        "--force-fips",
+        "--openssl-config",
+        "--openssl-legacy-provider",
+        "--openssl-shared-config",
+        "--secure-heap",
+        "--secure-heap-min",
+        "--tls-cipher-list",
+        "--tls-keylog",
+        "--tls-max-v1.2",
+        "--tls-max-v1.3",
+        "--tls-min-v1.0",
+        "--tls-min-v1.1",
+        "--tls-min-v1.2",
+        "--tls-min-v1.3",
+        "--use-bundled-ca",
+        "--use-openssl-ca",
+        "--use-system-ca",
+    };
+    for (const char* option : kOpenSslFlags) {
+      if (raw_has_option_or_inline_value(option)) return true;
+    }
+    return env_var_is_set("OPENSSL_CONF") ||
+           env_var_is_set("NODE_EXTRA_CA_CERTS") ||
+           env_var_is_set("SSL_CERT_DIR") ||
+           env_var_is_set("SSL_CERT_FILE") ||
+           env_var_is_set("NODE_TLS_REJECT_UNAUTHORIZED");
+  };
+
+  EdgeExecutionCapabilities execution_capabilities;
+  execution_capabilities.requires_ipc_or_cluster_bootstrapping =
+      env_var_is_set("NODE_CHANNEL_FD") || env_var_is_set("NODE_UNIQUE_ID");
+  execution_capabilities.requires_eager_openssl_init = has_eager_openssl_requirements();
+  if (force_repl) {
+    execution_capabilities.bootstrap_profile = EdgeBootstrapProfile::kRepl;
+  } else if (use_test_runner) {
+    execution_capabilities.bootstrap_profile = EdgeBootstrapProfile::kTest;
+  } else if (use_watch_mode) {
+    execution_capabilities.bootstrap_profile = EdgeBootstrapProfile::kWatch;
+  } else {
+    execution_capabilities.bootstrap_profile = EdgeBootstrapProfile::kMainModule;
+  }
+
+  EdgeSetExecutionCapabilities(execution_capabilities);
 
   if (!use_watch_mode) {
     ApplyEnvUpdates(effective_state.env_updates);
