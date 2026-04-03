@@ -14,4 +14,4 @@
 	branch = main
 [submodule "ssl-certs"]
 	path = ssl-certs
-	url = git@github.com:wasix-org/ssl-certs.git
+	url = https://github.com/wasix-org/ssl-certs.git
