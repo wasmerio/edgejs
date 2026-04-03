@@ -23,6 +23,16 @@ namespace {
 
 void DeleteRefIfPresent(napi_env env, napi_ref* ref);
 
+void ClearPendingException(napi_env env) {
+  if (env == nullptr) return;
+  // TODO: Make napi_get_and_clear_last_exception() match upstream Node so
+  // this helper does not need a separate pending-exception check first.
+  bool pending = false;
+  if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
+  napi_value ignored = nullptr;
+  napi_get_and_clear_last_exception(env, &ignored);
+}
+
 struct StreamSymbolCache {
   explicit StreamSymbolCache(napi_env env_in) : env(env_in) {}
   ~StreamSymbolCache() {
@@ -1507,6 +1517,7 @@ napi_value EdgeStreamBufferFromWithEncoding(napi_env env,
 
   napi_value out = nullptr;
   if (napi_call_function(env, buffer_ctor, from_fn, argc, argv, &out) != napi_ok || out == nullptr) {
+    ClearPendingException(env);
     return value;
   }
   return out;

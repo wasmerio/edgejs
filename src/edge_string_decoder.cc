@@ -28,6 +28,16 @@ using edge::encoding_ids::kEncLatin1;
 using edge::encoding_ids::kEncUtf16Le;
 using edge::encoding_ids::kEncUtf8;
 
+void ClearPendingException(napi_env env) {
+  if (env == nullptr) return;
+  // TODO: Make napi_get_and_clear_last_exception() match upstream Node so
+  // this helper does not need a separate pending-exception check first.
+  bool pending = false;
+  if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
+  napi_value ignored = nullptr;
+  napi_get_and_clear_last_exception(env, &ignored);
+}
+
 void SetMethod(napi_env env, napi_value obj, const char* name, napi_callback cb) {
   napi_value fn = nullptr;
   if (napi_create_function(env, name, NAPI_AUTO_LENGTH, cb, nullptr, &fn) == napi_ok && fn != nullptr) {
@@ -222,8 +232,8 @@ napi_value MakeStringFromBytes(napi_env env, const uint8_t* data, size_t len, ui
                 return out;
               }
             }
-            napi_get_and_clear_last_exception(env, nullptr);
           }
+          ClearPendingException(env);
         }
       }
     }
@@ -276,8 +286,8 @@ napi_value MakeStringFromBytes(napi_env env, const uint8_t* data, size_t len, ui
                     return out;
                   }
                 }
-                napi_get_and_clear_last_exception(env, nullptr);
               }
+              ClearPendingException(env);
             }
           }
         }

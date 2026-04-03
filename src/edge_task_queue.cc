@@ -44,11 +44,9 @@ static napi_value TaskQueueEnqueueMicrotask(napi_env env, napi_callback_info inf
   napi_value argv[1] = {nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
 
-#if defined(EDGE_BUNDLED_NAPI_V8)
   if (unofficial_napi_enqueue_microtask(env, argv[0]) == napi_ok) {
     return internal_binding::Undefined(env);
   }
-#endif
 
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;

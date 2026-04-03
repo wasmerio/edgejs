@@ -847,9 +847,39 @@ bool UnwrapSyntheticOcspResponse(const uint8_t* data, size_t len, std::vector<ui
 }
 
 napi_value CreateBufferCopy(napi_env env, const uint8_t* data, size_t len) {
-  napi_value out = nullptr;
+  napi_value array_buffer = nullptr;
   void* copied = nullptr;
-  if (napi_create_buffer_copy(env, len, len > 0 ? data : nullptr, &copied, &out) != napi_ok) return nullptr;
+  if (napi_create_arraybuffer(env, len, &copied, &array_buffer) != napi_ok ||
+      array_buffer == nullptr ||
+      (len > 0 && copied == nullptr)) {
+    return nullptr;
+  }
+  if (len > 0) {
+    std::memcpy(copied, data, len);
+  }
+
+  napi_value view = nullptr;
+  if (napi_create_typedarray(env, napi_uint8_array, len, array_buffer, 0, &view) != napi_ok ||
+      view == nullptr) {
+    return array_buffer;
+  }
+
+  napi_value global = nullptr;
+  napi_value buffer_ctor = nullptr;
+  napi_value from_fn = nullptr;
+  napi_value out = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return view;
+  if (napi_get_named_property(env, global, "Buffer", &buffer_ctor) != napi_ok || buffer_ctor == nullptr) return view;
+  if (napi_get_named_property(env, buffer_ctor, "from", &from_fn) != napi_ok || from_fn == nullptr) return view;
+  napi_value argv[1] = {view};
+  if (napi_call_function(env, buffer_ctor, from_fn, 1, argv, &out) != napi_ok || out == nullptr) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+      napi_value ignored = nullptr;
+      napi_get_and_clear_last_exception(env, &ignored);
+    }
+    return view;
+  }
   return out;
 }
 
@@ -2134,15 +2164,11 @@ napi_value CreateBioWritevChunks(TlsWrap* wrap, size_t* total_out) {
   }
 
   for (size_t i = 0; i < count; ++i) {
-    napi_value buffer = nullptr;
-    if (napi_create_external_buffer(
-            wrap->env,
-            size[i],
-            reinterpret_cast<char*>(data[i]),
-            nullptr,
-            nullptr,
-            &buffer) != napi_ok ||
-        buffer == nullptr ||
+    napi_value buffer = CreateBufferCopy(
+        wrap->env,
+        reinterpret_cast<const uint8_t*>(data[i]),
+        size[i]);
+    if (buffer == nullptr ||
         napi_set_element(wrap->env, chunks, static_cast<uint32_t>(i), buffer) != napi_ok) {
       return nullptr;
     }

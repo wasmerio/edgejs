@@ -12,3 +12,6 @@
 	path = napi
 	url = git@github.com:wasmerio/napi.git
 	branch = main
+[submodule "ssl-certs"]
+	path = ssl-certs
+	url = git@github.com:wasix-org/ssl-certs.git

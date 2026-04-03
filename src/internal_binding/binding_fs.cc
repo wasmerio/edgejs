@@ -40,6 +40,16 @@ namespace {
 constexpr size_t kFsStatsLength = 18;
 constexpr size_t kFsStatFsLength = 7;
 
+void ClearPendingException(napi_env env) {
+  if (env == nullptr) return;
+  // TODO: Make napi_get_and_clear_last_exception() match upstream Node so
+  // this helper does not need a separate pending-exception check first.
+  bool pending = false;
+  if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
+  napi_value ignored = nullptr;
+  napi_get_and_clear_last_exception(env, &ignored);
+}
+
 struct AsyncFsReq;
 
 void ResetRef(napi_env env, napi_ref* ref_ptr);
@@ -455,6 +465,7 @@ napi_value BufferFromValue(napi_env env, napi_value value, const char* encoding)
   }
   napi_value out = nullptr;
   if (napi_call_function(env, buffer_ctor, from_fn, argc, argv, &out) != napi_ok || out == nullptr) {
+    ClearPendingException(env);
     return Undefined(env);
   }
   return out;

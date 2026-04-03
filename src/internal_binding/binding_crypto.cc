@@ -137,6 +137,8 @@ void SetNamedBool(napi_env env, napi_value obj, const char* name, bool value) {
 
 void ClearPendingException(napi_env env) {
   if (env == nullptr) return;
+  // TODO: Make napi_get_and_clear_last_exception() match upstream Node so
+  // this helper does not need a separate pending-exception check first.
   bool pending = false;
   if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
   napi_value ignored = nullptr;
@@ -303,6 +305,7 @@ std::vector<uint8_t> ValueToBytesWithEncoding(napi_env env, napi_value value, na
         if (napi_call_function(env, buffer_ctor, from_fn, 2, argv, &out) == napi_ok && out != nullptr) {
           return ValueToBytes(env, out);
         }
+        ClearPendingException(env);
       }
     }
   }
@@ -343,6 +346,7 @@ napi_value NormalizeToBufferObject(napi_env env, napi_value value) {
   napi_value argv[1] = {value != nullptr ? value : Undefined(env)};
   napi_value out = nullptr;
   if (napi_call_function(env, buffer_ctor, from_fn, 1, argv, &out) != napi_ok || out == nullptr) {
+    ClearPendingException(env);
     return EnsureBufferValue(env, value);
   }
   return out;
@@ -396,6 +400,7 @@ napi_value MaybeToEncodedOutput(napi_env env, napi_value buffer_value, napi_valu
   }
   napi_value out = nullptr;
   if (napi_call_function(env, as_buffer, to_string_fn, 1, &enc, &out) != napi_ok || out == nullptr) {
+    ClearPendingException(env);
     return as_buffer;
   }
   return out;

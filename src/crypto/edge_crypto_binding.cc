@@ -545,7 +545,11 @@ napi_value CreatePemArrayFromX509Vector(napi_env env, const std::vector<X509*>& 
 
 bool GetEffectiveCaOptions(napi_env env, bool* use_openssl_ca, bool* use_system_ca) {
   if (use_openssl_ca == nullptr || use_system_ca == nullptr) return false;
+#ifdef NODE_OPENSSL_CERT_STORE
+  *use_openssl_ca = true;
+#else
   *use_openssl_ca = false;
+#endif
   *use_system_ca = false;
 
   napi_value global = nullptr;
