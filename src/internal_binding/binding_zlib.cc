@@ -885,6 +885,8 @@ napi_value GetRefValue(napi_env env, napi_ref ref) {
 void ClearPendingException(napi_env env) {
   bool pending = false;
   if (env == nullptr) return;
+  // TODO: Make napi_get_and_clear_last_exception() match upstream Node so
+  // this helper does not need a separate pending-exception check first.
   if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
     napi_value ignored = nullptr;
     napi_get_and_clear_last_exception(env, &ignored);

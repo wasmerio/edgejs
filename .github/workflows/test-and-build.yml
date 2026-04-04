@@ -443,11 +443,26 @@ jobs:
           set -euo pipefail
           make test-wasix-napi-cli
 
+      - name: Install Wasmer CLI
+        uses: wasmerio/setup-wasmer@v3
+
+      - name: Smoke test WASIX safe mode via Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-safe-mode WASMER_BIN=wasmer
+
       - name: Generate dist
         shell: bash
         run: |
           set -euo pipefail
           make dist-only BUILD_DIR=build-wasix JOBS=4 ZIP_NAME=edge-wasix.zip
+
+      - name: Smoke test packaged WASIX dist via Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-safe-mode WASMER_BIN=wasmer WASIX_PACKAGE_DIR="$(pwd)/dist"
 
       - name: Upload artifact edge
         uses: actions/upload-artifact@v4

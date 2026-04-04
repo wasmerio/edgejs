@@ -298,7 +298,14 @@ napi_value CreateBufferCopy(napi_env env, const char* data, size_t length) {
   if (napi_get_named_property(env, global, "Buffer", &buffer_ctor) != napi_ok || buffer_ctor == nullptr) return view;
   if (napi_get_named_property(env, buffer_ctor, "from", &from_fn) != napi_ok || from_fn == nullptr) return view;
   napi_value argv[1] = {view};
-  if (napi_call_function(env, buffer_ctor, from_fn, 1, argv, &out) != napi_ok || out == nullptr) return view;
+  if (napi_call_function(env, buffer_ctor, from_fn, 1, argv, &out) != napi_ok || out == nullptr) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+      napi_value ignored = nullptr;
+      napi_get_and_clear_last_exception(env, &ignored);
+    }
+    return view;
+  }
   return out;
 }
 

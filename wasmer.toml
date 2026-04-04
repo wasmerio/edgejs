@@ -5,6 +5,8 @@ version = "0.0.1"
 
 # [fs]
 # "/node-lib" = "./lib"
+[fs]
+"/usr/local/ssl" = "./ssl-certs"
 
 [[module]]
 name = "edgejs"

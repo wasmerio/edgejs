@@ -1,4 +1,4 @@
-.PHONY: build build-wasix build-napi-wasmer-cli test-wasix-napi-cli test test-only check-portability clean-dist dist dist-only framework-test framework-test-reset
+.PHONY: build build-wasix build-napi-wasmer-cli test-wasix-napi-cli test-wasix-safe-mode test test-only check-portability clean-dist dist dist-only framework-test framework-test-reset
 
 UNAME_S := $(shell uname -s)
 BUILD_NAPI_DIR ?= build-v8-napi
@@ -21,6 +21,9 @@ NAPI_WASMER_DIR ?= napi
 NAPI_WASMER_BINARY ?= ./$(NAPI_WASMER_DIR)/target/debug/napi_wasmer
 WASIX_EDGEJS_WASM ?= ./build-wasix/edgejs.wasm
 WASIX_NAPI_SMOKE_JS ?= console.log('hello world!');
+WASMER_BIN ?= wasmer
+WASIX_PACKAGE_DIR ?= $(CURDIR)
+WASIX_SSL_CERTS_DIR ?= ssl-certs
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -60,6 +63,9 @@ test-wasix-napi-cli:
 	@output="$$($(NAPI_WASMER_BINARY) $(WASIX_EDGEJS_WASM) -e "$(WASIX_NAPI_SMOKE_JS)")"; \
 	printf '%s\n' "$$output"; \
 	printf '%s\n' "$$output" | grep -Fx "hello world!"
+
+test-wasix-safe-mode:
+	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)"
 
 $(EDGE_BINARY):
 	$(MAKE) build
@@ -122,6 +128,10 @@ dist-only:
 	if [ "$(BUILD_DIR)" = "build-wasix" ]; then \
 		cp "$(BUILD_DIR)/edgejs.wasm" "$(DIST_BIN_DIR)/edgejs"; \
 		cp wasmer.toml "$(DIST_DIR)/wasmer.toml"; \
+		mkdir -p "$(DIST_DIR)/ssl-certs"; \
+		cp "$(WASIX_SSL_CERTS_DIR)/cacert.pem" "$(DIST_DIR)/ssl-certs/cacert.pem"; \
+		cp "$(WASIX_SSL_CERTS_DIR)/cert.pem" "$(DIST_DIR)/ssl-certs/cert.pem"; \
+		cp -R "$(WASIX_SSL_CERTS_DIR)/certs" "$(DIST_DIR)/ssl-certs/certs"; \
 		perl -0pi -e 's#^source = ".*"#source = "./bin/edgejs"#m' "$(DIST_DIR)/wasmer.toml"; \
 	else \
 		cp "$(EDGE_BINARY)" "$(DIST_BIN_DIR)/edge"; \
@@ -141,7 +151,7 @@ dist-only:
 		done; \
 	fi
 	if [ "$(BUILD_DIR)" = "build-wasix" ]; then \
-		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml; \
+		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml ssl-certs; \
 	else \
 		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
 	fi
@@ -161,4 +171,3 @@ framework-test-reset:
 
 js-%:
 	@:
-

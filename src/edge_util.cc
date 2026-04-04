@@ -329,6 +329,8 @@ napi_value CallFunction(napi_env env,
 }
 
 void ClearPendingException(napi_env env) {
+  // TODO: Make napi_get_and_clear_last_exception() match upstream Node so
+  // this helper does not need a separate pending-exception check first.
   bool pending = false;
   if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) return;
   napi_value ignored = nullptr;
