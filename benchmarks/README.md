@@ -130,6 +130,54 @@ What it does not measure:
 - filesystem or network I/O
 - long-running application throughput
 
+### `cli-eval-empty`
+Runs an empty CLI eval command.
+
+What it isolates:
+- CLI startup and eval-path overhead for an empty command
+
+What it does not measure:
+- script loading from disk
+- useful application work
+- async behavior
+
+### `cli-print-literal`
+Runs a CLI print command for a small literal value.
+
+What it isolates:
+- CLI print-path overhead for a trivial expression
+
+What it does not measure:
+- module loading
+- non-trivial compute
+- application throughput
+
+### `cli-print-process-version`
+Runs a CLI print command that accesses `process.version`.
+
+What it isolates:
+- CLI print-path overhead with a small runtime property access
+
+What it does not measure:
+- larger compatibility surfaces
+- package loading
+- long-running process behavior
+
+### `http-loopback`
+Starts a small local HTTP server, performs a fixed number of loopback requests against it, and prints a deterministic checksum.
+
+What it isolates:
+- local HTTP request/response overhead in a small one-shot process
+- runtime behavior across a basic built-in networking path
+- a more representative server/client surface than startup-only baselines
+
+What it does not measure:
+- real network conditions
+- TLS/HTTPS behavior
+- production throughput
+- websocket behavior
+- framework or router overhead
+
 ## Coverage notes
 
 Each benchmark in this directory is intentionally narrow.
