@@ -21,3 +21,5 @@ v8-*.tar.xz
 benchmarks/results/*.json
 benchmarks/results/*.csv
 benchmarks/results/*.md
+benchmarks/**/*
+AGENTS.md

@@ -10,12 +10,34 @@ function usage() {
   process.exit(1);
 }
 
-function extractProfileJson(stderr) {
-  const candidates = stderr
+function isStartupProfileObject(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length === 0) return false;
+  return keys.some((key) => {
+    const normalized = key.toLowerCase();
+    return normalized.includes('bootstrap') || normalized.includes('startup') ||
+        normalized.includes('profile');
+  });
+}
+
+function extractProfileJson(stdout, stderr) {
+  const lines = `${stdout ?? ''}\n${stderr ?? ''}`
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter((line) => line.startsWith('{') && line.includes('"bootstrap_profile"'));
-  return candidates.length === 0 ? null : candidates[candidates.length - 1];
+      .filter((line) => line.startsWith('{') && line.endsWith('}'));
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (isStartupProfileObject(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Ignore non-JSON lines.
+    }
+  }
+  return null;
 }
 
 function formatValue(value) {
@@ -31,9 +53,9 @@ function renderMarkdown(command, profile) {
       '',
       `Command: \`${command}\``,
       '',
-      'Startup profiling is unavailable in this binary.',
+      'Startup profiling output was not detected for this run.',
       '',
-      'Build with `-DEDGE_ENABLE_STARTUP_PROFILE=ON` to embed the internal profiler.',
+      'The harness set `EDGE_STARTUP_PROFILE=1`, but no startup profile JSON was emitted.',
       '',
     ].join('\n');
   }
@@ -74,13 +96,13 @@ async function main() {
     process.exit(result.status ?? 1);
   }
 
-  const profileLine = extractProfileJson(result.stderr ?? '');
-  const profile = profileLine == null ?
+  const extractedProfile = extractProfileJson(result.stdout ?? '', result.stderr ?? '');
+  const profile = extractedProfile == null ?
     {
       enabled: false,
-      reason: 'binary built without EDGE_ENABLE_STARTUP_PROFILE',
+      reason: 'EDGE_STARTUP_PROFILE did not emit startup profile JSON on this checkout',
     } :
-    JSON.parse(profileLine);
+    extractedProfile;
 
   await writeFile(jsonOut, `${JSON.stringify(profile, null, 2)}\n`);
   await writeFile(markdownOut, renderMarkdown(command, profile));

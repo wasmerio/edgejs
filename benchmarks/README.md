@@ -171,12 +171,12 @@ These benchmark files are intentionally small and standalone so they can be comp
 
 CLI startup benchmarks intentionally omit Deno from the matrix because they exercise Node/Bun-compatible `-e` and `-p` entry paths rather than file-entry workloads.
 
-Each benchmark run also captures an Edge-only startup phase profile when the binary was built with `-DEDGE_ENABLE_STARTUP_PROFILE=ON`. Alongside the usual `hyperfine` exports, the harness writes:
+Each benchmark run also attempts to capture an Edge-only startup phase profile by running the Edge command with `EDGE_STARTUP_PROFILE=1`. Alongside the usual `hyperfine` exports, the harness writes:
 
 - `benchmarks/results/<workload>.edge-profile.json`
 - `benchmarks/results/<workload>.edge-profile.md`
 
-These artifacts record the native startup phase breakdown for the exact Edge command used in the benchmark, so wall-clock deltas can be reviewed together with phase deltas. When the profiler is not compiled into the binary, the harness writes a placeholder note instead.
+These artifacts record the native startup phase breakdown for the exact Edge command used in the benchmark, so wall-clock deltas can be reviewed together with phase deltas. If startup profile JSON is not emitted on your checkout, the harness writes a placeholder note instead.
 
 ## Build Edge locally
 
@@ -184,7 +184,13 @@ These artifacts record the native startup phase breakdown for the exact Edge com
 make build
 ```
 
-To embed the internal startup profiler in the binary for benchmark analysis:
+To check whether the current local binary emits startup profile output:
+
+```bash
+EDGE_STARTUP_PROFILE=1 ./build-edge/edge -e ""
+```
+
+Some checkouts may require additional build support for startup profiling. A common rebuild attempt is:
 
 ```bash
 cmake -S . -B build-edge -DCMAKE_BUILD_TYPE=Release -DEDGE_ENABLE_STARTUP_PROFILE=ON
