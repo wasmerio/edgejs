@@ -18,6 +18,9 @@ v8-*.tar.xz
 # direnv
 .envrc
 .direnv
-benchmarks/results/*.json
-benchmarks/results/*.csv
-benchmarks/results/*.md
+benchmarks/results/**/*.json
+benchmarks/results/**/*.csv
+benchmarks/results/**/*.md
+benchmarks/results/baselines/**/*.txt
+
+AGENTS.md
