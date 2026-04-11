@@ -102,9 +102,15 @@ case "$BENCHMARK" in
     BUN_CMD="$BUN_BIN benchmarks/workloads/http-loopback.js"
     DENO_CMD="$DENO_BIN run --allow-net=127.0.0.1 benchmarks/workloads/http-loopback.js"
     ;;
+  dependency-heavy-package)
+    EDGE_CMD="$EDGE_BIN benchmarks/workloads/dependency-heavy-package.js"
+    NODE_CMD="$NODE_BIN benchmarks/workloads/dependency-heavy-package.js"
+    BUN_CMD="$BUN_BIN benchmarks/workloads/dependency-heavy-package.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/dependency-heavy-package.js"
+    ;;
   *)
     echo "Unknown benchmark: $BENCHMARK"
-    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain, zlib-deflate-sync, string-compare-split, cli-eval-empty, cli-print-literal, cli-print-process-version, http-loopback"
+    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain, zlib-deflate-sync, string-compare-split, cli-eval-empty, cli-print-literal, cli-print-process-version, http-loopback, dependency-heavy-package"
     exit 1
     ;;
 esac

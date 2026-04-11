@@ -130,6 +130,20 @@ What it does not measure:
 - filesystem or network I/O
 - long-running application throughput
 
+### `dependency-heavy-package`
+
+Loads and executes a small package-like local dependency graph, then prints a deterministic checksum.
+
+What it isolates:
+- module-loader plus execution cost on a multi-file dependency graph
+- package-style code paths beyond startup-only micro workloads
+- short-lived execution where import graph shape matters
+
+What it does not measure:
+- third-party package install or registry/network fetch cost
+- very large real-world dependency trees
+- framework-level startup and steady-state behavior
+
 ## Coverage notes
 
 Each benchmark in this directory is intentionally narrow.
