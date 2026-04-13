@@ -48,18 +48,24 @@ void WorkerThreadProcessExitHandler(edge::Environment* environment, int /*exit_c
 }
 }  // namespace
 
-bool EdgeAttachEnvironmentForRuntime(napi_env env, const EdgeEnvironmentConfig* config) {
+bool EdgeAttachEnvironmentForRuntime(napi_env env,
+                                     const EdgeEnvironmentConfig* config,
+                                     EdgeStartupTraceCallback trace_callback,
+                                     void* trace_data) {
   if (!EdgeEnvironmentAttach(env, config)) return false;
+  if (trace_callback != nullptr) trace_callback(trace_data, "cli.env.attach-runtime.environment");
 
   if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
     environment->SetProcessExitHandler(
         environment->owns_process_state() ? MainThreadProcessExitHandler
                                           : WorkerThreadProcessExitHandler);
   }
+  if (trace_callback != nullptr) trace_callback(trace_data, "cli.env.attach-runtime.process-exit-handler");
 
   EdgeEnvironmentRegisterCleanupStage(env, StopWorkersCleanup, nullptr, kCleanupStopWorkers);
   EdgeEnvironmentRegisterCleanupStage(
       env, RuntimePlatformCleanup, nullptr, kCleanupRuntimePlatform);
   EdgeEnvironmentRegisterCleanupStage(env, CaresCleanup, nullptr, kCleanupCares);
+  if (trace_callback != nullptr) trace_callback(trace_data, "cli.env.attach-runtime.cleanup-stages");
   return true;
 }
