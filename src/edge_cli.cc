@@ -54,6 +54,20 @@ void SignalExit(int signal, siginfo_t* info, void* ucontext);
 namespace {
 
 constexpr const char kUsage[] = "Usage: edge <script.js>";
+constexpr const char kNativeHelpText[] =
+    "Usage: edge [options] [ script.js ] [arguments]\n"
+    "\n"
+    "Options:\n"
+    "  -e, --eval=...              evaluate script\n"
+    "  -p, --print[=...]           evaluate script and print result\n"
+    "  -c, --check                 syntax check script without executing\n"
+    "  -i, --interactive           always enter the REPL\n"
+    "  --run <command>             run a package script command\n"
+    "  --watch                     run in watch mode\n"
+    "  --test                      run tests\n"
+    "  --completion-bash           print source-able bash completion script\n"
+    "  -v, --version               print Edge.js / Node.js version\n"
+    "  -h, --help                  print this help\n";
 constexpr unsigned kMaxSignal = 32;
 std::once_flag g_cli_init_once;
 #if defined(_WIN32)
@@ -1332,6 +1346,12 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       (std::string(argv[1]) == "-v" || std::string(argv[1]) == "--version")) {
     startup_trace.Mark("cli.dispatch.version");
     std::cout << NODE_VERSION << "\n";
+    return 0;
+  }
+  if (argc > 1 && argv[1] != nullptr &&
+      (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
+    startup_trace.Mark("cli.dispatch.help");
+    std::cout << kNativeHelpText;
     return 0;
   }
   enum class CliMode {
