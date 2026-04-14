@@ -248,6 +248,17 @@ inline void CollectEnvFileSpecs(const std::vector<std::string>& raw_exec_argv,
                                 std::vector<std::pair<fs::path, bool>>* out_specs) {
   if (out_specs == nullptr) return;
   out_specs->clear();
+  bool needs_cwd = false;
+  for (const auto& token : raw_exec_argv) {
+    if (token == "--env-file" ||
+        token == "--env-file-if-exists" ||
+        token.rfind("--env-file=", 0) == 0 ||
+        token.rfind("--env-file-if-exists=", 0) == 0) {
+      needs_cwd = true;
+      break;
+    }
+  }
+  if (!needs_cwd) return;
   const std::optional<fs::path> cwd = TryGetCurrentPath();
 
   for (size_t i = 0; i < raw_exec_argv.size(); ++i) {
@@ -333,6 +344,15 @@ inline void CollectConfigFileSpecs(const std::vector<std::string>& raw_exec_argv
                                    std::vector<fs::path>* out_paths) {
   if (out_paths == nullptr) return;
   out_paths->clear();
+  bool needs_cwd = false;
+  for (const auto& token : raw_exec_argv) {
+    if (token == "--experimental-config-file" ||
+        token.rfind("--experimental-config-file=", 0) == 0) {
+      needs_cwd = true;
+      break;
+    }
+  }
+  if (!needs_cwd) return;
   const std::optional<fs::path> cwd = TryGetCurrentPath();
   for (size_t i = 0; i < raw_exec_argv.size(); ++i) {
     const std::string& token = raw_exec_argv[i];
