@@ -359,11 +359,10 @@ void ApplySupportedV8Flags(const std::vector<std::string>& raw_exec_argv) {
   bool has_import_attributes = false;
   bool has_no_import_attributes = false;
   for (const auto& token : raw_exec_argv) {
-    if (!IsSupportedV8ProfilerFlag(token)) continue;
-    if (!flags.empty()) flags.push_back(' ');
-    flags += token;
-  }
-  for (const auto& token : raw_exec_argv) {
+    if (IsSupportedV8ProfilerFlag(token)) {
+      if (!flags.empty()) flags.push_back(' ');
+      flags += token;
+    }
     has_js_source_phase_imports = has_js_source_phase_imports || token == "--js-source-phase-imports";
     has_no_js_source_phase_imports = has_no_js_source_phase_imports || token == "--no-js-source-phase-imports";
     has_import_attributes = has_import_attributes || token == "--harmony-import-attributes";
@@ -1228,7 +1227,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     return 1;
   }
   if (argc > 1 && argv[1] != nullptr &&
-      std::string(argv[1]) == kEdgeInternalEnvCliDispatchFlag) {
+      std::strcmp(argv[1], kEdgeInternalEnvCliDispatchFlag) == 0) {
     startup_trace.Mark("cli.dispatch.env-compat");
     return RunEnvCliWithOffset(argc, argv, 1, error_out);
   }
@@ -1240,7 +1239,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   bool cli_safe_mode = false;
   for (int i = 1; i < argc; ++i) {
     if (argv[i] == nullptr) continue;
-    if (std::string(argv[i]) == "--safe") cli_safe_mode = true;
+    if (std::strcmp(argv[i], "--safe") == 0) cli_safe_mode = true;
   }
   startup_trace.Mark("cli.scan-safe-mode");
   const bool safe_mode_requested = cli_safe_mode || env_safe_mode;
@@ -1343,13 +1342,13 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     return EdgeRunSafeModeCommand(forwarded_args, wasmer_bin, wasmer_package, error_out);
   }
   if (argc > 1 && argv[1] != nullptr &&
-      (std::string(argv[1]) == "-v" || std::string(argv[1]) == "--version")) {
+      (std::strcmp(argv[1], "-v") == 0 || std::strcmp(argv[1], "--version") == 0)) {
     startup_trace.Mark("cli.dispatch.version");
     std::cout << NODE_VERSION << "\n";
     return 0;
   }
   if (argc > 1 && argv[1] != nullptr &&
-      (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
+      (std::strcmp(argv[1], "-h") == 0 || std::strcmp(argv[1], "--help") == 0)) {
     startup_trace.Mark("cli.dispatch.help");
     std::cout << kNativeHelpText;
     return 0;
@@ -1571,7 +1570,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   bool requested_test_flag = use_test_runner;
   if (!requested_test_flag) {
     for (int argi = script_index; argi < argc; ++argi) {
-      if (argv[argi] != nullptr && std::string(argv[argi]) == "--test") {
+      if (argv[argi] != nullptr && std::strcmp(argv[argi], "--test") == 0) {
         requested_test_flag = true;
         break;
       }
@@ -1663,7 +1662,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   }
 
   if (has_eval_string || (print_flag && mode == CliMode::kPrint)) {
-    if (script_index < argc && argv[script_index] != nullptr && std::string(argv[script_index]) == "--") {
+    if (script_index < argc && argv[script_index] != nullptr && std::strcmp(argv[script_index], "--") == 0) {
       script_index++;
     }
     script_argv.reserve(static_cast<size_t>(argc - script_index));
@@ -1679,7 +1678,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     int positional_index = script_index;
     if (positional_index < argc &&
         argv[positional_index] != nullptr &&
-        std::string(argv[positional_index]) == "--") {
+        std::strcmp(argv[positional_index], "--") == 0) {
       positional_index++;
     }
     run_positional_argv.reserve(static_cast<size_t>(argc - positional_index));
@@ -1694,7 +1693,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     int pattern_index = script_index;
     if (pattern_index < argc &&
         argv[pattern_index] != nullptr &&
-        std::string(argv[pattern_index]) == "--") {
+        std::strcmp(argv[pattern_index], "--") == 0) {
       pattern_index++;
     }
     script_argv.reserve(static_cast<size_t>(argc - pattern_index));
@@ -1710,7 +1709,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     int command_index = script_index;
     if (command_index < argc &&
         argv[command_index] != nullptr &&
-        std::string(argv[command_index]) == "--") {
+        std::strcmp(argv[command_index], "--") == 0) {
       command_index++;
     }
     script_argv.reserve(static_cast<size_t>(argc - command_index));
@@ -1723,9 +1722,9 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   }
 
   const bool use_stdin_entry =
-      script_index >= argc || argv[script_index] == nullptr || std::string(argv[script_index]) == "-";
+      script_index >= argc || argv[script_index] == nullptr || std::strcmp(argv[script_index], "-") == 0;
   if (use_stdin_entry) {
-    if (script_index < argc && argv[script_index] != nullptr && std::string(argv[script_index]) == "-") {
+    if (script_index < argc && argv[script_index] != nullptr && std::strcmp(argv[script_index], "-") == 0) {
       script_argv.reserve(static_cast<size_t>(argc - (script_index + 1)));
       for (int argi = script_index + 1; argi < argc; ++argi) {
         if (argv[argi] != nullptr) script_argv.emplace_back(argv[argi]);

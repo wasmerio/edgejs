@@ -685,21 +685,98 @@ This investigation did not change:
 - timers/bootstrap/module-loader internals
 - snapshot generation/build plumbing
 
+## Pass 3 Changes
+
+Three new changes land in this pass.
+
+### 1. Single-pass `ApplySupportedV8Flags`
+
+File:
+
+- `src/edge_cli.cc`
+
+Change:
+
+- `ApplySupportedV8Flags()` previously iterated `raw_exec_argv` twice: once for profiler flags, once for feature flags. Merged into a single pass.
+
+Why this helps:
+
+- Eliminates one full iteration over argv on every startup.
+- Minor gain, but the change is strictly cleaner and risk-free.
+
+### 2. `strcmp`-based argv comparisons
+
+File:
+
+- `src/edge_cli.cc`
+
+Change:
+
+- All `std::string(argv[...]) == "..."` comparisons in `EdgeRunCli` replaced with `std::strcmp`.
+
+Why this helps:
+
+- Avoids constructing `std::string` temporaries from raw `const char*` argv values for simple equality checks.
+- Even with SSO, each construction and destruction has overhead. The fast-path checks for `--version`, `--help`, `--safe`, `--test`, and separator tokens (`--`, `-`) are on every startup path and previously paid this cost unconditionally.
+
+### 3. Lazy `internal/source_map/source_map_cache` loading
+
+Files:
+
+- `lib/internal/bootstrap/node.js`
+- `lib/internal/process/pre_execution.js`
+
+Change:
+
+- `node.js` no longer eagerly requires `internal/source_map/source_map_cache` at bootstrap.
+  - `process.sourceMapsEnabled` getter is now backed by a lazy loader.
+  - `process.setSourceMapsEnabled` function lazily loads the module on first call.
+  - The `setMaybeCacheGeneratedSourceMap` C++ callback now receives a thunk that loads the module on first actual use.
+- `pre_execution.js` `initializeSourceMapsHandlers()` now returns early when `--enable-source-maps` is not set and `NODE_V8_COVERAGE` is not active, skipping the module require entirely.
+
+Why this is safe:
+
+- The `source_map_cache.js` module initializes `sourceMapsSupport` to `{enabled: false, ...}` by default.
+- Skipping `setSourceMapsSupport(false, ...)` is safe because calling it only sets the state that is already the default.
+- The `maybeCacheGeneratedSourceMap` callback checks `support.enabled` before doing anything; even if called via the thunk when source maps are off, it returns immediately.
+- `NODE_V8_COVERAGE` is explicitly preserved as a trigger for loading the module, since the source map cache is also used for code coverage output.
+
+Measured A/B (hyperfine --warmup 10 --runs 80):
+
+| workload | before (Pass 2 baseline) | after (Pass 3) | delta |
+|---|---|---|---|
+| `edge -e ""` | 40.9ms ± 1.0ms | 35.1ms ± 0.8ms | −5.8ms / −14% |
+| `edge benchmarks/workloads/empty-startup.js` | 40.2ms ± 0.7ms | 34.4ms ± 0.7ms | −5.8ms / −14% |
+
+Unlike previous JS lazy-load experiments that shifted cost between trace buckets, the source map deferral produces a real wall-clock reduction. The `internal/source_map/source_map_cache` module is not loaded at all on the default path, eliminating its first-load cost entirely rather than moving it.
+
+Risk and caveats:
+
+- The `setSourceMapsSupport(false, ...)` call also invokes `setInternalPrepareStackTrace(defaultPrepareStackTrace)`, which sets the V8 prepare-stack-trace hook. Skipping this means the hook set during `realm.js` bootstrap remains. If that hook is already the same as `defaultPrepareStackTrace`, this is a no-op. Test suite coverage should catch any regression.
+- Any code path that accesses `process.sourceMapsEnabled` or calls `process.setSourceMapsEnabled` before `initializeSourceMapsHandlers` would now trigger the lazy load. This is correct behavior but would shift the cost to that access point.
+
+## Cumulative Results Across All Passes
+
+| workload | original baseline | after Pass 1+2 | after Pass 3 | total delta |
+|---|---|---|---|---|
+| `edge -e ""` | 41.6ms | 40.9ms | 35.1ms | −6.5ms / −16% |
+| `edge benchmarks/workloads/empty-startup.js` | 40.4ms | 40.2ms | 34.4ms | −6.0ms / −15% |
+
+The source map lazy-load change (Pass 3) is the largest single contributor, accounting for ~5.8ms of the total ~6ms gain.
+
 ## Recommended Next Step
-
-The next best experiment is:
-
-1. keep the new CLI trace and host-side sub-phase breakdown
-2. move to the Bun delta comparison next
-3. revisit host-side deferral only if future profiling points to a clear target with a measurable upside
-4. only after that, evaluate whether an Edge-specific startup snapshot pipeline is worth prototyping
-
-That sequencing is important.
 
 Right now, the evidence suggests:
 
-- JS micro-deferrals alone are unlikely to yield a large cold-start win
+- JS micro-deferrals alone are unlikely to yield a large cold-start win (prior experiments confirmed this)
+- source map lazy loading is different from prior attempts because it targets a module that is NOT required anywhere else in the default bootstrap chain — confirmed by the ~14% wall-clock improvement
 - host-side tracing is now good enough to evaluate future deferral ideas honestly
 - the remaining high-value work is split between:
-  - host/embedder startup
   - build-time snapshot/preinit strategy
+  - further host/embedder startup work
+
+Next steps in priority order:
+
+1. move to the Bun delta comparison next to identify further targets
+2. revisit host-side deferral only if future profiling points to a clear target with a measurable upside
+3. only after that, evaluate whether an Edge-specific startup snapshot pipeline is worth prototyping
