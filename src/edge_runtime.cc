@@ -3569,12 +3569,19 @@ int EdgeRunWorkerThreadMain(napi_env env,
       EdgeBootstrapMode::kWorkerThread);
 }
 
-bool EdgeInitializeOpenSslForCli(std::string* error_out) {
-  const edge_options::EffectiveCliState state = edge_options::BuildEffectiveCliState(g_edge_cli_exec_argv);
-  const std::vector<std::string>& exec_argv = state.ok ? state.effective_tokens : g_edge_cli_exec_argv;
+bool EdgeInitializeOpenSslForExecArgv(const std::vector<std::string>& exec_argv,
+                                      bool validate_csprng,
+                                      std::string* error_out) {
   if (!ConfigureOpenSslFromExecArgv(exec_argv, error_out)) {
     return false;
   }
+  if (!validate_csprng) {
+    return true;
+  }
+  return EdgeValidateOpenSslCsprng();
+}
+
+bool EdgeValidateOpenSslCsprng() {
   // Match Node's startup behavior closely enough to fail fast when the loaded
   // provider configuration leaves no usable CSPRNG implementation.
   if (!ncrypto::CSPRNG(nullptr, 0)) {

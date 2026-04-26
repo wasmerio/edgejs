@@ -28,7 +28,10 @@ int EdgeRunScriptFileWithLoop(napi_env env,
 int EdgeRunWorkerThreadMain(napi_env env,
                            const std::vector<std::string>& exec_argv,
                            std::string* error_out);
-bool EdgeInitializeOpenSslForCli(std::string* error_out);
+bool EdgeInitializeOpenSslForExecArgv(const std::vector<std::string>& exec_argv,
+                                      bool validate_csprng,
+                                      std::string* error_out);
+bool EdgeValidateOpenSslCsprng();
 void EdgeSetCurrentScriptPath(const std::string& script_path);
 void EdgeSetScriptArgv(const std::vector<std::string>& script_argv);
 void EdgeSetExecArgv(const std::vector<std::string>& exec_argv);

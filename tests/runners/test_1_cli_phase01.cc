@@ -456,6 +456,45 @@ TEST_F(Test1CliPhase01, EdgeenvRunsNodeThroughCompatWrapper) {
 #endif
 }
 
+TEST_F(Test1CliPhase01, HelpFlagPrintsUsageToStdout) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "Help subprocess check is POSIX-oriented";
+#else
+  namespace fs = std::filesystem;
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const auto temp_root = fs::temp_directory_path() / "edge_phase01_help_flag";
+  const auto stdout_path = temp_root / "stdout.txt";
+  const auto stderr_path = temp_root / "stderr.txt";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(temp_root, ec);
+  ASSERT_FALSE(ec) << "Failed to create temp directory";
+
+  const std::string cmd =
+      ShellSingleQuoted(edge_path.string()) + " --help >" +
+      ShellSingleQuoted(stdout_path.string()) + " 2>" +
+      ShellSingleQuoted(stderr_path.string());
+  const int status = std::system(cmd.c_str());
+  ASSERT_NE(status, -1);
+  ASSERT_TRUE(WIFEXITED(status)) << "status=" << status;
+
+  std::ifstream stdout_in(stdout_path);
+  const std::string stdout_output((std::istreambuf_iterator<char>(stdout_in)),
+                                  std::istreambuf_iterator<char>());
+  std::ifstream stderr_in(stderr_path);
+  const std::string stderr_output((std::istreambuf_iterator<char>(stderr_in)),
+                                  std::istreambuf_iterator<char>());
+  fs::remove_all(temp_root, ec);
+
+  EXPECT_EQ(WEXITSTATUS(status), 0) << "stderr=" << stderr_output;
+  EXPECT_TRUE(stderr_output.empty()) << "stderr=" << stderr_output;
+  EXPECT_NE(stdout_output.find("Usage: edge"), std::string::npos) << stdout_output;
+  EXPECT_NE(stdout_output.find("--completion-bash"), std::string::npos) << stdout_output;
+#endif
+}
+
 TEST_F(Test1CliPhase01, ExtraArgsAreForwardedToScriptArgv) {
   const std::string script_path = WriteTempScript(
       "edge_phase01_cli_extra_args",

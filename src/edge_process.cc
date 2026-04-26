@@ -4964,6 +4964,10 @@ void ReportBindingFinalize(napi_env env, void* data, void* hint) {
 
 }  // namespace
 
+uint64_t EdgeGetProcessStartTimeNanoseconds() {
+  return g_process_start_time_ns;
+}
+
 void EdgeSetProcessArgv0(const std::string& argv0) {
   g_edge_argv0 = argv0;
 }
@@ -5374,7 +5378,8 @@ napi_status EdgeInstallProcessObject(napi_env env,
     }
   }
 
-  // Native internalBinding('report')
+  // Native internalBinding('report'): keep state ready for fatal-report behavior,
+  // but defer creating the JS binding object until it is actually requested.
   {
     auto& state = EnsureReportState(env);
     DeleteRefIfPresent(env, &state.binding_ref);
@@ -5392,10 +5397,29 @@ napi_status EdgeInstallProcessObject(napi_env env,
     state.command_line = BuildCommandLineSnapshot(exec_argv, script_argv, current_script_path);
     state.max_heap_size_bytes = ReadReportHeapLimitFromExecArgv(exec_argv);
     state.sequence = 0;
+  }
 
+  if (unofficial_napi_set_fatal_error_callbacks(env, FatalErrorReportCallback, OomErrorReportCallback) != napi_ok) {
+    return napi_generic_failure;
+  }
+
+  return napi_ok;
+}
+
+napi_value EdgeGetProcessMethodsBinding(napi_env env) {
+  ProcessMethodsBindingState* state = GetProcessMethodsState(env);
+  if (state == nullptr || state->binding_ref == nullptr) return nullptr;
+  napi_value binding = nullptr;
+  if (napi_get_reference_value(env, state->binding_ref, &binding) != napi_ok || binding == nullptr) return nullptr;
+  return binding;
+}
+
+napi_value EdgeGetReportBinding(napi_env env) {
+  ReportBindingState* state = GetReportState(env);
+  if (state == nullptr) return nullptr;
+  if (state->binding_ref == nullptr) {
     napi_value binding = nullptr;
-    status = napi_create_object(env, &binding);
-    if (status != napi_ok || binding == nullptr) return (status == napi_ok) ? napi_generic_failure : status;
+    if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return nullptr;
     napi_wrap(env, binding, nullptr, ReportBindingFinalize, nullptr, nullptr);
 
     struct BindingMethod {
@@ -5429,32 +5453,14 @@ napi_status EdgeInstallProcessObject(napi_env env,
       if (napi_create_function(env, method.name, NAPI_AUTO_LENGTH, method.cb, nullptr, &fn) != napi_ok ||
           fn == nullptr ||
           napi_set_named_property(env, binding, method.name, fn) != napi_ok) {
-        return napi_generic_failure;
+        return nullptr;
       }
     }
-    if (napi_create_reference(env, binding, 1, &state.binding_ref) != napi_ok || state.binding_ref == nullptr) {
-      return napi_generic_failure;
+    if (napi_create_reference(env, binding, 1, &state->binding_ref) != napi_ok || state->binding_ref == nullptr) {
+      return nullptr;
     }
+    return binding;
   }
-
-  if (unofficial_napi_set_fatal_error_callbacks(env, FatalErrorReportCallback, OomErrorReportCallback) != napi_ok) {
-    return napi_generic_failure;
-  }
-
-  return napi_ok;
-}
-
-napi_value EdgeGetProcessMethodsBinding(napi_env env) {
-  ProcessMethodsBindingState* state = GetProcessMethodsState(env);
-  if (state == nullptr || state->binding_ref == nullptr) return nullptr;
-  napi_value binding = nullptr;
-  if (napi_get_reference_value(env, state->binding_ref, &binding) != napi_ok || binding == nullptr) return nullptr;
-  return binding;
-}
-
-napi_value EdgeGetReportBinding(napi_env env) {
-  ReportBindingState* state = GetReportState(env);
-  if (state == nullptr || state->binding_ref == nullptr) return nullptr;
   napi_value binding = nullptr;
   if (napi_get_reference_value(env, state->binding_ref, &binding) != napi_ok || binding == nullptr) return nullptr;
   return binding;
