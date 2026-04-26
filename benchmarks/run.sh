@@ -102,9 +102,15 @@ case "$BENCHMARK" in
     BUN_CMD="$BUN_BIN benchmarks/workloads/http-loopback.js"
     DENO_CMD="$DENO_BIN run --allow-net=127.0.0.1 benchmarks/workloads/http-loopback.js"
     ;;
+  timers-settimeout-chain)
+    EDGE_CMD="$EDGE_BIN benchmarks/workloads/timers-settimeout-chain.js"
+    NODE_CMD="$NODE_BIN benchmarks/workloads/timers-settimeout-chain.js"
+    BUN_CMD="$BUN_BIN benchmarks/workloads/timers-settimeout-chain.js"
+    DENO_CMD="$DENO_BIN run benchmarks/workloads/timers-settimeout-chain.js"
+    ;;
   *)
     echo "Unknown benchmark: $BENCHMARK"
-    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain, zlib-deflate-sync, string-compare-split, cli-eval-empty, cli-print-literal, cli-print-process-version, http-loopback"
+    echo "Available benchmarks: empty-startup, console-log, json-parse-stringify, promise-microtask-chain, zlib-deflate-sync, string-compare-split, cli-eval-empty, cli-print-literal, cli-print-process-version, http-loopback, timers-settimeout-chain"
     exit 1
     ;;
 esac

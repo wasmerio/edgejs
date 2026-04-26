@@ -130,6 +130,21 @@ What it does not measure:
 - filesystem or network I/O
 - long-running application throughput
 
+### `timers-settimeout-chain`
+
+Chains 200 sequential `setTimeout(fn, 0)` calls. Each callback fires, increments a counter, and schedules the next timer. Prints a deterministic checksum when the chain completes.
+
+What it isolates:
+- per-`setTimeout` dispatch cost in the event loop timer phase
+- callback scheduling and execution overhead across N iterations
+- a runtime surface that maps to the roadmap's timers benchmark lane
+
+What it does not measure:
+- concurrent timer scheduling (all timers here are sequential)
+- high-resolution timer behavior
+- timer cancellation or re-scheduling
+- `setImmediate` or `queueMicrotask` (covered by `promise-microtask-chain`)
+
 ## Coverage notes
 
 Each benchmark in this directory is intentionally narrow.
