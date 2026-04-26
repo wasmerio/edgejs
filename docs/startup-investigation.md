@@ -764,19 +764,54 @@ Risk and caveats:
 
 The source map lazy-load change (Pass 3) is the largest single contributor, accounting for ~5.8ms of the total ~6ms gain.
 
+## Pass 4 Investigation: source_map_cache residual load
+
+After Pass 3, further investigation traced whether `source_map_cache` was still being loaded at startup.
+
+### Tracing technique
+
+Added a temporary `process._rawDebug(new Error().stack)` at the top of `source_map_cache.js`, rebuilt, and ran `edge -e ""` to capture the load-site stack. This is reusable for any module.
+
+### What was found
+
+`source_map_cache` was still loading on every `edge -e ""` startup via this chain:
+
+```
+eval_string:71 → evalScript → globalThis.module (lazy getter) → require('module')
+→ lib/module.js:7 (require('internal/source_map/source_map_cache'))
+```
+
+`evalScript()` accessed `globalThis.module` to preserve any value the REPL might have set. With `addBuiltinLibsToObject()` in place, `globalThis.module` is a lazy getter backed by `require('module')`. Accessing it triggered a full load of `lib/module.js` and its transitive deps.
+
+### What was tried
+
+Three approaches were tested:
+
+1. Make `maybeCacheSourceMap` lazy in `lib/internal/modules/esm/utils.js` — no measurable improvement (`is_main_thread.js` loaded `esm/utils` which loaded `source_map_cache`)
+2. Make `maybeCacheSourceMap` lazy in `lib/internal/modules/cjs/loader.js` — no measurable improvement (CJS loader is loaded after the `is_main_thread.js` path)
+3. Fix `evalScript` / `evalTypeScript` in `execution.js` to use `ObjectGetOwnPropertyDescriptor` instead of accessing the lazy getter — **correct fix, committed**, but no measurable improvement
+
+### Why no wall-clock win
+
+After Pass 3, `source_map_cache`'s own transitive dependencies are already in the module cache by the time any of the lazy load sites trigger. The incremental cost of loading `source_map_cache` itself (with deps cached) is below measurement noise (~0.3ms or less). The 5.8ms Pass 3 win was specifically from eliminating the module's FIRST load during realm bootstrap, before its deps were cached.
+
+### Lesson
+
+The `EDGE_STARTUP_TRACE=1 + new Error().stack` trace technique reliably finds who loads a module. Use it before chasing any module load — confirm it is actually loaded before deps are cached, or the savings will be sub-noise.
+
 ## Recommended Next Step
 
 Right now, the evidence suggests:
 
-- JS micro-deferrals alone are unlikely to yield a large cold-start win (prior experiments confirmed this)
-- source map lazy loading is different from prior attempts because it targets a module that is NOT required anywhere else in the default bootstrap chain — confirmed by the ~14% wall-clock improvement
-- host-side tracing is now good enough to evaluate future deferral ideas honestly
-- the remaining high-value work is split between:
-  - build-time snapshot/preinit strategy
-  - further host/embedder startup work
+- JS lazy-load wins are now mostly exhausted at the current startup cost baseline
+- The `execution.js` lazy getter fix is committed (`19bc9c14`) and is a correct behavioral improvement even without a large measurable speedup
+- Remaining named JS phases (timers ~2.9ms, realm ~3ms, primordials ~2.6ms, thread switch ~2.1ms) are structurally unavoidable without a snapshot approach
+- The remaining high-value work is:
+  - build-time startup snapshot/preinit (eliminates most of realm bootstrap cost)
+  - stricter `pre_execution` path splitting for eval vs run-file vs test modes
 
 Next steps in priority order:
 
-1. move to the Bun delta comparison next to identify further targets
-2. revisit host-side deferral only if future profiling points to a clear target with a measurable upside
-3. only after that, evaluate whether an Edge-specific startup snapshot pipeline is worth prototyping
+1. Bun delta comparison to identify any remaining JS surfaces worth targeting
+2. Host-side deferral only if future profiling shows a clear >1ms target
+3. Evaluate an Edge-specific startup snapshot pipeline as the next major investment
