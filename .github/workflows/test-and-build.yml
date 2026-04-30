@@ -115,6 +115,10 @@ jobs:
           path: test-edge.log
           if-no-files-found: warn
 
+      - name: Production readiness smoke
+        run: |
+          make test-production-readiness
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -349,6 +353,10 @@ jobs:
       - name: Test edge
         run: |
           make test-only TEST_JOBS=4
+
+      - name: Production readiness smoke
+        run: |
+          make test-production-readiness
 
       - name: sccache stats
         if: always()
