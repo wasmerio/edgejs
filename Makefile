@@ -23,6 +23,7 @@ WASIX_EDGEJS_WASM ?= ./build-wasix/edgejs.wasm
 WASIX_NAPI_SMOKE_JS ?= console.log('hello world!');
 WASMER_BIN ?= wasmer
 WASIX_PACKAGE_DIR ?= $(CURDIR)
+WASIX_SAFE_MODE_ARTIFACT_DIR ?= artifacts/wasix-safe-mode
 WASIX_SSL_CERTS_DIR ?= ssl-certs
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -65,7 +66,7 @@ test-wasix-napi-cli:
 	printf '%s\n' "$$output" | grep -Fx "hello world!"
 
 test-wasix-safe-mode:
-	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)"
+	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)" --artifact-dir "$(WASIX_SAFE_MODE_ARTIFACT_DIR)"
 
 $(EDGE_BINARY):
 	$(MAKE) build

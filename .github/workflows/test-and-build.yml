@@ -464,6 +464,14 @@ jobs:
           set -euo pipefail
           make test-wasix-safe-mode WASMER_BIN=wasmer WASIX_PACKAGE_DIR="$(pwd)/dist"
 
+      - name: Upload WASIX safe-mode smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasix-safe-mode-smoke-linux
+          path: artifacts/wasix-safe-mode
+          if-no-files-found: ignore
+
       - name: Upload artifact edge
         uses: actions/upload-artifact@v4
         with:
