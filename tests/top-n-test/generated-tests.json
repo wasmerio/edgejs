@@ -1,0 +1,506 @@
+{
+  "generatedAt": "2026-03-13T12:19:10.279Z",
+  "sourceManifest": "top-packages.json",
+  "tests": [
+    {
+      "packageName": "debug",
+      "testFile": "debug-test.js",
+      "rank": 1
+    },
+    {
+      "packageName": "minimatch",
+      "testFile": "minimatch-test.js",
+      "rank": 2
+    },
+    {
+      "packageName": "chalk",
+      "testFile": "chalk-test.js",
+      "rank": 3
+    },
+    {
+      "packageName": "lru-cache",
+      "testFile": "lru-cache-test.js",
+      "rank": 4
+    },
+    {
+      "packageName": "emoji-regex",
+      "testFile": "emoji-regex-test.js",
+      "rank": 5
+    },
+    {
+      "packageName": "commander",
+      "testFile": "commander-test.js",
+      "rank": 6
+    },
+    {
+      "packageName": "color-name",
+      "testFile": "color-name-test.js",
+      "rank": 7
+    },
+    {
+      "packageName": "color-convert",
+      "testFile": "color-convert-test.js",
+      "rank": 8
+    },
+    {
+      "packageName": "ajv",
+      "testFile": "ajv-test.js",
+      "rank": 9
+    },
+    {
+      "packageName": "escape-string-regexp",
+      "testFile": "escape-string-regexp-test.js",
+      "rank": 10
+    },
+    {
+      "packageName": "uuid",
+      "testFile": "uuid-test.js",
+      "rank": 11
+    },
+    {
+      "packageName": "which",
+      "testFile": "which-test.js",
+      "rank": 12
+    },
+    {
+      "packageName": "json-schema-traverse",
+      "testFile": "json-schema-traverse-test.js",
+      "rank": 13
+    },
+    {
+      "packageName": "ws",
+      "testFile": "ws-test.js",
+      "rank": 14
+    },
+    {
+      "packageName": "globals",
+      "testFile": "globals-test.js",
+      "rank": 15
+    },
+    {
+      "packageName": "acorn",
+      "testFile": "acorn-test.js",
+      "rank": 16
+    },
+    {
+      "packageName": "yargs",
+      "testFile": "yargs-test.js",
+      "rank": 17
+    },
+    {
+      "packageName": "postcss",
+      "testFile": "postcss-test.js",
+      "rank": 18
+    },
+    {
+      "packageName": "fs-extra",
+      "testFile": "fs-extra-test.js",
+      "rank": 19
+    },
+    {
+      "packageName": "cross-spawn",
+      "testFile": "cross-spawn-test.js",
+      "rank": 20
+    },
+    {
+      "packageName": "path-exists",
+      "testFile": "path-exists-test.js",
+      "rank": 21
+    },
+    {
+      "packageName": "strip-json-comments",
+      "testFile": "strip-json-comments-test.js",
+      "rank": 22
+    },
+    {
+      "packageName": "path-to-regexp",
+      "testFile": "path-to-regexp-test.js",
+      "rank": 23
+    },
+    {
+      "packageName": "onetime",
+      "testFile": "onetime-test.js",
+      "rank": 24
+    },
+    {
+      "packageName": "get-intrinsic",
+      "testFile": "get-intrinsic-test.js",
+      "rank": 25
+    },
+    {
+      "packageName": "function-bind",
+      "testFile": "function-bind-test.js",
+      "rank": 26
+    },
+    {
+      "packageName": "readdirp",
+      "testFile": "readdirp-test.js",
+      "rank": 27
+    },
+    {
+      "packageName": "browserslist",
+      "testFile": "browserslist-test.js",
+      "rank": 28
+    },
+    {
+      "packageName": "fill-range",
+      "testFile": "fill-range-test.js",
+      "rank": 29
+    },
+    {
+      "packageName": "yaml",
+      "testFile": "yaml-test.js",
+      "rank": 30
+    },
+    {
+      "packageName": "escalade",
+      "testFile": "escalade-test.js",
+      "rank": 31
+    },
+    {
+      "packageName": "nanoid",
+      "testFile": "nanoid-test.js",
+      "rank": 32
+    },
+    {
+      "packageName": "strip-bom",
+      "testFile": "strip-bom-test.js",
+      "rank": 33
+    },
+    {
+      "packageName": "ci-info",
+      "testFile": "ci-info-test.js",
+      "rank": 34
+    },
+    {
+      "packageName": "mime",
+      "testFile": "mime-test.js",
+      "rank": 35
+    },
+    {
+      "packageName": "has-tostringtag",
+      "testFile": "has-tostringtag-test.js",
+      "rank": 36
+    },
+    {
+      "packageName": "object-inspect",
+      "testFile": "object-inspect-test.js",
+      "rank": 37
+    },
+    {
+      "packageName": "dotenv",
+      "testFile": "dotenv-test.js",
+      "rank": 38
+    },
+    {
+      "packageName": "eslint",
+      "testFile": "eslint-test.js",
+      "rank": 39
+    },
+    {
+      "packageName": "jsonfile",
+      "testFile": "jsonfile-test.js",
+      "rank": 40
+    },
+    {
+      "packageName": "encodeurl",
+      "testFile": "encodeurl-test.js",
+      "rank": 41
+    },
+    {
+      "packageName": "safer-buffer",
+      "testFile": "safer-buffer-test.js",
+      "rank": 42
+    },
+    {
+      "packageName": "finalhandler",
+      "testFile": "finalhandler-test.js",
+      "rank": 43
+    },
+    {
+      "packageName": "react",
+      "testFile": "react-test.js",
+      "rank": 44
+    },
+    {
+      "packageName": "source-map-js",
+      "testFile": "source-map-js-test.js",
+      "rank": 45
+    },
+    {
+      "packageName": "file-entry-cache",
+      "testFile": "file-entry-cache-test.js",
+      "rank": 46
+    },
+    {
+      "packageName": "path-parse",
+      "testFile": "path-parse-test.js",
+      "rank": 47
+    },
+    {
+      "packageName": "async",
+      "testFile": "async-test.js",
+      "rank": 48
+    },
+    {
+      "packageName": "setprototypeof",
+      "testFile": "setprototypeof-test.js",
+      "rank": 49
+    },
+    {
+      "packageName": "require-from-string",
+      "testFile": "require-from-string-test.js",
+      "rank": 50
+    },
+    {
+      "packageName": "rxjs",
+      "testFile": "rxjs-test.js",
+      "rank": 51
+    },
+    {
+      "packageName": "express",
+      "testFile": "express-test.js",
+      "rank": 52
+    },
+    {
+      "packageName": "prettier",
+      "testFile": "prettier-test.js",
+      "rank": 53
+    },
+    {
+      "packageName": "merge-stream",
+      "testFile": "merge-stream-test.js",
+      "rank": 54
+    },
+    {
+      "packageName": "lodash.merge",
+      "testFile": "lodash.merge-test.js",
+      "rank": 55
+    },
+    {
+      "packageName": "domhandler",
+      "testFile": "domhandler-test.js",
+      "rank": 56
+    },
+    {
+      "packageName": "toidentifier",
+      "testFile": "toidentifier-test.js",
+      "rank": 57
+    },
+    {
+      "packageName": "object-keys",
+      "testFile": "object-keys-test.js",
+      "rank": 58
+    },
+    {
+      "packageName": "etag",
+      "testFile": "etag-test.js",
+      "rank": 59
+    },
+    {
+      "packageName": "is-date-object",
+      "testFile": "is-date-object-test.js",
+      "rank": 60
+    },
+    {
+      "packageName": "jest-matcher-utils",
+      "testFile": "jest-matcher-utils-test.js",
+      "rank": 61
+    },
+    {
+      "packageName": "htmlparser2",
+      "testFile": "htmlparser2-test.js",
+      "rank": 62
+    },
+    {
+      "packageName": "string.prototype.trimend",
+      "testFile": "string.prototype.trimend-test.js",
+      "rank": 63
+    },
+    {
+      "packageName": "is-shared-array-buffer",
+      "testFile": "is-shared-array-buffer-test.js",
+      "rank": 64
+    },
+    {
+      "packageName": "jest-mock",
+      "testFile": "jest-mock-test.js",
+      "rank": 65
+    },
+    {
+      "packageName": "has-bigints",
+      "testFile": "has-bigints-test.js",
+      "rank": 66
+    },
+    {
+      "packageName": "core-js",
+      "testFile": "core-js-test.js",
+      "rank": 67
+    },
+    {
+      "packageName": "kleur",
+      "testFile": "kleur-test.js",
+      "rank": 68
+    },
+    {
+      "packageName": "cli-width",
+      "testFile": "cli-width-test.js",
+      "rank": 69
+    },
+    {
+      "packageName": "destroy",
+      "testFile": "destroy-test.js",
+      "rank": 70
+    },
+    {
+      "packageName": "cli-spinners",
+      "testFile": "cli-spinners-test.js",
+      "rank": 71
+    },
+    {
+      "packageName": "neo-async",
+      "testFile": "neo-async-test.js",
+      "rank": 72
+    },
+    {
+      "packageName": "methods",
+      "testFile": "methods-test.js",
+      "rank": 73
+    },
+    {
+      "packageName": "autoprefixer",
+      "testFile": "autoprefixer-test.js",
+      "rank": 74
+    },
+    {
+      "packageName": "stack-utils",
+      "testFile": "stack-utils-test.js",
+      "rank": 75
+    },
+    {
+      "packageName": "find-cache-dir",
+      "testFile": "find-cache-dir-test.js",
+      "rank": 76
+    },
+    {
+      "packageName": "webpack",
+      "testFile": "webpack-test.js",
+      "rank": 77
+    },
+    {
+      "packageName": "ts-node",
+      "testFile": "ts-node-test.js",
+      "rank": 78
+    },
+    {
+      "packageName": "core-js-compat",
+      "testFile": "core-js-compat-test.js",
+      "rank": 79
+    },
+    {
+      "packageName": "bser",
+      "testFile": "bser-test.js",
+      "rank": 80
+    },
+    {
+      "packageName": "set-blocking",
+      "testFile": "set-blocking-test.js",
+      "rank": 81
+    },
+    {
+      "packageName": "playwright-core",
+      "testFile": "playwright-core-test.js",
+      "rank": 82
+    },
+    {
+      "packageName": "walker",
+      "testFile": "walker-test.js",
+      "rank": 83
+    },
+    {
+      "packageName": "lodash.debounce",
+      "testFile": "lodash.debounce-test.js",
+      "rank": 84
+    },
+    {
+      "packageName": "lodash.once",
+      "testFile": "lodash.once-test.js",
+      "rank": 85
+    },
+    {
+      "packageName": "immutable",
+      "testFile": "immutable-test.js",
+      "rank": 86
+    },
+    {
+      "packageName": "log-update",
+      "testFile": "log-update-test.js",
+      "rank": 87
+    },
+    {
+      "packageName": "regenerate",
+      "testFile": "regenerate-test.js",
+      "rank": 88
+    },
+    {
+      "packageName": "lodash.memoize",
+      "testFile": "lodash.memoize-test.js",
+      "rank": 89
+    },
+    {
+      "packageName": "immer",
+      "testFile": "immer-test.js",
+      "rank": 90
+    },
+    {
+      "packageName": "lie",
+      "testFile": "lie-test.js",
+      "rank": 91
+    },
+    {
+      "packageName": "html-entities",
+      "testFile": "html-entities-test.js",
+      "rank": 92
+    },
+    {
+      "packageName": "vfile",
+      "testFile": "vfile-test.js",
+      "rank": 93
+    },
+    {
+      "packageName": "fast-diff",
+      "testFile": "fast-diff-test.js",
+      "rank": 94
+    },
+    {
+      "packageName": "camel-case",
+      "testFile": "camel-case-test.js",
+      "rank": 95
+    },
+    {
+      "packageName": "cacheable-request",
+      "testFile": "cacheable-request-test.js",
+      "rank": 96
+    },
+    {
+      "packageName": "is-accessor-descriptor",
+      "testFile": "is-accessor-descriptor-test.js",
+      "rank": 97
+    },
+    {
+      "packageName": "is-data-descriptor",
+      "testFile": "is-data-descriptor-test.js",
+      "rank": 98
+    },
+    {
+      "packageName": "postcss-modules-extract-imports",
+      "testFile": "postcss-modules-extract-imports-test.js",
+      "rank": 99
+    },
+    {
+      "packageName": "webpack-dev-middleware",
+      "testFile": "webpack-dev-middleware-test.js",
+      "rank": 100
+    }
+  ]
+}

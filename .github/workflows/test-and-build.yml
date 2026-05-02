@@ -50,6 +50,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Ensure submodules are initialized
@@ -94,9 +98,32 @@ jobs:
           path: edge-linux-amd64.zip
           if-no-files-found: error
 
-      - name: Test edge
+      # - name: Test edge
+      #   run: |
+      #     make test-only TEST_JOBS=4
+
+      - name: Install top-n test dependencies
+        shell: bash
         run: |
-          make test-only TEST_JOBS=4
+          set -euo pipefail
+          cd tests/top-n-test
+          npm ci --legacy-peer-deps
+
+      - name: Run top-n tests (node)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tests/top-n-test
+          node runner.js -r node --all
+
+      - name: Run top-n tests (edgejs)
+        shell: bash
+        env:
+          EDGEJS_BIN: ${{ github.workspace }}/build-edge/edge
+        run: |
+          set -euo pipefail
+          cd tests/top-n-test
+          node runner.js -r edgejs --all
 
       - name: sccache stats
         if: always()
@@ -292,6 +319,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Ensure submodules are initialized
@@ -329,9 +360,32 @@ jobs:
           path: edge-darwin-arm64.zip
           if-no-files-found: error
 
-      - name: Test edge
+      # - name: Test edge
+      #   run: |
+      #     make test-only TEST_JOBS=4
+
+      - name: Install top-n test dependencies
+        shell: bash
         run: |
-          make test-only TEST_JOBS=4
+          set -euo pipefail
+          cd tests/top-n-test
+          npm ci --legacy-peer-deps
+
+      - name: Run top-n tests (node)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tests/top-n-test
+          node runner.js -r node --all
+
+      - name: Run top-n tests (edgejs)
+        shell: bash
+        env:
+          EDGEJS_BIN: ${{ github.workspace }}/build-edge/edge
+        run: |
+          set -euo pipefail
+          cd tests/top-n-test
+          node runner.js -r edgejs --all
 
       - name: sccache stats
         if: always()
@@ -451,6 +505,35 @@ jobs:
         run: |
           set -euo pipefail
           make test-wasix-safe-mode WASMER_BIN=wasmer
+
+      - name: Install Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSfL https://get.wasmer.io | sh -s "v7.1.0-rc.2"
+          echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.wasmer/bin/wasmer" --version
+
+      - name: Install top-n test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tests/top-n-test
+          npm ci --legacy-peer-deps
+
+      - name: Run top-n tests (wasix_edgejs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          wasmer package build .
+          webc_path="$(find "${GITHUB_WORKSPACE}" -maxdepth 2 -type f -name '*.webc' | head -n 1)"
+          if [[ -z "${webc_path}" ]]; then
+            echo "Failed to locate generated .webc package after 'wasmer package build .'." >&2
+            exit 1
+          fi
+          cd tests/top-n-test
+          WASMER_BIN=wasmer EDGEJS_PACKAGE="${webc_path}" node runner.js -r wasix_edgejs --all --skip which, cross-spawn, playwright-core
 
       - name: Generate dist
         shell: bash

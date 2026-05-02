@@ -1,0 +1,820 @@
+{
+  "generatedAt": "2026-03-13T17:35:36.354Z",
+  "method": {
+    "note": "Top-100 inventory derived from npms candidate pool and ranked by npm last-year downloads. This file is locked and requires manual intervention to update.",
+    "candidateQueries": [
+      "scope:unscoped",
+      "scope:scoped"
+    ],
+    "candidateSource": "https://api.npms.io/v2/search",
+    "rankingSource": "https://api.npmjs.org/downloads/point/last-year/<package>",
+    "caveat": "Inventory-oriented approximation from broad candidate pool; locked for reproducibility."
+  },
+  "countRequested": 100,
+  "candidateCount": 500,
+  "countSelected": 100,
+  "packages": [
+    {
+      "rank": 1,
+      "name": "debug",
+      "version": "4.3.4",
+      "downloadsLastMonth": 2177087753,
+      "description": "Lightweight debugging utility for Node.js and the browser",
+      "downloadsLastYear": 20574894752
+    },
+    {
+      "rank": 2,
+      "name": "chalk",
+      "version": "5.0.1",
+      "downloadsLastMonth": 1700151189,
+      "description": "Terminal string styling done right",
+      "downloadsLastYear": 17475384726
+    },
+    {
+      "rank": 3,
+      "name": "minimatch",
+      "version": "5.1.0",
+      "downloadsLastMonth": 2027631009,
+      "description": "a glob matcher in javascript",
+      "downloadsLastYear": 16870788394
+    },
+    {
+      "rank": 4,
+      "name": "lru-cache",
+      "version": "7.10.1",
+      "downloadsLastMonth": 1456973327,
+      "description": "A cache object that deletes the least-recently-used items.",
+      "downloadsLastYear": 12592472787
+    },
+    {
+      "rank": 5,
+      "name": "commander",
+      "version": "9.3.0",
+      "downloadsLastMonth": 1272434260,
+      "description": "the complete solution for node.js command-line programs",
+      "downloadsLastYear": 11521404276
+    },
+    {
+      "rank": 6,
+      "name": "color-convert",
+      "version": "2.0.1",
+      "downloadsLastMonth": 1076149473,
+      "description": "Plain color conversion functions",
+      "downloadsLastYear": 11442972229
+    },
+    {
+      "rank": 7,
+      "name": "color-name",
+      "version": "1.1.4",
+      "downloadsLastMonth": 1079936743,
+      "description": "A list of color names and its values",
+      "downloadsLastYear": 11419732970
+    },
+    {
+      "rank": 8,
+      "name": "emoji-regex",
+      "version": "10.1.0",
+      "downloadsLastMonth": 1336159078,
+      "description": "A regular expression to match all Emoji-only symbols as per the Unicode Standard.",
+      "downloadsLastYear": 11058600775
+    },
+    {
+      "rank": 9,
+      "name": "escape-string-regexp",
+      "version": "5.0.0",
+      "downloadsLastMonth": 935454452,
+      "description": "Escape RegExp special characters",
+      "downloadsLastYear": 9248999799
+    },
+    {
+      "rank": 10,
+      "name": "uuid",
+      "version": "8.3.2",
+      "downloadsLastMonth": 902552442,
+      "description": "RFC4122 (v1, v4, and v5) UUIDs",
+      "downloadsLastYear": 8600690646
+    },
+    {
+      "rank": 11,
+      "name": "ajv",
+      "version": "8.11.0",
+      "downloadsLastMonth": 982648196,
+      "description": "Another JSON Schema Validator",
+      "downloadsLastYear": 8348859532
+    },
+    {
+      "rank": 12,
+      "name": "which",
+      "version": "2.0.2",
+      "downloadsLastMonth": 844672806,
+      "description": "Like which(1) unix command. Find the first instance of an executable in the PATH.",
+      "downloadsLastYear": 7462793979
+    },
+    {
+      "rank": 13,
+      "name": "json-schema-traverse",
+      "version": "1.0.0",
+      "downloadsLastMonth": 823786508,
+      "description": "Traverse JSON Schema passing each schema object to callback",
+      "downloadsLastYear": 7348931725
+    },
+    {
+      "rank": 14,
+      "name": "globals",
+      "version": "13.15.0",
+      "downloadsLastMonth": 683111212,
+      "description": "Global identifiers from different JavaScript environments",
+      "downloadsLastYear": 6787629476
+    },
+    {
+      "rank": 15,
+      "name": "acorn",
+      "version": "8.7.1",
+      "downloadsLastMonth": 681724820,
+      "description": "ECMAScript parser",
+      "downloadsLastYear": 6422831729
+    },
+    {
+      "rank": 16,
+      "name": "yargs",
+      "version": "17.5.1",
+      "downloadsLastMonth": 674939185,
+      "description": "yargs the modern, pirate-themed, successor to optimist.",
+      "downloadsLastYear": 6420949473
+    },
+    {
+      "rank": 17,
+      "name": "fs-extra",
+      "version": "10.1.0",
+      "downloadsLastMonth": 636871227,
+      "description": "fs-extra contains methods that aren't included in the vanilla Node.js fs package. Such as recursive mkdir, copy, and remove.",
+      "downloadsLastYear": 6238600757
+    },
+    {
+      "rank": 18,
+      "name": "path-exists",
+      "version": "5.0.0",
+      "downloadsLastMonth": 580790065,
+      "description": "Check if a path exists",
+      "downloadsLastYear": 5988432874
+    },
+    {
+      "rank": 19,
+      "name": "ws",
+      "version": "8.8.0",
+      "downloadsLastMonth": 690826244,
+      "description": "Simple to use, blazing fast and thoroughly tested websocket client and server for Node.js",
+      "downloadsLastYear": 5976465497
+    },
+    {
+      "rank": 20,
+      "name": "cross-spawn",
+      "version": "7.0.3",
+      "downloadsLastMonth": 636075459,
+      "description": "Cross platform child_process#spawn and child_process#spawnSync",
+      "downloadsLastYear": 5765144361
+    },
+    {
+      "rank": 21,
+      "name": "postcss",
+      "version": "8.4.14",
+      "downloadsLastMonth": 651731859,
+      "description": "Tool for transforming styles with JS plugins",
+      "downloadsLastYear": 5503251107
+    },
+    {
+      "rank": 22,
+      "name": "onetime",
+      "version": "6.0.0",
+      "downloadsLastMonth": 549049879,
+      "description": "Ensure a function is only called once",
+      "downloadsLastYear": 4961947610
+    },
+    {
+      "rank": 23,
+      "name": "strip-json-comments",
+      "version": "4.0.0",
+      "downloadsLastMonth": 569928218,
+      "description": "Strip comments from JSON. Lets you use comments in your JSON files!",
+      "downloadsLastYear": 4924318911
+    },
+    {
+      "rank": 24,
+      "name": "fill-range",
+      "version": "7.0.1",
+      "downloadsLastMonth": 474188230,
+      "description": "Fill in a range of numbers or letters, optionally passing an increment or `step` to use, or create a regex-compatible range with `options.toRegex`",
+      "downloadsLastYear": 4796202287
+    },
+    {
+      "rank": 25,
+      "name": "path-to-regexp",
+      "version": "6.2.1",
+      "downloadsLastMonth": 566562035,
+      "description": "Express style path to RegExp utility",
+      "downloadsLastYear": 4546174970
+    },
+    {
+      "rank": 26,
+      "name": "get-intrinsic",
+      "version": "1.1.2",
+      "downloadsLastMonth": 524523548,
+      "description": "Get and robustly cache all JS language-level intrinsics at first require time",
+      "downloadsLastYear": 4535939099
+    },
+    {
+      "rank": 27,
+      "name": "strip-bom",
+      "version": "5.0.0",
+      "downloadsLastMonth": 444109151,
+      "description": "Strip UTF-8 byte order mark (BOM) from a string",
+      "downloadsLastYear": 4502069242
+    },
+    {
+      "rank": 28,
+      "name": "function-bind",
+      "version": "1.1.1",
+      "downloadsLastMonth": 510292828,
+      "description": "Implementation of Function.prototype.bind",
+      "downloadsLastYear": 4456643230
+    },
+    {
+      "rank": 29,
+      "name": "readdirp",
+      "version": "3.6.0",
+      "downloadsLastMonth": 488629910,
+      "description": "Recursive version of fs.readdir with streaming API.",
+      "downloadsLastYear": 4331414778
+    },
+    {
+      "rank": 30,
+      "name": "mime",
+      "version": "3.0.0",
+      "downloadsLastMonth": 433657513,
+      "description": "A comprehensive library for mime-type mapping",
+      "downloadsLastYear": 4231219214
+    },
+    {
+      "rank": 31,
+      "name": "yaml",
+      "version": "2.1.1",
+      "downloadsLastMonth": 471597421,
+      "description": "JavaScript parser and stringifier for YAML",
+      "downloadsLastYear": 4128070691
+    },
+    {
+      "rank": 32,
+      "name": "browserslist",
+      "version": "4.20.4",
+      "downloadsLastMonth": 481098489,
+      "description": "Share target browsers between different front-end tools, like Autoprefixer, Stylelint and babel-env-preset",
+      "downloadsLastYear": 4069318139
+    },
+    {
+      "rank": 33,
+      "name": "ci-info",
+      "version": "3.3.2",
+      "downloadsLastMonth": 434272655,
+      "description": "Get details about the current Continuous Integration environment",
+      "downloadsLastYear": 3941452354
+    },
+    {
+      "rank": 34,
+      "name": "escalade",
+      "version": "3.1.1",
+      "downloadsLastMonth": 459825145,
+      "description": "A tiny (183B to 210B) and fast utility to ascend parent directories",
+      "downloadsLastYear": 3926128950
+    },
+    {
+      "rank": 35,
+      "name": "object-inspect",
+      "version": "1.12.2",
+      "downloadsLastMonth": 426207955,
+      "description": "string representations of objects in node and the browser",
+      "downloadsLastYear": 3863697614
+    },
+    {
+      "rank": 36,
+      "name": "encodeurl",
+      "version": "1.0.2",
+      "downloadsLastMonth": 392463520,
+      "description": "Encode a URL to a percent-encoded form, excluding already-encoded sequences",
+      "downloadsLastYear": 3815724907
+    },
+    {
+      "rank": 37,
+      "name": "jsonfile",
+      "version": "6.1.0",
+      "downloadsLastMonth": 393375265,
+      "description": "Easily read/write JSON files.",
+      "downloadsLastYear": 3808086125
+    },
+    {
+      "rank": 38,
+      "name": "nanoid",
+      "version": "4.0.0",
+      "downloadsLastMonth": 454112949,
+      "description": "A tiny (116 bytes), secure URL-friendly unique string ID generator",
+      "downloadsLastYear": 3566149736
+    },
+    {
+      "rank": 39,
+      "name": "has-tostringtag",
+      "version": "1.0.0",
+      "downloadsLastMonth": 427618996,
+      "description": "Determine if the JS environment has `Symbol.toStringTag` support. Supports spec, or shams.",
+      "downloadsLastYear": 3515719735
+    },
+    {
+      "rank": 40,
+      "name": "async",
+      "version": "3.2.4",
+      "downloadsLastMonth": 346925468,
+      "description": "Higher-order functions and common patterns for asynchronous code",
+      "downloadsLastYear": 3485182214
+    },
+    {
+      "rank": 41,
+      "name": "dotenv",
+      "version": "16.0.1",
+      "downloadsLastMonth": 422971773,
+      "description": "Loads environment variables from .env file",
+      "downloadsLastYear": 3419346832
+    },
+    {
+      "rank": 42,
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "downloadsLastMonth": 392186700,
+      "description": "Modern Buffer API polyfill without footguns",
+      "downloadsLastYear": 3408820620
+    },
+    {
+      "rank": 43,
+      "name": "eslint",
+      "version": "8.18.0",
+      "downloadsLastMonth": 395092698,
+      "description": "An AST-based pattern checker for JavaScript.",
+      "downloadsLastYear": 3370453521
+    },
+    {
+      "rank": 44,
+      "name": "path-parse",
+      "version": "1.0.7",
+      "downloadsLastMonth": 351394021,
+      "description": "Node.js path.parse() ponyfill",
+      "downloadsLastYear": 3332666804
+    },
+    {
+      "rank": 45,
+      "name": "rxjs",
+      "version": "7.5.5",
+      "downloadsLastMonth": 327044086,
+      "description": "Reactive Extensions for modern JavaScript",
+      "downloadsLastYear": 3231190842
+    },
+    {
+      "rank": 46,
+      "name": "setprototypeof",
+      "version": "1.2.0",
+      "downloadsLastMonth": 343960455,
+      "description": "A small polyfill for Object.setprototypeof",
+      "downloadsLastYear": 3228425868
+    },
+    {
+      "rank": 47,
+      "name": "file-entry-cache",
+      "version": "6.0.1",
+      "downloadsLastMonth": 354835167,
+      "description": "Super simple cache for file metadata, useful for process that work o a given series of files and that only need to repeat the job on the changed ones since the previous run of the process",
+      "downloadsLastYear": 3165961615
+    },
+    {
+      "rank": 48,
+      "name": "prettier",
+      "version": "2.7.1",
+      "downloadsLastMonth": 316411819,
+      "description": "Prettier is an opinionated code formatter",
+      "downloadsLastYear": 2945818992
+    },
+    {
+      "rank": 49,
+      "name": "finalhandler",
+      "version": "1.2.0",
+      "downloadsLastMonth": 365230624,
+      "description": "Node.js final http responder",
+      "downloadsLastYear": 2939393662
+    },
+    {
+      "rank": 50,
+      "name": "source-map-js",
+      "version": "1.0.2",
+      "downloadsLastMonth": 360332213,
+      "description": "Generates and consumes source maps",
+      "downloadsLastYear": 2756973600
+    },
+    {
+      "rank": 51,
+      "name": "merge-stream",
+      "version": "2.0.0",
+      "downloadsLastMonth": 311994085,
+      "description": "Create a stream that emits events from multiple other streams",
+      "downloadsLastYear": 2747172317
+    },
+    {
+      "rank": 52,
+      "name": "lodash.merge",
+      "version": "4.6.2",
+      "downloadsLastMonth": 289139164,
+      "description": "The Lodash method `_.merge` exported as a module.",
+      "downloadsLastYear": 2659862915
+    },
+    {
+      "rank": 53,
+      "name": "domhandler",
+      "version": "5.0.3",
+      "downloadsLastMonth": 283106544,
+      "description": "Handler for htmlparser2 that turns pages into a dom",
+      "downloadsLastYear": 2659100469
+    },
+    {
+      "rank": 54,
+      "name": "object-keys",
+      "version": "1.1.1",
+      "downloadsLastMonth": 271879259,
+      "description": "An Object.keys replacement, in case Object.keys is not available. From https://github.com/es-shims/es5-shim",
+      "downloadsLastYear": 2599529557
+    },
+    {
+      "rank": 55,
+      "name": "require-from-string",
+      "version": "2.0.2",
+      "downloadsLastMonth": 341783071,
+      "description": "Require module from string",
+      "downloadsLastYear": 2582324901
+    },
+    {
+      "rank": 56,
+      "name": "react",
+      "version": "18.2.0",
+      "downloadsLastMonth": 361841953,
+      "description": "React is a JavaScript library for building user interfaces.",
+      "downloadsLastYear": 2581760292
+    },
+    {
+      "rank": 57,
+      "name": "express",
+      "version": "4.18.1",
+      "downloadsLastMonth": 324215317,
+      "description": "Fast, unopinionated, minimalist web framework",
+      "downloadsLastYear": 2579868642
+    },
+    {
+      "rank": 58,
+      "name": "jest-matcher-utils",
+      "version": "28.1.1",
+      "downloadsLastMonth": 249824489,
+      "description": "A set of utility functions for expect and related packages",
+      "downloadsLastYear": 2441215714
+    },
+    {
+      "rank": 59,
+      "name": "is-date-object",
+      "version": "1.0.5",
+      "downloadsLastMonth": 256056760,
+      "description": "Is this value a JS Date object? This module works cross-realm/iframe, and despite ES6 @@toStringTag.",
+      "downloadsLastYear": 2439934574
+    },
+    {
+      "rank": 60,
+      "name": "toidentifier",
+      "version": "1.0.1",
+      "downloadsLastMonth": 282411936,
+      "description": "Convert a string of words to a JavaScript identifier",
+      "downloadsLastYear": 2430044727
+    },
+    {
+      "rank": 61,
+      "name": "string.prototype.trimend",
+      "version": "1.0.5",
+      "downloadsLastMonth": 243834858,
+      "description": "ES2019 spec-compliant String.prototype.trimEnd shim.",
+      "downloadsLastYear": 2327705284
+    },
+    {
+      "rank": 62,
+      "name": "jest-mock",
+      "version": "28.1.1",
+      "downloadsLastMonth": 242329475,
+      "description": "**Note:** More details on user side API can be found in [Jest documentation](https://jestjs.io/docs/mock-function-api).",
+      "downloadsLastYear": 2269227454
+    },
+    {
+      "rank": 63,
+      "name": "is-shared-array-buffer",
+      "version": "1.0.2",
+      "downloadsLastMonth": 243814519,
+      "description": "Is this value a JS SharedArrayBuffer?",
+      "downloadsLastYear": 2263871718
+    },
+    {
+      "rank": 64,
+      "name": "htmlparser2",
+      "version": "8.0.1",
+      "downloadsLastMonth": 248986985,
+      "description": "Fast & forgiving HTML/XML parser",
+      "downloadsLastYear": 2250836482
+    },
+    {
+      "rank": 65,
+      "name": "etag",
+      "version": "1.8.1",
+      "downloadsLastMonth": 258690241,
+      "description": "Create simple HTTP ETags",
+      "downloadsLastYear": 2226846247
+    },
+    {
+      "rank": 66,
+      "name": "has-bigints",
+      "version": "1.0.2",
+      "downloadsLastMonth": 237009093,
+      "description": "Determine if the JS environment has BigInt support.",
+      "downloadsLastYear": 2204095096
+    },
+    {
+      "rank": 67,
+      "name": "core-js",
+      "version": "3.23.1",
+      "downloadsLastMonth": 229904246,
+      "description": "Standard library",
+      "downloadsLastYear": 2157976970
+    },
+    {
+      "rank": 68,
+      "name": "kleur",
+      "version": "4.1.4",
+      "downloadsLastMonth": 219199296,
+      "description": "The fastest Node.js library for formatting terminal text with ANSI colors~!",
+      "downloadsLastYear": 2094893387
+    },
+    {
+      "rank": 69,
+      "name": "cli-width",
+      "version": "4.0.0",
+      "downloadsLastMonth": 218674766,
+      "description": "Get stdout window width, with two fallbacks, tty and then a default.",
+      "downloadsLastYear": 2011062999
+    },
+    {
+      "rank": 70,
+      "name": "destroy",
+      "version": "1.2.0",
+      "downloadsLastMonth": 205829743,
+      "description": "destroy a stream if possible",
+      "downloadsLastYear": 2010367868
+    },
+    {
+      "rank": 71,
+      "name": "find-cache-dir",
+      "version": "3.3.2",
+      "downloadsLastMonth": 175841458,
+      "description": "Finds the common standard cache directory",
+      "downloadsLastYear": 2005809595
+    },
+    {
+      "rank": 72,
+      "name": "methods",
+      "version": "1.1.2",
+      "downloadsLastMonth": 193810166,
+      "description": "HTTP methods that node supports",
+      "downloadsLastYear": 1909571146
+    },
+    {
+      "rank": 73,
+      "name": "neo-async",
+      "version": "2.6.2",
+      "downloadsLastMonth": 196680932,
+      "description": "Neo-Async is a drop-in replacement for Async, it almost fully covers its functionality and runs faster",
+      "downloadsLastYear": 1873365074
+    },
+    {
+      "rank": 74,
+      "name": "stack-utils",
+      "version": "2.0.5",
+      "downloadsLastMonth": 179005534,
+      "description": "Captures and cleans stack traces",
+      "downloadsLastYear": 1823267709
+    },
+    {
+      "rank": 75,
+      "name": "cli-spinners",
+      "version": "2.6.1",
+      "downloadsLastMonth": 204932321,
+      "description": "Spinners for use in the terminal",
+      "downloadsLastYear": 1732583723
+    },
+    {
+      "rank": 76,
+      "name": "webpack",
+      "version": "5.73.0",
+      "downloadsLastMonth": 172711473,
+      "description": "Packs CommonJs/AMD modules for the browser. Allows to split your codebase into multiple bundles, which can be loaded on demand. Support loaders to preprocess files, i.e. json, jsx, es7, css, less, ... and your custom stuff.",
+      "downloadsLastYear": 1700860532
+    },
+    {
+      "rank": 77,
+      "name": "ts-node",
+      "version": "10.8.1",
+      "downloadsLastMonth": 167950538,
+      "description": "TypeScript execution environment and REPL for node.js, with source map support",
+      "downloadsLastYear": 1660409726
+    },
+    {
+      "rank": 78,
+      "name": "bser",
+      "version": "2.1.1",
+      "downloadsLastMonth": 153516039,
+      "description": "JavaScript implementation of the BSER Binary Serialization",
+      "downloadsLastYear": 1616171954
+    },
+    {
+      "rank": 79,
+      "name": "core-js-compat",
+      "version": "3.23.1",
+      "downloadsLastMonth": 162480456,
+      "description": "core-js compat",
+      "downloadsLastYear": 1611481345
+    },
+    {
+      "rank": 80,
+      "name": "autoprefixer",
+      "version": "10.4.7",
+      "downloadsLastMonth": 190929080,
+      "description": "Parse CSS and add vendor prefixes to CSS rules using values from the Can I Use website",
+      "downloadsLastYear": 1579821128
+    },
+    {
+      "rank": 81,
+      "name": "walker",
+      "version": "1.0.8",
+      "downloadsLastMonth": 147894441,
+      "description": "A simple directory tree walker.",
+      "downloadsLastYear": 1570499771
+    },
+    {
+      "rank": 82,
+      "name": "set-blocking",
+      "version": "2.0.0",
+      "downloadsLastMonth": 151537313,
+      "description": "set blocking stdio and stderr ensuring that terminal output does not truncate",
+      "downloadsLastYear": 1545304144
+    },
+    {
+      "rank": 83,
+      "name": "lodash.debounce",
+      "version": "4.0.8",
+      "downloadsLastMonth": 147226136,
+      "description": "The lodash method `_.debounce` exported as a module.",
+      "downloadsLastYear": 1408757192
+    },
+    {
+      "rank": 84,
+      "name": "is-accessor-descriptor",
+      "version": "3.0.1",
+      "downloadsLastMonth": 107381083,
+      "description": "Returns true if a value has the characteristics of a valid JavaScript accessor descriptor.",
+      "downloadsLastYear": 1391796643
+    },
+    {
+      "rank": 85,
+      "name": "is-data-descriptor",
+      "version": "2.0.0",
+      "downloadsLastMonth": 107369963,
+      "description": "Returns true if a value has the characteristics of a valid JavaScript data descriptor.",
+      "downloadsLastYear": 1391540777
+    },
+    {
+      "rank": 86,
+      "name": "lodash.memoize",
+      "version": "4.1.2",
+      "downloadsLastMonth": 131785442,
+      "description": "The lodash method `_.memoize` exported as a module.",
+      "downloadsLastYear": 1363189804
+    },
+    {
+      "rank": 87,
+      "name": "regenerate",
+      "version": "1.4.2",
+      "downloadsLastMonth": 132233778,
+      "description": "Generate JavaScript-compatible regular expressions based on a given set of Unicode symbols or code points.",
+      "downloadsLastYear": 1340223753
+    },
+    {
+      "rank": 88,
+      "name": "immutable",
+      "version": "4.1.0",
+      "downloadsLastMonth": 139160241,
+      "description": "Immutable Data Collections",
+      "downloadsLastYear": 1332315834
+    },
+    {
+      "rank": 89,
+      "name": "log-update",
+      "version": "5.0.1",
+      "downloadsLastMonth": 138137526,
+      "description": "Log by overwriting the previous output in the terminal. Useful for rendering progress bars, animations, etc.",
+      "downloadsLastYear": 1314674051
+    },
+    {
+      "rank": 90,
+      "name": "playwright-core",
+      "version": "1.22.2",
+      "downloadsLastMonth": 151028420,
+      "description": "A high-level API to automate web browsers",
+      "downloadsLastYear": 1228443353
+    },
+    {
+      "rank": 91,
+      "name": "lodash.once",
+      "version": "4.1.1",
+      "downloadsLastMonth": 140922852,
+      "description": "The lodash method `_.once` exported as a module.",
+      "downloadsLastYear": 1226685598
+    },
+    {
+      "rank": 92,
+      "name": "html-entities",
+      "version": "2.3.3",
+      "downloadsLastMonth": 119882419,
+      "description": "Fastest HTML entities encode/decode library.",
+      "downloadsLastYear": 1169058159
+    },
+    {
+      "rank": 93,
+      "name": "camel-case",
+      "version": "4.1.2",
+      "downloadsLastMonth": 111009575,
+      "description": "Transform into a string with the separator denoted by the next word capitalized",
+      "downloadsLastYear": 1136501457
+    },
+    {
+      "rank": 94,
+      "name": "fast-diff",
+      "version": "1.2.0",
+      "downloadsLastMonth": 111228708,
+      "description": "Fast Javascript text diff",
+      "downloadsLastYear": 1128532735
+    },
+    {
+      "rank": 95,
+      "name": "cacheable-request",
+      "version": "8.0.1",
+      "downloadsLastMonth": 110029500,
+      "description": "Wrap native HTTP requests with RFC compliant cache support",
+      "downloadsLastYear": 1105920658
+    },
+    {
+      "rank": 96,
+      "name": "webpack-dev-middleware",
+      "version": "5.3.3",
+      "downloadsLastMonth": 99575227,
+      "description": "A development middleware for webpack",
+      "downloadsLastYear": 1078190675
+    },
+    {
+      "rank": 97,
+      "name": "postcss-modules-extract-imports",
+      "version": "3.0.0",
+      "downloadsLastMonth": 99740810,
+      "description": "A CSS Modules transform to extract local aliases for inline imports",
+      "downloadsLastYear": 1051854807
+    },
+    {
+      "rank": 98,
+      "name": "immer",
+      "version": "9.0.15",
+      "downloadsLastMonth": 130548670,
+      "description": "Create your next immutable state by mutating the current one",
+      "downloadsLastYear": 939931971
+    },
+    {
+      "rank": 99,
+      "name": "lie",
+      "version": "3.3.0",
+      "downloadsLastMonth": 126568381,
+      "description": "A basic but performant promise implementation",
+      "downloadsLastYear": 937234664
+    },
+    {
+      "rank": 100,
+      "name": "vfile",
+      "version": "5.3.4",
+      "downloadsLastMonth": 111309862,
+      "description": "Virtual file format for text processing",
+      "downloadsLastYear": 893269739
+    }
+  ],
+  "locked": true,
+  "updatePolicy": "manual-only"
+}
