@@ -65,7 +65,7 @@ test-wasix-napi-cli:
 	printf '%s\n' "$$output" | grep -Fx "hello world!"
 
 test-wasix-safe-mode:
-	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)"
+	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)" $(WASIX_SAFE_MODE_ARGS)
 
 $(EDGE_BINARY):
 	$(MAKE) build
