@@ -82,6 +82,7 @@ constexpr int kExitCodeInvalidFatalExceptionMonkeyPatching = 6;
 constexpr int kExitCodeExceptionInFatalExceptionHandler = 7;
 constexpr int kExitCodeUnsettledTopLevelAwait = 13;
 
+#if defined(ENABLE_TRACING)
 bool IsTruthyTraceEnv(const char* value) {
   if (value == nullptr || value[0] == '\0') return false;
   std::string normalized(value);
@@ -121,6 +122,11 @@ class StartupPhaseTracer {
   std::chrono::steady_clock::time_point process_start_;
   std::chrono::steady_clock::time_point phase_start_;
 };
+#define EDGE_RUNTIME_STARTUP_TRACE(tracer, phase) (tracer).Mark((phase))
+#else
+struct StartupPhaseTracer {};
+#define EDGE_RUNTIME_STARTUP_TRACE(tracer, phase) ((void)(tracer))
+#endif
 
 void ResetDomainHelperRef(napi_env env, napi_ref* ref);
 
@@ -2619,12 +2625,12 @@ int RunScriptWithGlobals(napi_env env,
                          bool keep_event_loop_alive,
                          EdgeBootstrapMode mode) {
   StartupPhaseTracer startup_trace;
-  startup_trace.Mark("run-script-with-globals.begin");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "run-script-with-globals.begin");
   InitializeProcessStdioInheritanceOnce();
 #if !defined(_WIN32)
   InstallDefaultSignalBehavior();
 #endif
-  startup_trace.Mark("process-stdio-and-signals");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "process-stdio-and-signals");
   if (env == nullptr) {
     if (error_out != nullptr) {
       *error_out = "Invalid environment";
@@ -2640,7 +2646,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  startup_trace.Mark("runtime-platform-hooks");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "runtime-platform-hooks");
   if (should_abort_worker_bootstrap()) return 1;
   if (EdgeInitializeTimersHost(env) != napi_ok) {
     if (error_out != nullptr) {
@@ -2648,7 +2654,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  startup_trace.Mark("timers-host-init");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "timers-host-init");
   if (should_abort_worker_bootstrap()) return 1;
   if (source_text == nullptr || source_text[0] == '\0') {
     if (error_out != nullptr) {
@@ -2660,7 +2666,7 @@ int RunScriptWithGlobals(napi_env env,
   if (!ConfigureSecureHeapFromExecArgv(error_out)) {
     return 1;
   }
-  startup_trace.Mark("parse-flags-and-secure-heap");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "parse-flags-and-secure-heap");
 
   napi_status status = EdgeInstallProcessObject(
       env, g_edge_current_script_path, g_edge_exec_argv, g_edge_script_argv, g_edge_process_title);
@@ -2670,7 +2676,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  startup_trace.Mark("install-process-object");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "install-process-object");
   if (should_abort_worker_bootstrap()) return 1;
 
   status = EdgeInstallModuleLoader(env, entry_script_path);
@@ -2680,7 +2686,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
-  startup_trace.Mark("install-module-loader");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "install-module-loader");
   if (should_abort_worker_bootstrap()) return 1;
 
   // Create empty primordials container on the native side first (Node-aligned).
@@ -2806,17 +2812,17 @@ int RunScriptWithGlobals(napi_env env,
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
-  startup_trace.Mark("bootstrap.per_context.primordials");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.per_context.primordials");
   if (!execute_bootstrapper("internal/per_context/domexception", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
-  startup_trace.Mark("bootstrap.per_context.domexception");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.per_context.domexception");
   if (!execute_bootstrapper("internal/per_context/messageport", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
-  startup_trace.Mark("bootstrap.per_context.messageport");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.per_context.messageport");
   if (napi_set_named_property(env, global, "primordials", primordials_container) != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to expose primordials during bootstrap";
@@ -2828,7 +2834,7 @@ int RunScriptWithGlobals(napi_env env,
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
-  startup_trace.Mark("bootstrap.realm");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.realm");
 
   {
     napi_value primordials_key = nullptr;
@@ -2934,7 +2940,7 @@ int RunScriptWithGlobals(napi_env env,
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
-  startup_trace.Mark("bootstrap.node-and-web");
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.node-and-web");
 
   // Bridge V8 host dynamic import (napi/v8) into Node's module_wrap callback
   // registry so import('node:...') from CJS follows Node's ESM pathway.
