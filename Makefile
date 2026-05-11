@@ -1,4 +1,4 @@
-.PHONY: build build-wasix build-napi-wasmer-cli test-wasix-napi-cli test-wasix-safe-mode test test-only check-portability clean-dist dist dist-only framework-test framework-test-reset
+.PHONY: build build-wasix build-napi-wasmer-cli test-wasix-napi-cli test-wasix-safe-mode test-production-readiness test test-only check-portability clean-dist dist dist-only framework-test framework-test-reset
 
 UNAME_S := $(shell uname -s)
 BUILD_NAPI_DIR ?= build-v8-napi
@@ -66,6 +66,12 @@ test-wasix-napi-cli:
 
 test-wasix-safe-mode:
 	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)" $(WASIX_SAFE_MODE_ARGS)
+
+test-production-readiness: $(EDGE_BINARY)
+	EDGE_BINARY="$(EDGE_BINARY)" \
+	WASMER_BIN="$(WASMER_BIN)" \
+	EDGE_WASMER_PACKAGE="$(EDGE_WASMER_PACKAGE)" \
+	./scripts/run-production-readiness-smoke.sh
 
 $(EDGE_BINARY):
 	$(MAKE) build
