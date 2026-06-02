@@ -183,6 +183,15 @@ jobs:
           set -euo pipefail
           make build-quickjs-wasix
 
+      - name: Install Wasmer CLI
+        uses: wasmerio/setup-wasmer@v3
+
+      - name: Test edge (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-quickjs-only
+
       - name: Generate dist
         shell: bash
         run: |
