@@ -185,6 +185,8 @@ jobs:
 
       - name: Install Wasmer CLI
         uses: wasmerio/setup-wasmer@v3
+        with:
+          version: 7.2.0-alpha.3
 
       - name: Test edge (QuickJS WASIX)
         shell: bash
