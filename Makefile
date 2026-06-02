@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-reset
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-reset
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -30,6 +30,7 @@ WASIX_NAPI_SMOKE_JS ?= console.log('hello world!');
 WASMER_BIN ?= wasmer
 WASIX_PACKAGE_DIR ?= $(CURDIR)
 WASIX_SSL_CERTS_DIR ?= ssl-certs
+WASIX_QUICKJS_NODE_TEST_RUNNER ?= $(CURDIR)/scripts/edge-wasix-node-runner.sh
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -188,6 +189,11 @@ test-only:
 
 test-quickjs-only:
 	NODE_TEST_RUNNER=$(BUILD_EDGE_QUICKJS_CLI_DIR)/edge ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
+	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
+	  -j $(TEST_JOBS)
+
+test-wasix-quickjs-only:
+	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
 	  -j $(TEST_JOBS)
 
