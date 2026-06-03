@@ -25,6 +25,7 @@ for arg in "$@"; do
 done
 
 exec "${wasmer_bin}" run \
+  --llvm \
   --net \
   --env HOME=/tmp \
   --env "NODE_TEST_DIR=${guest_root}/test" \
