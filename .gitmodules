@@ -15,3 +15,6 @@
 [submodule "ssl-certs"]
 	path = ssl-certs
 	url = https://github.com/wasix-org/ssl-certs.git
+[submodule "deps/libuv-wasix"]
+	path = deps/libuv-wasix
+	url = git@github.com:wasix-org/libuv.git
