@@ -30,6 +30,7 @@ exec "${wasmer_bin}" run \
   --env HOME=/tmp \
   --env "NODE_TEST_DIR=${guest_root}/test" \
   --volume "${edgejs_root}:${guest_root}" \
+  --volume "${edgejs_root}/ssl-certs:/usr/local/ssl" \
   --cwd "${guest_root}" \
   "${package_dir}" \
   -- "${guest_args[@]}"
