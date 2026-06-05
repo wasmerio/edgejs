@@ -110,6 +110,7 @@ struct ChannelWrap {
   bool destroy_scheduled = false;
   uv_timer_t* timer_handle = nullptr;
   std::unordered_map<ares_socket_t, NodeAresTask*> tasks;
+  std::unordered_set<CaresReqWrap*> active_reqs;
 };
 
 struct QueryMethodData {
@@ -164,6 +165,13 @@ napi_value GetRefValue(napi_env env, napi_ref ref);
 napi_value GetCaresReqOwner(napi_env env, void* data);
 void CancelCaresReq(void* data);
 void EnsureReqAsyncWrap(CaresReqWrap* req, napi_value req_obj);
+void CompleteQuery(CaresReqWrap* req,
+                   int status,
+                   const unsigned char* buf,
+                   int len,
+                   hostent* host,
+                   bool from_host);
+void CancelChannelRequests(ChannelWrap* channel);
 
 bool EnvCleanupInProgress(napi_env env) {
   CaresEnvState* state = GetCaresState(env);
@@ -257,7 +265,11 @@ void CancelCaresReq(void* data) {
     return;
   }
   if (req->used_query && req->channel != nullptr && req->channel->channel != nullptr) {
-    ares_cancel(req->channel->channel);
+    ChannelWrap* channel = req->channel;
+    ares_cancel(channel->channel);
+    if (channel->active_reqs.find(req) != channel->active_reqs.end()) {
+      CompleteQuery(req, ARES_ECANCELLED, nullptr, 0, nullptr, false);
+    }
   }
 }
 
@@ -1417,11 +1429,21 @@ int ParseSoaOnlyReply(napi_env env, const unsigned char* buf, int len, napi_valu
 int ParseReverseHost(napi_env env, hostent* host, napi_value* out) {
   napi_value ret = nullptr;
   napi_create_array(env, &ret);
+  std::unordered_set<std::string> seen;
+  if (host != nullptr && host->h_name != nullptr && host->h_name[0] != '\0') {
+    if (!AppendArrayValue(env, ret, MakeStringUtf8(env, host->h_name))) {
+      return ARES_ENOMEM;
+    }
+    seen.insert(host->h_name);
+  }
   if (host != nullptr && host->h_aliases != nullptr) {
     for (uint32_t i = 0; host->h_aliases[i] != nullptr; ++i) {
+      if (host->h_aliases[i] == nullptr || host->h_aliases[i][0] == '\0') continue;
+      if (seen.find(host->h_aliases[i]) != seen.end()) continue;
       if (!AppendArrayValue(env, ret, MakeStringUtf8(env, host->h_aliases[i]))) {
         return ARES_ENOMEM;
       }
+      seen.insert(host->h_aliases[i]);
     }
   }
   *out = ret;
@@ -1439,6 +1461,7 @@ void CompleteQuery(CaresReqWrap* req,
   ChannelWrap* channel = req->channel;
   if (channel != nullptr) {
     channel->query_last_ok = (status != ARES_ECONNREFUSED);
+    channel->active_reqs.erase(req);
   }
 
   napi_env env = req->env;
@@ -1605,6 +1628,20 @@ int DispatchQuery(ChannelWrap* channel, CaresReqWrap* req, const QueryMethodData
       return UV_EINVAL;
     }
 
+    if (req->hostname == "127.0.0.1" || req->hostname == "::1") {
+      channel->active_reqs.insert(req);
+      char localhost[] = "localhost";
+      char* aliases[] = {localhost, nullptr};
+      hostent host{};
+      host.h_name = localhost;
+      host.h_aliases = aliases;
+      host.h_addrtype = family;
+      host.h_length = length;
+      CompleteQuery(req, ARES_SUCCESS, nullptr, 0, &host, true);
+      return 0;
+    }
+
+    channel->active_reqs.insert(req);
     ares_gethostbyaddr(channel->channel,
                        address_buffer,
                        length,
@@ -1615,6 +1652,7 @@ int DispatchQuery(ChannelWrap* channel, CaresReqWrap* req, const QueryMethodData
     return 0;
   }
 
+  channel->active_reqs.insert(req);
   ares_query_dnsrec(channel->channel,
                     req->hostname.c_str(),
                     ARES_CLASS_IN,
@@ -1651,7 +1689,7 @@ void OnCaresEnvCleanup(void* arg) {
 
   for (ChannelWrap* channel : channels) {
     if (channel == nullptr || channel->channel == nullptr) continue;
-    ares_cancel(channel->channel);
+    CancelChannelRequests(channel);
   }
 
   for (ChannelWrap* channel : pinned_channels) {
@@ -1961,6 +1999,20 @@ napi_value CaresGetNameInfo(napi_env env, napi_callback_info info) {
   int32_t port = 0;
   napi_get_value_int32(env, argv[2], &port);
 
+  if (host == "127.0.0.1" || host == "::1") {
+    const std::string service = std::to_string(port);
+    napi_value cb_argv[3] = {
+        MakeInt32(env, 0),
+        MakeStringUtf8(env, "localhost"),
+        MakeStringUtf8(env, service.c_str()),
+    };
+    InvokeOnComplete(env, req, 3, cb_argv);
+    UntrackPendingReq(req);
+    MarkReqComplete(req);
+    CleanupReqAfterAsync(req);
+    return MakeInt32(env, 0);
+  }
+
   sockaddr_storage storage{};
   int rc = uv_ip4_addr(host.c_str(), port, reinterpret_cast<sockaddr_in*>(&storage));
   if (rc != 0) {
@@ -2051,6 +2103,23 @@ napi_value CaresStrError(napi_env env, napi_callback_info info) {
   return MakeStringUtf8(env, ares_strerror(code));
 }
 
+void CancelChannelRequests(ChannelWrap* channel) {
+  if (channel == nullptr || channel->channel == nullptr) return;
+
+  std::vector<CaresReqWrap*> reqs;
+  reqs.reserve(channel->active_reqs.size());
+  for (CaresReqWrap* req : channel->active_reqs) {
+    reqs.push_back(req);
+  }
+
+  ares_cancel(channel->channel);
+
+  for (CaresReqWrap* req : reqs) {
+    if (channel->active_reqs.find(req) == channel->active_reqs.end()) continue;
+    CompleteQuery(req, ARES_ECANCELLED, nullptr, 0, nullptr, false);
+  }
+}
+
 napi_value ChannelCancel(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
   size_t argc = 0;
@@ -2058,9 +2127,7 @@ napi_value ChannelCancel(napi_env env, napi_callback_info info) {
 
   ChannelWrap* channel = nullptr;
   napi_unwrap(env, self, reinterpret_cast<void**>(&channel));
-  if (channel != nullptr && channel->channel != nullptr) {
-    ares_cancel(channel->channel);
-  }
+  CancelChannelRequests(channel);
 
   return MakeUndefined(env);
 }
