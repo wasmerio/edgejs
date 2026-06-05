@@ -79,6 +79,7 @@ struct CaresReqWrap {
   bool finalized = false;
   bool orphaned = false;
   uint8_t order = kDnsOrderVerbatim;
+  int32_t family = 0;
   bool ttl = false;
   std::string hostname;
   std::string binding_name;
@@ -1807,18 +1808,24 @@ void OnGetAddrInfo(uv_getaddrinfo_t* req, int status, addrinfo* res) {
       }
     };
 
-    switch (wrap->order) {
-      case kDnsOrderIpv4First:
-        add(true, false);
-        add(false, true);
-        break;
-      case kDnsOrderIpv6First:
-        add(false, true);
-        add(true, false);
-        break;
-      default:
-        add(true, true);
-        break;
+    if (wrap->family == 4) {
+      add(true, false);
+    } else if (wrap->family == 6) {
+      add(false, true);
+    } else {
+      switch (wrap->order) {
+        case kDnsOrderIpv4First:
+          add(true, false);
+          add(false, true);
+          break;
+        case kDnsOrderIpv6First:
+          add(false, true);
+          add(true, false);
+          break;
+        default:
+          add(true, true);
+          break;
+      }
     }
 
     if (n == 0) {
@@ -1902,6 +1909,7 @@ napi_value CaresGetAddrInfo(napi_env env, napi_callback_info info) {
   req->env = env;
   req->in_flight = true;
   req->orphaned = false;
+  req->family = family;
   req->hostname = ToAsciiHostname(ValueToUtf8(env, argv[1]));
 
   PinReqObject(req);
