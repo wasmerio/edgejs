@@ -378,10 +378,20 @@ napi_value CreateTypedStatsArray(napi_env env, size_t length, bool as_bigint, na
   return out;
 }
 
+uint64_t NormalizeUvMode(uint64_t mode) {
+#if defined(__wasi__)
+  if ((mode & 0777) == 0) {
+    if (S_ISDIR(mode)) return mode | 0700;
+    if (S_ISREG(mode)) return mode | 0600;
+  }
+#endif
+  return mode;
+}
+
 void PopulateStatsArrayFromUv(const uv_stat_t* stat, double* out) {
   if (stat == nullptr || out == nullptr) return;
   out[0] = static_cast<double>(stat->st_dev);
-  out[1] = static_cast<double>(stat->st_mode);
+  out[1] = static_cast<double>(NormalizeUvMode(static_cast<uint64_t>(stat->st_mode)));
   out[2] = static_cast<double>(stat->st_nlink);
   out[3] = static_cast<double>(stat->st_uid);
   out[4] = static_cast<double>(stat->st_gid);

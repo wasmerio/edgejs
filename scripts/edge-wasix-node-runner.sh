@@ -9,7 +9,8 @@ wasmer_bin="${WASMER_BIN:-wasmer}"
 package_dir="${WASIX_EDGEJS_PACKAGE_DIR:-${edgejs_root}/quickjs-wasm}"
 guest_root="${WASIX_EDGEJS_GUEST_ROOT:-/workspace}"
 guest_test_tmp_root="${WASIX_EDGEJS_GUEST_TEST_TMP_ROOT:-/tmp/edgejs-node-test}"
-workspace_dirs_csv="${WASIX_EDGEJS_WORKSPACE_DIRS:-test,lib,deps,node,assets}"
+workspace_dirs_csv="${WASIX_EDGEJS_WORKSPACE_DIRS:-test,lib,deps,node,assets,build-quickjs-wasix}"
+guest_exec_path="${WASIX_EDGEJS_GUEST_EXEC_PATH:-${guest_root}/build-quickjs-wasix/edgejs.wasm}"
 wasmer_stack_args=()
 created_run_root=0
 
@@ -99,6 +100,7 @@ if [[ "${WASIX_EDGEJS_TRACE:-0}" == "1" ]]; then
       "${wasmer_stack_args[@]+"${wasmer_stack_args[@]}"}" \
       --net \
       --env HOME=/tmp \
+      --env "EDGE_EXEC_PATH=${guest_exec_path}" \
       --env "NODE_TEST_DIR=${guest_test_tmp_root}" \
       --env "TEST_SERIAL_ID=${test_serial_id}" \
       "${volume_args[@]}" \
@@ -114,6 +116,7 @@ fi
   "${wasmer_stack_args[@]+"${wasmer_stack_args[@]}"}" \
   --net \
   --env HOME=/tmp \
+  --env "EDGE_EXEC_PATH=${guest_exec_path}" \
   --env "NODE_TEST_DIR=${guest_test_tmp_root}" \
   --env "TEST_SERIAL_ID=${test_serial_id}" \
   "${volume_args[@]}" \

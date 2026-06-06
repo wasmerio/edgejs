@@ -34,7 +34,7 @@ extern "C" int uv_resident_set_memory(size_t* rss) {
   if (rss != nullptr) {
     *rss = 0;
   }
-  return -ENOSYS;
+  return 0;
 }
 
 extern "C" int uv_cpu_info(uv_cpu_info_t** cpu_infos, int* count) {
