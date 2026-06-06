@@ -503,6 +503,14 @@ napi_value GuessHandleType(napi_env env, napi_callback_info info) {
     return Undefined(env);
   }
   uv_handle_type t = uv_guess_handle(static_cast<uv_file>(fd));
+#ifdef __wasi__
+  if (t == UV_TTY && fd >= 0 && fd <= 2) {
+    struct stat fd_stat {};
+    if (fstat(fd, &fd_stat) == 0) {
+      t = UV_NAMED_PIPE;
+    }
+  }
+#endif
 #ifndef _WIN32
   if (fd == 0 && t == UV_FILE) {
     struct stat fd_stat {};
@@ -534,7 +542,7 @@ napi_value IsInsideNodeModulesCallback(napi_env env, napi_callback_info info) {
     if (napi_typeof(env, argv[0], &type) == napi_ok && type == napi_number) {
       int32_t candidate = 0;
       if (napi_get_value_int32(env, argv[0], &candidate) == napi_ok) {
-        frame_limit = candidate;
+        frame_limit = std::max(frame_limit, candidate);
       }
     }
   }
@@ -543,9 +551,10 @@ napi_value IsInsideNodeModulesCallback(napi_env env, napi_callback_info info) {
   bool result = false;
   uint32_t frames = static_cast<uint32_t>(frame_limit);
   if (frames > kMaxCallSitesFrames) frames = kMaxCallSitesFrames;
+  const uint32_t raw_frames = RawCallSiteFramesForEdge(frames);
 
   napi_value callsites = nullptr;
-  if (unofficial_napi_get_current_stack_trace(env, frames, &callsites) == napi_ok && callsites != nullptr) {
+  if (unofficial_napi_get_call_sites(env, raw_frames, &callsites) == napi_ok && callsites != nullptr) {
     bool is_array = false;
     if (napi_is_array(env, callsites, &is_array) == napi_ok && is_array) {
       uint32_t length = 0;

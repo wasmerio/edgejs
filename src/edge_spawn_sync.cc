@@ -9,6 +9,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <uv.h>
@@ -131,6 +132,55 @@ std::string ValueToUtf8(napi_env env, napi_value value) {
   if (napi_get_value_string_utf8(env, value, out.data(), out.size(), &copied) != napi_ok) return "";
   out.resize(copied);
   return out;
+}
+
+std::string Base64Encode(std::string_view input) {
+  static constexpr char kTable[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((input.size() + 2) / 3) * 4);
+  size_t i = 0;
+  for (; i + 3 <= input.size(); i += 3) {
+    const uint32_t chunk = (static_cast<uint8_t>(input[i]) << 16) |
+                           (static_cast<uint8_t>(input[i + 1]) << 8) |
+                           static_cast<uint8_t>(input[i + 2]);
+    out.push_back(kTable[(chunk >> 18) & 0x3f]);
+    out.push_back(kTable[(chunk >> 12) & 0x3f]);
+    out.push_back(kTable[(chunk >> 6) & 0x3f]);
+    out.push_back(kTable[chunk & 0x3f]);
+  }
+  const size_t remaining = input.size() - i;
+  if (remaining == 1) {
+    const uint32_t chunk = static_cast<uint8_t>(input[i]) << 16;
+    out.push_back(kTable[(chunk >> 18) & 0x3f]);
+    out.push_back(kTable[(chunk >> 12) & 0x3f]);
+    out.push_back('=');
+    out.push_back('=');
+  } else if (remaining == 2) {
+    const uint32_t chunk = (static_cast<uint8_t>(input[i]) << 16) |
+                           (static_cast<uint8_t>(input[i + 1]) << 8);
+    out.push_back(kTable[(chunk >> 18) & 0x3f]);
+    out.push_back(kTable[(chunk >> 12) & 0x3f]);
+    out.push_back(kTable[(chunk >> 6) & 0x3f]);
+    out.push_back('=');
+  }
+  return out;
+}
+
+bool IsEvalOrPrintFlag(const std::string& arg) {
+  return arg == "-e" || arg == "--eval" || arg == "-p" || arg == "--print";
+}
+
+void RewriteWasixMultilineEvalArgs(std::vector<std::string>* args) {
+#ifdef __wasi__
+  if (args == nullptr || args->size() < 3) return;
+  if (!IsEvalOrPrintFlag((*args)[1])) return;
+  std::string& script = (*args)[2];
+  if (script.find('\n') == std::string::npos && script.find('\r') == std::string::npos) return;
+  script = "eval(Buffer.from('" + Base64Encode(script) + "', 'base64').toString())";
+#else
+  (void)args;
+#endif
 }
 
 bool CoerceValueToUtf8(napi_env env, napi_value value, std::string* out) {
@@ -448,6 +498,7 @@ bool ParseSpawnOptions(napi_env env, napi_value value, SpawnOptions* out) {
   if (out->args.empty()) {
     out->args.push_back(out->file);
   }
+  RewriteWasixMultilineEvalArgs(&out->args);
 
   napi_value cwd_val = nullptr;
   if (GetNamedProperty(env, value, "cwd", &cwd_val)) {
