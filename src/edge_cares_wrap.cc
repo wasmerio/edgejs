@@ -1628,19 +1628,6 @@ int DispatchQuery(ChannelWrap* channel, CaresReqWrap* req, const QueryMethodData
       return UV_EINVAL;
     }
 
-    if (req->hostname == "127.0.0.1" || req->hostname == "::1") {
-      channel->active_reqs.insert(req);
-      char localhost[] = "localhost";
-      char* aliases[] = {localhost, nullptr};
-      hostent host{};
-      host.h_name = localhost;
-      host.h_aliases = aliases;
-      host.h_addrtype = family;
-      host.h_length = length;
-      CompleteQuery(req, ARES_SUCCESS, nullptr, 0, &host, true);
-      return 0;
-    }
-
     channel->active_reqs.insert(req);
     ares_gethostbyaddr(channel->channel,
                        address_buffer,
@@ -1998,20 +1985,6 @@ napi_value CaresGetNameInfo(napi_env env, napi_callback_info info) {
   const std::string host = ValueToUtf8(env, argv[1]);
   int32_t port = 0;
   napi_get_value_int32(env, argv[2], &port);
-
-  if (host == "127.0.0.1" || host == "::1") {
-    const std::string service = std::to_string(port);
-    napi_value cb_argv[3] = {
-        MakeInt32(env, 0),
-        MakeStringUtf8(env, "localhost"),
-        MakeStringUtf8(env, service.c_str()),
-    };
-    InvokeOnComplete(env, req, 3, cb_argv);
-    UntrackPendingReq(req);
-    MarkReqComplete(req);
-    CleanupReqAfterAsync(req);
-    return MakeInt32(env, 0);
-  }
 
   sockaddr_storage storage{};
   int rc = uv_ip4_addr(host.c_str(), port, reinterpret_cast<sockaddr_in*>(&storage));
