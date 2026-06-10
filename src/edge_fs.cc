@@ -813,19 +813,9 @@ napi_value BindingRealpath(napi_env env, napi_callback_info info) {
 // birthtime_sec, birthtime_nsec (18 elements).
 constexpr size_t kStatArrayLength = 18;
 
-uint64_t NormalizeStatMode(uint64_t mode) {
-#if defined(__wasi__)
-  if ((mode & 0777) == 0) {
-    if (S_ISDIR(mode)) return mode | 0700;
-    if (S_ISREG(mode)) return mode | 0600;
-  }
-#endif
-  return mode;
-}
-
 void StatToArray(const uv_stat_t* s, double* out) {
   out[0] = static_cast<double>(s->st_dev);
-  out[1] = static_cast<double>(NormalizeStatMode(static_cast<uint64_t>(s->st_mode)));
+  out[1] = static_cast<double>(s->st_mode);
   out[2] = static_cast<double>(s->st_nlink);
   out[3] = static_cast<double>(s->st_uid);
   out[4] = static_cast<double>(s->st_gid);

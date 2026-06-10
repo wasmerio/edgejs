@@ -81,6 +81,10 @@ volume_args=(
   --volume "${edgejs_root}/ssl-certs:/usr/local/ssl"
 )
 
+if [[ -d "${package_dir}/etc" ]]; then
+  volume_args+=(--volume "${package_dir}/etc:/etc")
+fi
+
 IFS=',' read -r -a workspace_dirs <<< "${workspace_dirs_csv}"
 for workspace_dir in "${workspace_dirs[@]}"; do
   workspace_dir="${workspace_dir#"${workspace_dir%%[![:space:]]*}"}"

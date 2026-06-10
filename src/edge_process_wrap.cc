@@ -38,16 +38,6 @@ struct ProcessWrap {
 std::mutex g_live_child_pids_mutex;
 std::unordered_set<int32_t> g_live_child_pids;
 
-void RefreshArgvPointers(std::vector<std::string>* storage, std::vector<char*>* out) {
-  if (storage == nullptr || out == nullptr) return;
-  out->clear();
-  out->reserve(storage->size() + 1);
-  for (std::string& arg : *storage) {
-    out->push_back(const_cast<char*>(arg.c_str()));
-  }
-  out->push_back(nullptr);
-}
-
 napi_value MakeInt32(napi_env env, int32_t value) {
   napi_value out = nullptr;
   napi_create_int32(env, value, &out);
@@ -488,9 +478,11 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
     if (!ParseStringArray(env, args_value, &args_storage, &args)) return MakeInt32(env, UV_EINVAL);
   }
   if (args_storage.empty()) {
+    args.clear();
     args_storage.push_back(file);
+    args.push_back(const_cast<char*>(args_storage.back().c_str()));
+    args.push_back(nullptr);
   }
-  RefreshArgvPointers(&args_storage, &args);
 
   napi_value env_pairs_value = nullptr;
   std::vector<std::string> env_storage;
