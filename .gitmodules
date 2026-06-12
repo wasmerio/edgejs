@@ -18,6 +18,7 @@
 [submodule "deps/libuv-wasix"]
 	path = deps/libuv-wasix
 	url = git@github.com:wasix-org/libuv.git
-[submodule "deps/libev-wasix"]
-	path = deps/libev-wasix
-	url = git@github.com:Anodized-Titanium/libev.git
+[submodule "deps/openssl-wasix"]
+	path = deps/openssl-wasix
+	url = git@github.com:Anodized-Titanium/openssl.git
+	branch = upstream-35-merge

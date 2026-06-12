@@ -418,13 +418,13 @@ target_compile_definitions(edge_nghttp2
 if(EDGE_IS_WASIX_TARGET)
   set(EDGE_OPENSSL_WASIX_ROOT
     "${PROJECT_ROOT}/deps/openssl-wasix"
-    CACHE PATH "Path to wasix-org OpenSSL source/build tree"
+    CACHE PATH "Path to WASIX OpenSSL source/build tree"
   )
   set(_edge_openssl_include_dir "${EDGE_OPENSSL_WASIX_ROOT}/include")
   if(NOT EXISTS "${_edge_openssl_include_dir}")
     message(FATAL_ERROR
       "OpenSSL include directory not found: ${_edge_openssl_include_dir}. "
-      "For WASIX, clone deps with wasix/setup-wasix-deps.sh.")
+      "For WASIX, run git submodule update --init deps/openssl-wasix.")
   endif()
 
   set(_edge_openssl_crypto "")
