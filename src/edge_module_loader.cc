@@ -27,10 +27,11 @@
 #include "edge_udp_wrap.h"
 #include "edge_url.h"
 #include "edge_environment.h"
+#include "edge_loader_bindings.h"
 #include "edge_util.h"
 #include "edge_worker_env.h"
 #include "edge_option_helpers.h"
-#include "internal_binding/dispatch.h"
+#include "binding_registry/binding_registry.h"
 #include "internal_binding/watchdog.h"
 #include "builtin_catalog.h"
 
@@ -46,6 +47,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -94,8 +96,6 @@ struct ModuleLoaderState {
 
   napi_env env = nullptr;
   std::unordered_map<std::string, napi_ref> module_cache;
-  std::unordered_map<std::string, napi_ref> binding_cache;
-  std::unordered_map<std::string, napi_ref> internal_binding_cache;
   napi_ref cache_object_ref = nullptr;
   napi_ref per_context_exports_ref = nullptr;
   napi_ref primordials_ref = nullptr;
@@ -234,16 +234,6 @@ static void ResetModuleLoaderState(napi_env env, ModuleLoaderState* state) {
   }
   state->module_cache.clear();
 
-  for (auto& kv : state->binding_cache) {
-    DeleteRefIfPresent(env, &kv.second);
-  }
-  state->binding_cache.clear();
-
-  for (auto& kv : state->internal_binding_cache) {
-    DeleteRefIfPresent(env, &kv.second);
-  }
-  state->internal_binding_cache.clear();
-
   DeleteRefIfPresent(env, &state->cache_object_ref);
   DeleteRefIfPresent(env, &state->per_context_exports_ref);
   DeleteRefIfPresent(env, &state->primordials_ref);
@@ -271,6 +261,7 @@ static void FinalizeModuleLoaderState(napi_env env) {
   ModuleLoaderState* state = GetModuleLoaderState(env);
   if (state == nullptr || state->finalized) return;
   state->finalized = true;
+  edge::binding_registry::FinalizeEnv(env);
   EdgeEnvironmentClearOpaqueSlot(env, kEdgeEnvironmentSlotModuleLoaderState);
 }
 
@@ -1371,50 +1362,6 @@ static bool IsUndefinedValue(napi_env env, napi_value value) {
   return napi_typeof(env, value, &t) == napi_ok && t == napi_undefined;
 }
 
-static napi_value GetCachedBinding(ModuleLoaderState* state, napi_env env, const char* name) {
-  if (state == nullptr || name == nullptr) return nullptr;
-  auto it = state->binding_cache.find(name);
-  if (it == state->binding_cache.end() || it->second == nullptr) return nullptr;
-  napi_value out = nullptr;
-  if (napi_get_reference_value(env, it->second, &out) != napi_ok || out == nullptr) return nullptr;
-  return out;
-}
-
-static napi_value CacheBinding(ModuleLoaderState* state, napi_env env, const char* name, napi_value binding) {
-  if (state == nullptr || name == nullptr || binding == nullptr || IsUndefinedValue(env, binding)) return nullptr;
-  auto it = state->binding_cache.find(name);
-  if (it != state->binding_cache.end() && it->second != nullptr) {
-    napi_delete_reference(env, it->second);
-    it->second = nullptr;
-  }
-  napi_ref ref = nullptr;
-  if (napi_create_reference(env, binding, 1, &ref) != napi_ok || ref == nullptr) return nullptr;
-  state->binding_cache[name] = ref;
-  return binding;
-}
-
-static napi_value GetCachedInternalBinding(ModuleLoaderState* state, napi_env env, const char* name) {
-  if (state == nullptr || name == nullptr) return nullptr;
-  auto it = state->internal_binding_cache.find(name);
-  if (it == state->internal_binding_cache.end() || it->second == nullptr) return nullptr;
-  napi_value out = nullptr;
-  if (napi_get_reference_value(env, it->second, &out) != napi_ok || out == nullptr) return nullptr;
-  return out;
-}
-
-static napi_value CacheInternalBinding(ModuleLoaderState* state, napi_env env, const char* name, napi_value binding) {
-  if (state == nullptr || name == nullptr || binding == nullptr || IsUndefinedValue(env, binding)) return nullptr;
-  auto it = state->internal_binding_cache.find(name);
-  if (it != state->internal_binding_cache.end() && it->second != nullptr) {
-    napi_delete_reference(env, it->second);
-    it->second = nullptr;
-  }
-  napi_ref ref = nullptr;
-  if (napi_create_reference(env, binding, 1, &ref) != napi_ok || ref == nullptr) return nullptr;
-  state->internal_binding_cache[name] = ref;
-  return binding;
-}
-
 static napi_value GetRefValue(napi_env env, napi_ref ref) {
   if (ref == nullptr) return nullptr;
   napi_value out = nullptr;
@@ -1436,11 +1383,6 @@ static void ResetStateRef(napi_env env, napi_ref* slot, napi_value value) {
 
 static bool IsPerContextBuiltinId(const std::string& id) {
   return id.rfind("internal/per_context/", 0) == 0;
-}
-
-static bool ShouldCacheInternalBinding(const std::string& name) {
-  (void)name;
-  return true;
 }
 
 static napi_value GetStatePrimordials(napi_env env, ModuleLoaderState* state) {
@@ -1730,21 +1672,6 @@ static bool ExecuteBuiltinFromNative(napi_env env, ModuleLoaderState* state, con
     *out = call_result;
   }
   return true;
-}
-
-using BindingFactory = napi_value (*)(napi_env env);
-
-static napi_value GetOrCreateBinding(ModuleLoaderState* state,
-                                     napi_env env,
-                                     const char* cache_key,
-                                     BindingFactory factory) {
-  napi_value cached = GetCachedBinding(state, env, cache_key);
-  if (cached != nullptr) return cached;
-
-  if (factory == nullptr) return nullptr;
-  napi_value created = factory(env);
-  if (created == nullptr || IsUndefinedValue(env, created)) return nullptr;
-  return CacheBinding(state, env, cache_key, created);
 }
 
 static napi_value CreateNullProtoObject(napi_env env) {
@@ -3397,6 +3324,61 @@ static napi_value ContextifyWatchdogHasPendingSigintCallback(napi_env env, napi_
   return out;
 }
 
+static void SetContextifyNamedInt(napi_env env, napi_value object, const char* key, int32_t value) {
+  napi_value out = nullptr;
+  if (napi_create_int32(env, value, &out) == napi_ok && out != nullptr) {
+    napi_set_named_property(env, object, key, out);
+  }
+}
+
+static napi_value ContextifyMeasureMemoryFallback(napi_env env, napi_callback_info info) {
+  (void)info;
+
+  napi_deferred deferred = nullptr;
+  napi_value promise = nullptr;
+  if (napi_create_promise(env, &deferred, &promise) != napi_ok || promise == nullptr) {
+    return UndefinedValue(env);
+  }
+
+  napi_value value = nullptr;
+  napi_create_object(env, &value);
+  napi_resolve_deferred(env, deferred, value != nullptr ? value : UndefinedValue(env));
+  return promise;
+}
+
+static bool InstallContextifyMeasureMemoryShape(napi_env env, napi_value binding) {
+  napi_value constants = nullptr;
+  napi_value measure_memory = nullptr;
+  napi_value mode = nullptr;
+  napi_value execution = nullptr;
+  napi_value measure_memory_fn = nullptr;
+
+  if (napi_create_object(env, &constants) != napi_ok || constants == nullptr ||
+      napi_create_object(env, &measure_memory) != napi_ok || measure_memory == nullptr ||
+      napi_create_object(env, &mode) != napi_ok || mode == nullptr ||
+      napi_create_object(env, &execution) != napi_ok || execution == nullptr ||
+      napi_create_function(env,
+                           "measureMemory",
+                           NAPI_AUTO_LENGTH,
+                           ContextifyMeasureMemoryFallback,
+                           nullptr,
+                           &measure_memory_fn) != napi_ok ||
+      measure_memory_fn == nullptr) {
+    return false;
+  }
+
+  SetContextifyNamedInt(env, mode, "SUMMARY", 0);
+  SetContextifyNamedInt(env, mode, "DETAILED", 1);
+  SetContextifyNamedInt(env, execution, "DEFAULT", 0);
+  SetContextifyNamedInt(env, execution, "EAGER", 1);
+
+  return napi_set_named_property(env, measure_memory, "mode", mode) == napi_ok &&
+         napi_set_named_property(env, measure_memory, "execution", execution) == napi_ok &&
+         napi_set_named_property(env, constants, "measureMemory", measure_memory) == napi_ok &&
+         napi_set_named_property(env, binding, "constants", constants) == napi_ok &&
+         napi_set_named_property(env, binding, "measureMemory", measure_memory_fn) == napi_ok;
+}
+
 static napi_value ContextifyMakeContextCallback(napi_env env, napi_callback_info info) {
   size_t argc = 7;
   napi_value argv[7] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
@@ -3678,6 +3660,117 @@ static napi_value ContextifyContainsModuleSyntaxCallback(napi_env env, napi_call
   return out;
 }
 
+static napi_value BuiltinsCreateStringArray(napi_env env, const std::vector<std::string>& values) {
+  napi_value out = nullptr;
+  if (napi_create_array_with_length(env, values.size(), &out) != napi_ok || out == nullptr) {
+    return nullptr;
+  }
+  for (size_t i = 0; i < values.size(); ++i) {
+    napi_value value = nullptr;
+    if (napi_create_string_utf8(env, values[i].c_str(), NAPI_AUTO_LENGTH, &value) != napi_ok ||
+        value == nullptr ||
+        napi_set_element(env, out, static_cast<uint32_t>(i), value) != napi_ok) {
+      return nullptr;
+    }
+  }
+  return out;
+}
+
+static napi_value BuiltinsCreateSet(napi_env env) {
+  napi_value global = nullptr;
+  napi_value set_ctor = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
+      napi_get_named_property(env, global, "Set", &set_ctor) != napi_ok || set_ctor == nullptr) {
+    return nullptr;
+  }
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, set_ctor, &type) != napi_ok || type != napi_function) return nullptr;
+  napi_value set_obj = nullptr;
+  if (napi_new_instance(env, set_ctor, 0, nullptr, &set_obj) != napi_ok || set_obj == nullptr) {
+    return nullptr;
+  }
+  return set_obj;
+}
+
+static void BuiltinsAppendArrayItemsToSet(napi_env env, napi_value set_obj, napi_value input) {
+  bool is_array = false;
+  if (set_obj == nullptr || input == nullptr || napi_is_array(env, input, &is_array) != napi_ok ||
+      !is_array) {
+    return;
+  }
+  napi_value add_fn = nullptr;
+  if (napi_get_named_property(env, set_obj, "add", &add_fn) != napi_ok || add_fn == nullptr) return;
+  napi_valuetype add_type = napi_undefined;
+  if (napi_typeof(env, add_fn, &add_type) != napi_ok || add_type != napi_function) return;
+  uint32_t len = 0;
+  napi_get_array_length(env, input, &len);
+  for (uint32_t i = 0; i < len; ++i) {
+    napi_value item = nullptr;
+    if (napi_get_element(env, input, i, &item) != napi_ok || item == nullptr) continue;
+    napi_value ignored = nullptr;
+    napi_call_function(env, set_obj, add_fn, 1, &item, &ignored);
+  }
+}
+
+static napi_value BuiltinsGetCacheUsageCallback(napi_env env, napi_callback_info /*info*/) {
+  napi_value out = nullptr;
+  if (napi_create_object(env, &out) != napi_ok || out == nullptr) return UndefinedValue(env);
+
+  napi_value with_cache = BuiltinsCreateSet(env);
+  if (with_cache != nullptr) napi_set_named_property(env, out, "compiledWithCache", with_cache);
+  napi_value without_cache = BuiltinsCreateSet(env);
+  if (without_cache != nullptr) {
+    napi_set_named_property(env, out, "compiledWithoutCache", without_cache);
+  }
+
+  napi_value builtin_ids_array = BuiltinsCreateStringArray(env, builtin_catalog::AllBuiltinIds());
+  if (builtin_ids_array != nullptr) {
+    napi_set_named_property(env, out, "compiledInSnapshot", builtin_ids_array);
+    BuiltinsAppendArrayItemsToSet(env, without_cache, builtin_ids_array);
+  } else {
+    napi_value empty = nullptr;
+    napi_create_array_with_length(env, 0, &empty);
+    if (empty != nullptr) napi_set_named_property(env, out, "compiledInSnapshot", empty);
+  }
+
+  return out;
+}
+
+static bool InstallBuiltinsCompatExports(napi_env env, napi_value binding) {
+  const builtin_catalog::BuiltinCategories& builtin_categories =
+      builtin_catalog::GetBuiltinCategories();
+  napi_value categories = nullptr;
+  napi_value can_array = BuiltinsCreateStringArray(env, builtin_categories.can_be_required);
+  napi_value cannot_array = BuiltinsCreateStringArray(env, builtin_categories.cannot_be_required);
+  if (napi_create_object(env, &categories) != napi_ok || categories == nullptr ||
+      can_array == nullptr || cannot_array == nullptr ||
+      napi_set_named_property(env, categories, "canBeRequired", can_array) != napi_ok ||
+      napi_set_named_property(env, categories, "cannotBeRequired", cannot_array) != napi_ok ||
+      napi_set_named_property(env, binding, "builtinCategories", categories) != napi_ok) {
+    return false;
+  }
+
+  // Legacy process.binding('natives') reads `configs` as an alias of `config`.
+  napi_value config = nullptr;
+  if (napi_get_named_property(env, binding, "config", &config) != napi_ok || config == nullptr ||
+      napi_set_named_property(env, binding, "configs", config) != napi_ok) {
+    return false;
+  }
+
+  napi_value get_cache_usage_fn = nullptr;
+  if (napi_create_function(env,
+                           "getCacheUsage",
+                           NAPI_AUTO_LENGTH,
+                           BuiltinsGetCacheUsageCallback,
+                           nullptr,
+                           &get_cache_usage_fn) != napi_ok ||
+      get_cache_usage_fn == nullptr ||
+      napi_set_named_property(env, binding, "getCacheUsage", get_cache_usage_fn) != napi_ok) {
+    return false;
+  }
+  return true;
+}
+
 static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderState* state) {
   if (state == nullptr) return nullptr;
   if (state->native_builtins_binding_ref != nullptr) {
@@ -3747,6 +3840,10 @@ static napi_value GetOrCreateNativeBuiltinsBinding(napi_env env, ModuleLoaderSta
                            &set_internal_loaders_fn) != napi_ok ||
       set_internal_loaders_fn == nullptr ||
       napi_set_named_property(env, binding, "setInternalLoaders", set_internal_loaders_fn) != napi_ok) {
+    return nullptr;
+  }
+
+  if (!InstallBuiltinsCompatExports(env, binding)) {
     return nullptr;
   }
 
@@ -4106,7 +4203,7 @@ static napi_value GetOrCreateTraceEventsBinding(napi_env env) {
   return binding;
 }
 
-static napi_value ResolveUvBinding(napi_env env) {
+static napi_value CreateUvBinding(napi_env env) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
 
@@ -4155,7 +4252,7 @@ static napi_value ResolveUvBinding(napi_env env) {
   return out;
 }
 
-static napi_value ResolveContextifyBinding(napi_env env) {
+static napi_value CreateContextifyBinding(napi_env env) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
 
@@ -4177,6 +4274,8 @@ static napi_value ResolveContextifyBinding(napi_env env) {
 
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;
+  if (!InstallContextifyMeasureMemoryShape(env, out)) return undefined;
+
   napi_value contains_module_syntax = nullptr;
   if (napi_create_function(env,
                            "containsModuleSyntax",
@@ -4293,7 +4392,7 @@ static napi_value ResolveContextifyBinding(napi_env env) {
   return out;
 }
 
-static napi_value ResolveModulesBinding(napi_env env) {
+static napi_value CreateModulesBinding(napi_env env) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
 
@@ -4353,7 +4452,7 @@ static napi_value ResolveModulesBinding(napi_env env) {
   return out;
 }
 
-static napi_value ResolveOptionsBinding(napi_env env) {
+static napi_value CreateOptionsBinding(napi_env env) {
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
 
@@ -4402,135 +4501,6 @@ static napi_value ResolveOptionsBinding(napi_env env) {
   return out;
 }
 
-static napi_value DispatchResolveBinding(napi_env env, void* raw_state, const char* name) {
-  if (env == nullptr || raw_state == nullptr || name == nullptr) return nullptr;
-  auto* state = static_cast<ModuleLoaderState*>(raw_state);
-
-  if (std::strcmp(name, "buffer") == 0) {
-    return GetOrCreateBinding(state, env, "buffer", EdgeInstallBufferBinding);
-  }
-  if (std::strcmp(name, "cares_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "cares_wrap", EdgeInstallCaresWrapBinding);
-  }
-  if (std::strcmp(name, "crypto") == 0) {
-    return GetOrCreateBinding(state, env, "crypto", EdgeInstallCryptoBinding);
-  }
-  if (std::strcmp(name, "encoding_binding") == 0) {
-    return GetOrCreateBinding(state, env, "encoding_binding", EdgeInstallEncodingBinding);
-  }
-  if (std::strcmp(name, "fs") == 0) {
-    return GetOrCreateBinding(state, env, "fs", EdgeInstallFsBinding);
-  }
-  if (std::strcmp(name, "fs_dir") == 0) {
-    return GetOrCreateBinding(state, env, "fs_dir", EdgeInstallFsDirBinding);
-  }
-  if (std::strcmp(name, "http_parser") == 0) {
-    return GetOrCreateBinding(state, env, "http_parser", EdgeInstallHttpParserBinding);
-  }
-  if (std::strcmp(name, "js_stream") == 0) {
-    return GetOrCreateBinding(state, env, "js_stream", EdgeInstallJsStreamBinding);
-  }
-  if (std::strcmp(name, "js_udp_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "js_udp_wrap", EdgeInstallJsUdpWrapBinding);
-  }
-  if (std::strcmp(name, "os") == 0) {
-    return GetOrCreateBinding(state, env, "os", EdgeInstallOsBinding);
-  }
-  if (std::strcmp(name, "os_constants") == 0) {
-    return GetOrCreateBinding(state, env, "os_constants", EdgeGetOsConstants);
-  }
-  if (std::strcmp(name, "pipe_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "pipe_wrap", EdgeInstallPipeWrapBinding);
-  }
-  if (std::strcmp(name, "process_methods") == 0) {
-    return GetOrCreateBinding(state, env, "process_methods", EdgeGetProcessMethodsBinding);
-  }
-  if (std::strcmp(name, "process_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "process_wrap", EdgeInstallProcessWrapBinding);
-  }
-  if (std::strcmp(name, "report") == 0) {
-    return GetOrCreateBinding(state, env, "report", EdgeGetReportBinding);
-  }
-  if (std::strcmp(name, "signal_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "signal_wrap", EdgeInstallSignalWrapBinding);
-  }
-  if (std::strcmp(name, "spawn_sync") == 0) {
-    return GetOrCreateBinding(state, env, "spawn_sync", EdgeInstallSpawnSyncBinding);
-  }
-  if (std::strcmp(name, "stream_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "stream_wrap", EdgeInstallStreamWrapBinding);
-  }
-  if (std::strcmp(name, "string_decoder") == 0) {
-    return GetOrCreateBinding(state, env, "string_decoder", EdgeInstallStringDecoderBinding);
-  }
-  if (std::strcmp(name, "tcp_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "tcp_wrap", EdgeInstallTcpWrapBinding);
-  }
-  if (std::strcmp(name, "tls_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "tls_wrap", EdgeInstallTlsWrapBinding);
-  }
-  if (std::strcmp(name, "timers") == 0) {
-    return GetOrCreateBinding(state, env, "timers", EdgeInstallTimersHostBinding);
-  }
-  if (std::strcmp(name, "tty_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "tty_wrap", EdgeInstallTtyWrapBinding);
-  }
-  if (std::strcmp(name, "udp_wrap") == 0) {
-    return GetOrCreateBinding(state, env, "udp_wrap", EdgeInstallUdpWrapBinding);
-  }
-  if (std::strcmp(name, "url") == 0) {
-    return GetOrCreateBinding(state, env, "url", EdgeInstallUrlBinding);
-  }
-  if (std::strcmp(name, "url_pattern") == 0) {
-    return GetOrCreateBinding(state, env, "url_pattern", EdgeInstallUrlPatternBinding);
-  }
-  if (std::strcmp(name, "util") == 0 || std::strcmp(name, "types") == 0) {
-    napi_value util = GetCachedBinding(state, env, "util");
-    napi_value types = GetCachedBinding(state, env, "types");
-    if (util == nullptr || types == nullptr) {
-      util = EdgeInstallUtilBinding(env);
-      if (util != nullptr && !IsUndefinedValue(env, util)) util = CacheBinding(state, env, "util", util);
-      types = EdgeGetTypesBinding(env);
-      if (types != nullptr && !IsUndefinedValue(env, types)) types = CacheBinding(state, env, "types", types);
-    }
-    if (std::strcmp(name, "types") == 0) return types;
-    return util;
-  }
-
-  return nullptr;
-}
-
-static napi_value DispatchGetOrCreateBuiltins(napi_env env, void* state) {
-  return GetOrCreateNativeBuiltinsBinding(env, static_cast<ModuleLoaderState*>(state));
-}
-
-static napi_value DispatchGetOrCreateTaskQueue(napi_env env) {
-  return EdgeGetOrCreateTaskQueueBinding(env);
-}
-
-static napi_value DispatchGetOrCreateErrors(napi_env env) {
-  return EdgeGetOrCreateErrorsBinding(env);
-}
-
-static napi_value DispatchGetOrCreateTraceEvents(napi_env env) {
-  return GetOrCreateTraceEventsBinding(env);
-}
-
-static internal_binding::ResolveOptions CreateInternalBindingResolveOptions(ModuleLoaderState* state) {
-  internal_binding::ResolveOptions options;
-  options.state = state;
-  options.callbacks.get_or_create_builtins = DispatchGetOrCreateBuiltins;
-  options.callbacks.get_or_create_task_queue = DispatchGetOrCreateTaskQueue;
-  options.callbacks.get_or_create_errors = DispatchGetOrCreateErrors;
-  options.callbacks.get_or_create_trace_events = DispatchGetOrCreateTraceEvents;
-  options.callbacks.resolve_binding = DispatchResolveBinding;
-  options.callbacks.resolve_uv = ResolveUvBinding;
-  options.callbacks.resolve_contextify = ResolveContextifyBinding;
-  options.callbacks.resolve_modules = ResolveModulesBinding;
-  options.callbacks.resolve_options = ResolveOptionsBinding;
-  return options;
-}
-
 static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -4542,44 +4512,9 @@ static napi_value NativeGetInternalBindingCallback(napi_env env, napi_callback_i
   if (argc < 1 || argv[0] == nullptr) {
     return undefined;
   }
-  ModuleLoaderState* state = GetModuleLoaderState(env);
-  if (state == nullptr || state->finalized) {
-    return undefined;
-  }
   const std::string name = ValueToUtf8(env, argv[0]);
-  if (EDGE_TRACE_ENABLED("EDGE_TRACE_INTERNAL_BINDING")) {
-    std::fprintf(stderr, "EDGE_TRACE_INTERNAL_BINDING request %s\n", name.c_str());
-  }
-  if (!name.empty() && ShouldCacheInternalBinding(name)) {
-    napi_value cached = GetCachedInternalBinding(state, env, name.c_str());
-    if (cached != nullptr) {
-      if (EDGE_TRACE_ENABLED("EDGE_TRACE_INTERNAL_BINDING")) {
-        std::fprintf(stderr, "EDGE_TRACE_INTERNAL_BINDING cache-hit %s\n", name.c_str());
-      }
-      return cached;
-    }
-  }
-
-  internal_binding::ResolveOptions options = CreateInternalBindingResolveOptions(state);
-
-  napi_value resolved = internal_binding::Resolve(env, name, options);
-  if (resolved != nullptr) {
-    if (EDGE_TRACE_ENABLED("EDGE_TRACE_INTERNAL_BINDING")) {
-      napi_valuetype resolved_type = napi_undefined;
-      (void)napi_typeof(env, resolved, &resolved_type);
-      std::fprintf(stderr,
-                   "EDGE_TRACE_INTERNAL_BINDING resolved %s type=%d\n",
-                   name.c_str(),
-                   static_cast<int>(resolved_type));
-    }
-    if (!name.empty() && ShouldCacheInternalBinding(name) && !IsUndefinedValue(env, resolved)) {
-      napi_value cached = CacheInternalBinding(state, env, name.c_str(), resolved);
-      if (cached != nullptr) {
-        return cached;
-      }
-    }
-    return resolved;
-  }
+  napi_value resolved = edge::binding_registry::Get(env, name);
+  if (resolved != nullptr) return resolved;
 
   bool has_pending_exception = false;
   if (napi_is_exception_pending(env, &has_pending_exception) == napi_ok && has_pending_exception) {
@@ -5189,6 +5124,33 @@ bool LoadResolvedModule(napi_env env, ModuleLoaderState* state, const fs::path& 
 }
 
 }  // namespace
+
+napi_value EdgeInstallBuiltinsBinding(napi_env env) {
+  if (env == nullptr) return nullptr;
+  ModuleLoaderState* state = GetModuleLoaderState(env);
+  if (state == nullptr || state->finalized) return UndefinedValue(env);
+  return GetOrCreateNativeBuiltinsBinding(env, state);
+}
+
+napi_value EdgeInstallContextifyBinding(napi_env env) {
+  return CreateContextifyBinding(env);
+}
+
+napi_value EdgeInstallModulesBinding(napi_env env) {
+  return CreateModulesBinding(env);
+}
+
+napi_value EdgeInstallOptionsBinding(napi_env env) {
+  return CreateOptionsBinding(env);
+}
+
+napi_value EdgeInstallTraceEventsBinding(napi_env env) {
+  return GetOrCreateTraceEventsBinding(env);
+}
+
+napi_value EdgeInstallUvBinding(napi_env env) {
+  return CreateUvBinding(env);
+}
 
 void EdgeSetPrimordials(napi_env env, napi_value primordials) {
   if (env == nullptr || primordials == nullptr) return;

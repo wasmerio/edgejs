@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 namespace internal_binding {
 
@@ -24,7 +24,7 @@ napi_value SeaGetAssetKeys(napi_env env, napi_callback_info /*info*/) {
 
 }  // namespace
 
-napi_value ResolveSea(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitSea(napi_env env) {
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return nullptr;
 

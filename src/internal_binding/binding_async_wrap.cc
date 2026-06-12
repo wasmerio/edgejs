@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 #include "internal_binding/binding_async_wrap.h"
 
 #include <array>
@@ -612,7 +612,7 @@ bool AsyncWrapPopContext(napi_env env, double async_id) {
   return PopAsyncContextImpl(env, state, async_id);
 }
 
-napi_value ResolveAsyncWrap(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitAsyncWrap(napi_env env) {
   auto& state = EnsureState(env);
   if (state.binding_ref != nullptr) {
     napi_value existing = GetRefValue(env, state.binding_ref);

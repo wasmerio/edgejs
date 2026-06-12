@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <cstring>
 #include <string>
@@ -10,6 +10,7 @@
 
 #include "edge_active_resource.h"
 #include "edge_environment.h"
+#include "edge_fs.h"
 #include "internal_binding/helpers.h"
 #include "edge_env_loop.h"
 #include "edge_handle_scope.h"
@@ -633,9 +634,8 @@ napi_value FsDirOpendirSync(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-napi_value ResolveFsDir(napi_env env, const ResolveOptions& options) {
-  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
-  napi_value binding = options.callbacks.resolve_binding(env, options.state, "fs_dir");
+napi_value InitFsDir(napi_env env) {
+  napi_value binding = EdgeInstallFsDirBinding(env);
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
 
   auto& state = EnsureState(env);

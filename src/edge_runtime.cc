@@ -1,5 +1,6 @@
 #include "edge_runtime.h"
 
+#include "binding_registry/binding_registry.h"
 #include <cstdlib>
 #include <chrono>
 #include <cerrno>
@@ -1419,18 +1420,8 @@ napi_value GetEntryPointPromiseFromUtilSymbol(napi_env env, napi_value global) {
     return nullptr;
   }
 
-  napi_value internal_binding = GetRuntimeInternalBinding(env, global);
-  if (!IsFunctionValue(env, internal_binding)) return nullptr;
-
-  napi_value util_name = nullptr;
-  if (napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &util_name) != napi_ok || util_name == nullptr) {
-    return nullptr;
-  }
-  napi_value util_binding = nullptr;
-  napi_value argv[1] = {util_name};
-  if (napi_call_function(env, global, internal_binding, 1, argv, &util_binding) != napi_ok || util_binding == nullptr) {
-    return nullptr;
-  }
+  napi_value util_binding = edge::binding_registry::Get(env, "util");
+  if (util_binding == nullptr) return nullptr;
 
   napi_value private_symbols = nullptr;
   if (napi_get_named_property(env, util_binding, "privateSymbols", &private_symbols) != napi_ok ||

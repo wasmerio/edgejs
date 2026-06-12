@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include "internal_binding/helpers.h"
 #include "edge_module_loader.h"
@@ -21,7 +21,7 @@ napi_value GetPerIsolateSymbolSource(napi_env env) {
 
 }  // namespace
 
-napi_value ResolveSymbols(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitSymbols(napi_env env) {
   const napi_value undefined = Undefined(env);
   napi_value source = GetPerIsolateSymbolSource(env);
   if (source == nullptr || IsUndefined(env, source)) return undefined;

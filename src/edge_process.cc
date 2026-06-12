@@ -1,5 +1,6 @@
 #include "edge_process.h"
 #include "edge_active_resource.h"
+#include "binding_registry/binding_registry.h"
 #include "edge_env_loop.h"
 #include "edge_module_loader.h"
 #include "edge_option_helpers.h"
@@ -4215,25 +4216,7 @@ napi_value ProcessMethodsLoadEnvFileCallback(napi_env env, napi_callback_info in
   napi_value global = nullptr;
   if (napi_get_global(env, &global) != napi_ok || global == nullptr) return nullptr;
 
-  napi_value util_binding = nullptr;
-  napi_value internal_binding = EdgeGetInternalBinding(env);
-  napi_valuetype internal_binding_type = napi_undefined;
-  if (internal_binding == nullptr &&
-      napi_get_named_property(env, global, "internalBinding", &internal_binding) != napi_ok) {
-    internal_binding = nullptr;
-  }
-  if (internal_binding != nullptr &&
-      napi_typeof(env, internal_binding, &internal_binding_type) == napi_ok &&
-      internal_binding_type == napi_function) {
-    napi_value util_name = nullptr;
-    if (napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &util_name) != napi_ok || util_name == nullptr) {
-      return nullptr;
-    }
-    napi_value argv_ib[1] = {util_name};
-    if (napi_call_function(env, global, internal_binding, 1, argv_ib, &util_binding) != napi_ok) {
-      return nullptr;
-    }
-  }
+  napi_value util_binding = edge::binding_registry::Get(env, "util");
 
   if (util_binding == nullptr) {
     napi_value undefined = nullptr;

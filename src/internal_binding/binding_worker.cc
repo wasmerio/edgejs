@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 #include "internal_binding/binding_messaging.h"
 
 #include <algorithm>
@@ -1751,7 +1751,7 @@ napi_value WorkerGetEnvMessagePort(napi_env env, napi_callback_info /*info*/) {
 
 }  // namespace
 
-napi_value ResolveWorker(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitWorker(napi_env env) {
   napi_value cached = EdgeWorkerEnvGetBinding(env);
   if (cached != nullptr) return cached;
 

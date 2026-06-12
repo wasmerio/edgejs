@@ -291,6 +291,17 @@ Then evaluate:
 Snapshots are a later optimization because they interact with native callbacks,
 libuv state, file descriptors, promises, and embedder data.
 
+June 9, 2026 native QuickJS CLI measurement for the Astro apps-dashboard server:
+temporary probes around QuickJS CJS and ESM compile calls showed about 124 ms of
+parse/compile work before the HTTP listener, and about 144 ms more on the first
+`/signin` render. Across startup plus first real request, the upper-bound saving
+from direct bytecode for all loaded app, package, and builtin JS was about
+268 ms of parser/compiler time over 8.15 MB of source. App/package files
+accounted for about 184 ms of that total; Node builtins accounted for about
+86 ms. The largest lazy hotspot was `lucide-react`, which was parsed once for
+CommonJS/module-syntax detection and again for execution, so a bytecode plan
+should also include module-format metadata or detection caching.
+
 ## Testing Strategy
 
 Use a staged gate:

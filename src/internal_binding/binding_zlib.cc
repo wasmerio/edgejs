@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <algorithm>
 #include <array>
@@ -1758,7 +1758,7 @@ bool DefineCompressionClass(napi_env env,
 
 }  // namespace
 
-napi_value ResolveZlib(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitZlib(napi_env env) {
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
 

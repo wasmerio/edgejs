@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 #include "internal_binding/binding_performance.h"
 
 #include <algorithm>
@@ -4242,7 +4242,7 @@ bool InstallStreamClass(napi_env env, napi_value binding, Http2BindingState* sta
 
 }  // namespace
 
-napi_value ResolveHttp2(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitHttp2(napi_env env) {
   Http2BindingState& state = EnsureHttp2State(env);
   napi_value cached = GetRefValue(env, state.binding_ref);
   if (cached != nullptr) return cached;

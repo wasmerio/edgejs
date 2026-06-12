@@ -1,5 +1,5 @@
 #include "internal_binding/binding_messaging.h"
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -16,6 +16,7 @@
 
 #include <uv.h>
 
+#include "binding_registry/binding_registry.h"
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
 #include "unofficial_napi.h"
@@ -377,25 +378,8 @@ napi_value GetRefValue(napi_env env, napi_ref ref) {
 }
 
 napi_value GetInternalBindingValue(napi_env env, const char* name) {
-  if (name == nullptr) return nullptr;
-  napi_value global = GetGlobal(env);
-  napi_value internal_binding = EdgeGetInternalBinding(env);
-  if (!IsFunction(env, internal_binding)) {
-    internal_binding = GetNamed(env, global, "internalBinding");
-  }
-  if (!IsFunction(env, internal_binding)) return nullptr;
-
-  napi_value name_value = nullptr;
-  if (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &name_value) != napi_ok || name_value == nullptr) {
-    return nullptr;
-  }
-
-  napi_value argv[1] = {name_value};
-  napi_value out = nullptr;
-  if (napi_call_function(env, global, internal_binding, 1, argv, &out) != napi_ok || out == nullptr) {
-    return nullptr;
-  }
-  return out;
+  if (env == nullptr || name == nullptr) return nullptr;
+  return edge::binding_registry::Get(env, name);
 }
 
 napi_value GetUtilPrivateSymbol(napi_env env, const char* key) {
@@ -1358,18 +1342,16 @@ bool PrepareJSTransferableCloneData(
 napi_value CallJSTransferableCloneFallback(napi_env env, napi_value value) {
   if (env == nullptr || value == nullptr) return nullptr;
 
-  napi_value internal_binding = EdgeGetInternalBinding(env);
-  if (!IsFunction(env, internal_binding)) {
-    napi_value global = GetGlobal(env);
-    internal_binding = GetNamed(env, global, "internalBinding");
+  napi_value symbols = edge::binding_registry::Get(env, "symbols");
+  napi_value util = edge::binding_registry::Get(env, "util");
+  if (symbols == nullptr || IsUndefined(env, symbols) ||
+      util == nullptr || IsUndefined(env, util)) {
+    return nullptr;
   }
-  if (!IsFunction(env, internal_binding)) return nullptr;
 
   static const char kSource[] =
-      "(function(value, internalBinding) {"
+      "(function(value, symbols, util) {"
       "  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return undefined;"
-      "  const symbols = internalBinding('symbols');"
-      "  const util = internalBinding('util');"
       "  const clone = value[symbols.messaging_clone_symbol];"
       "  if (typeof clone !== 'function') return undefined;"
       "  const mode = value[util.privateSymbols.transfer_mode_private_symbol];"
@@ -1388,9 +1370,9 @@ napi_value CallJSTransferableCloneFallback(napi_env env, napi_value value) {
   }
 
   napi_value undefined = Undefined(env);
-  napi_value argv[2] = {value, internal_binding};
+  napi_value argv[3] = {value, symbols, util};
   napi_value out = nullptr;
-  if (napi_call_function(env, undefined, fn, 2, argv, &out) != napi_ok) {
+  if (napi_call_function(env, undefined, fn, 3, argv, &out) != napi_ok) {
     ClearPendingException(env);
     return nullptr;
   }
@@ -1809,27 +1791,8 @@ napi_value TryRequireModule(napi_env env, const char* module_name) {
 }
 
 napi_value GetUntransferableObjectPrivateSymbol(napi_env env) {
-  napi_value global = GetGlobal(env);
-  if (global == nullptr) return nullptr;
-
-  napi_value internal_binding = EdgeGetInternalBinding(env);
-  if (!IsFunction(env, internal_binding)) {
-    internal_binding = GetNamed(env, global, "internalBinding");
-  }
-  if (!IsFunction(env, internal_binding)) return nullptr;
-
-  napi_value util_name = nullptr;
-  if (napi_create_string_utf8(env, "util", NAPI_AUTO_LENGTH, &util_name) != napi_ok || util_name == nullptr) {
-    return nullptr;
-  }
-
-  napi_value util_binding = nullptr;
-  napi_value argv[1] = {util_name};
-  if (napi_call_function(env, global, internal_binding, 1, argv, &util_binding) != napi_ok || util_binding == nullptr) {
-    ClearPendingException(env);
-    return nullptr;
-  }
-
+  napi_value util_binding = edge::binding_registry::Get(env, "util");
+  if (util_binding == nullptr || IsUndefined(env, util_binding)) return nullptr;
   napi_value private_symbols = GetNamed(env, util_binding, "privateSymbols");
   if (private_symbols == nullptr) return nullptr;
   return GetNamed(env, private_symbols, "untransferable_object_private_symbol");
@@ -3773,7 +3736,7 @@ void ConnectPorts(napi_env env, napi_value first, napi_value second) {
   InternalEntangleMessagePortData(first_wrap->data, second_wrap->data);
 }
 
-bool EnsureMessagingSymbols(napi_env env, const ResolveOptions& options) {
+bool EnsureMessagingSymbols(napi_env env) {
   const bool already_cached = WithExistingMessagingState(
       env,
       [](MessagingState* state) {
@@ -3784,24 +3747,7 @@ bool EnsureMessagingSymbols(napi_env env, const ResolveOptions& options) {
   if (already_cached) {
     return true;
   }
-  napi_value symbols = nullptr;
-  if (options.callbacks.resolve_binding != nullptr) {
-    symbols = options.callbacks.resolve_binding(env, options.state, "symbols");
-  }
-  if (symbols == nullptr || IsUndefined(env, symbols)) {
-    napi_value global = GetGlobal(env);
-    napi_value internal_binding = EdgeGetInternalBinding(env);
-    if (!IsFunction(env, internal_binding)) {
-      internal_binding = GetNamed(env, global, "internalBinding");
-    }
-    if (IsFunction(env, internal_binding)) {
-      napi_value name = nullptr;
-      if (napi_create_string_utf8(env, "symbols", NAPI_AUTO_LENGTH, &name) == napi_ok && name != nullptr) {
-        napi_value argv[1] = {name};
-        napi_call_function(env, global, internal_binding, 1, argv, &symbols);
-      }
-    }
-  }
+  napi_value symbols = edge::binding_registry::Get(env, "symbols");
   if (symbols == nullptr || IsUndefined(env, symbols)) return false;
 
   SetMessagingStateRefValue(env, &MessagingState::no_message_symbol_ref, GetNamed(env, symbols, "no_message_symbol"));
@@ -5010,12 +4956,12 @@ void EdgeCloseMessagePortForValue(napi_env env, napi_value value) {
   BeginClosePort(env, wrap, false);
 }
 
-napi_value ResolveMessaging(napi_env env, const ResolveOptions& options) {
+napi_value InitMessaging(napi_env env) {
   const napi_value undefined = Undefined(env);
   napi_value cached = GetCachedMessaging(env);
   if (cached != nullptr) return cached;
 
-  EnsureMessagingSymbols(env, options);
+  EnsureMessagingSymbols(env);
 
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return undefined;

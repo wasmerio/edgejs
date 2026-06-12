@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 #include "internal_binding/watchdog.h"
 
 #include <algorithm>
@@ -385,7 +385,7 @@ bool WatchdogHasPendingSigint() {
 #endif
 }
 
-napi_value ResolveWatchdog(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitWatchdog(napi_env env) {
   napi_value binding = nullptr;
   if (napi_create_object(env, &binding) != napi_ok || binding == nullptr) return Undefined(env);
 

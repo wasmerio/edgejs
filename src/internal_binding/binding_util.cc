@@ -1,8 +1,10 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <cstdint>
 #include <vector>
 
+#include "binding_registry/binding_registry.h"
+#include "edge_util.h"
 #include "internal_binding/helpers.h"
 
 namespace internal_binding {
@@ -222,13 +224,12 @@ void EnsureMethod(napi_env env, napi_value binding, const char* name, napi_callb
 
 }  // namespace
 
-napi_value ResolveUtil(napi_env env, const ResolveOptions& options) {
-  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
-  napi_value binding = options.callbacks.resolve_binding(env, options.state, "util");
+napi_value InitUtil(napi_env env) {
+  napi_value binding = EdgeInstallUtilBinding(env);
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
   UtilBindingState* state = GetOrCreateUtilBindingState(env, binding);
 
-  napi_value types = options.callbacks.resolve_binding(env, options.state, "types");
+  napi_value types = edge::binding_registry::Get(env, "types");
   if (state != nullptr) {
     DeleteRefIfPresent(env, &state->types_ref);
     if (types != nullptr && !IsUndefined(env, types)) {

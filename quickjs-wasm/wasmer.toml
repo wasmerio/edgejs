@@ -1,6 +1,6 @@
 [package]
 name = "wasmer/edgejs-quickjs"
-version = "0.0.2"
+version = "0.0.4"
 description = "Edge.js with an embedded QuickJS N-API provider"
 entrypoint = "edge"
 

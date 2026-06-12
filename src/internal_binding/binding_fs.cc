@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include "edge_trace.h"
 
@@ -23,7 +23,9 @@
 #include <uv.h>
 #include "ada.h"
 
+#include "binding_registry/binding_registry.h"
 #include "edge_environment.h"
+#include "edge_fs.h"
 #include "internal_binding/helpers.h"
 #include "../edge_env_loop.h"
 #include "../edge_handle_scope.h"
@@ -4669,9 +4671,8 @@ void EnsureClassProperty(napi_env env,
 
 }  // namespace
 
-napi_value ResolveFs(napi_env env, const ResolveOptions& options) {
-  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
-  napi_value binding = options.callbacks.resolve_binding(env, options.state, "fs");
+napi_value InitFs(napi_env env) {
+  napi_value binding = EdgeInstallFsBinding(env);
   if (binding == nullptr || IsUndefined(env, binding)) return Undefined(env);
 
   auto& state = EnsureState(env);
@@ -4689,8 +4690,8 @@ napi_value ResolveFs(napi_env env, const ResolveOptions& options) {
   for (const char* name : raw_names) CaptureRawMethod(env, &state, binding, name);
 
   // Constants/symbols.
-  if (state.k_use_promises_symbol_ref == nullptr && options.callbacks.resolve_binding != nullptr) {
-    napi_value symbols_binding = options.callbacks.resolve_binding(env, options.state, "symbols");
+  if (state.k_use_promises_symbol_ref == nullptr) {
+    napi_value symbols_binding = edge::binding_registry::Get(env, "symbols");
     if (symbols_binding != nullptr && !IsUndefined(env, symbols_binding)) {
       napi_value candidate = nullptr;
       if (napi_get_named_property(env, symbols_binding, "fs_use_promises_symbol", &candidate) == napi_ok &&

@@ -67,7 +67,10 @@ asyncWrap.setupHooks({
   promise_resolve() {},
 });
 asyncWrap.queueDestroyAsyncId(321);
-assert.deepStrictEqual(destroyCalls, [321]);
+// Destroy hooks are dispatched through a deferred platform task, matching
+// Node's deferred queueDestroyAsyncId semantics. The drained result is
+// asserted by a follow-up script after the event loop goes idle.
+globalThis.__edge_destroy_calls = destroyCalls;
 asyncWrap.setPromiseHooks(() => {}, undefined, () => {}, undefined);
 const promiseHooks = asyncWrap.getPromiseHooks();
 assert.ok(Array.isArray(promiseHooks));
@@ -730,6 +733,14 @@ assert.strictEqual(typeof jsUdpHandle.getProviderType, 'function');
 globalThis.__edge_internal_binding_parity_ok = 1;
 )JS";
 
+constexpr const char* kParityDestroyDrainScript = R"JS(
+const assert = require('assert');
+
+assert.deepStrictEqual(globalThis.__edge_destroy_calls, [321]);
+
+globalThis.__edge_internal_binding_destroy_drain_ok = 1;
+)JS";
+
 constexpr const char* kSymbolBootstrapParityScript = R"JS(
 const assert = require('assert');
 
@@ -809,6 +820,22 @@ TEST_F(Test5InternalBindingParityPhase03, WaveOneAndTwoBindingsHaveCriticalParit
   int32_t ok = 0;
   ASSERT_EQ(napi_get_value_int32(s.env, ok_value, &ok), napi_ok);
   EXPECT_EQ(ok, 1);
+
+  // The first run drains the event loop, so deferred destroy hooks queued by
+  // queueDestroyAsyncId have fired by the time this second script asserts.
+  const int drain_exit_code = EdgeRunScriptSource(s.env, kParityDestroyDrainScript, &error);
+  EXPECT_EQ(drain_exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty());
+
+  napi_value drain_ok_value = nullptr;
+  ASSERT_EQ(
+      napi_get_named_property(
+          s.env, global, "__edge_internal_binding_destroy_drain_ok", &drain_ok_value),
+      napi_ok);
+
+  int32_t drain_ok = 0;
+  ASSERT_EQ(napi_get_value_int32(s.env, drain_ok_value, &drain_ok), napi_ok);
+  EXPECT_EQ(drain_ok, 1);
 }
 
 TEST_F(Test5InternalBindingParityPhase03, BindingCachesCanBeDestroyedAndRecreatedAcrossEnvs) {

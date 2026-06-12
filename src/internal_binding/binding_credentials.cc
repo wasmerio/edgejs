@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <cstdlib>
 #include <cerrno>
@@ -570,7 +570,7 @@ void DefineMethod(napi_env env, napi_value obj, const char* name, napi_callback 
 
 }  // namespace
 
-napi_value ResolveCredentials(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitCredentials(napi_env env) {
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
 

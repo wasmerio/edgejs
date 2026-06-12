@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <cstdint>
 #include <cstring>
@@ -385,7 +385,7 @@ napi_value GetCachedUndiciBinding(napi_env env) {
 
 }  // namespace
 
-napi_value ResolveUndici(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitUndici(napi_env env) {
   const napi_value undefined = Undefined(env);
   napi_value cached = GetCachedUndiciBinding(env);
   if (cached != nullptr) return cached;

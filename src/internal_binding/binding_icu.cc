@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <algorithm>
 #include <cctype>
@@ -651,7 +651,7 @@ bool SetFunction(napi_env env, napi_value object, const char* name, napi_callbac
 
 }  // namespace
 
-napi_value ResolveIcu(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitIcu(napi_env env) {
   auto* state = GetIcuState(env);
   if (state != nullptr && state->binding_ref != nullptr) {
     napi_value cached = nullptr;

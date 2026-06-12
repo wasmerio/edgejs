@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <limits>
 #include <fcntl.h>
@@ -14,6 +14,8 @@
 #include "zstd.h"
 #include "zstd_errors.h"
 
+#include "binding_registry/binding_registry.h"
+#include "edge_os.h"
 #include "internal_binding/helpers.h"
 
 namespace internal_binding {
@@ -718,7 +720,7 @@ void NormalizeConstantsShape(napi_env env, napi_value constants) {
 
 }  // namespace
 
-napi_value ResolveConstants(napi_env env, const ResolveOptions& options) {
+napi_value InitConstants(napi_env env) {
   const napi_value undefined = Undefined(env);
 
   napi_value out = nullptr;
@@ -730,18 +732,12 @@ napi_value ResolveConstants(napi_env env, const ResolveOptions& options) {
   SetNamedObjectIfValid(env, out, "zlib", CreateEmptyObject(env));
 
   // Prefer native edge constants when present.
-  napi_value os_constants = nullptr;
-  if (options.callbacks.resolve_binding != nullptr) {
-    os_constants = options.callbacks.resolve_binding(env, options.state, "os_constants");
-  }
+  napi_value os_constants = EdgeGetOsConstants(env);
   SetNamedObjectIfValid(env, out, "os", os_constants);
 
   // Derive crypto constants from the native crypto binding surface to avoid
   // requiring JS modules while constants are initializing.
-  napi_value crypto_binding = nullptr;
-  if (options.callbacks.resolve_binding != nullptr) {
-    crypto_binding = options.callbacks.resolve_binding(env, options.state, "crypto");
-  }
+  napi_value crypto_binding = edge::binding_registry::Get(env, "crypto");
   if (!IsUndefined(env, crypto_binding) && IsObjectLike(env, crypto_binding)) {
     napi_value crypto_constants_obj = nullptr;
     if (napi_create_object(env, &crypto_constants_obj) == napi_ok && crypto_constants_obj != nullptr) {

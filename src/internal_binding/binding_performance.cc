@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 #include "internal_binding/binding_performance.h"
 
 #include <chrono>
@@ -336,7 +336,7 @@ void PerformanceEmitEntry(napi_env env,
   (void)napi_call_function(env, global, callback, 5, argv, &ignored);
 }
 
-napi_value ResolvePerformance(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitPerformance(napi_env env) {
   const napi_value undefined = Undefined(env);
   napi_value cached = GetCachedPerformance(env);
   if (cached != nullptr) return cached;

@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include "internal_binding/helpers.h"
 
@@ -14,7 +14,7 @@ napi_value InternalOnlyV8QueryObjects(napi_env env, napi_callback_info /*info*/)
 
 }  // namespace
 
-napi_value ResolveInternalOnlyV8(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitInternalOnlyV8(napi_env env) {
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
 

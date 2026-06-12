@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
@@ -51,8 +51,7 @@ napi_value SetContinuationPreservedEmbedderData(napi_env env, napi_callback_info
 
 }  // namespace
 
-napi_value ResolveAsyncContextFrame(napi_env env, const ResolveOptions& options) {
-  (void)options;
+napi_value InitAsyncContextFrame(napi_env env) {
   AsyncContextFrameBindingState& state = GetState(env);
   if (state.binding_ref != nullptr) {
     napi_value cached = nullptr;

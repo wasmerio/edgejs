@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -639,7 +639,7 @@ bool DefineMethod(napi_env env, napi_value target, const char* name, napi_callba
 
 }  // namespace
 
-napi_value ResolveBlob(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitBlob(napi_env env) {
   auto* existing_state = GetBlobState(env);
   if (existing_state != nullptr && existing_state->binding_ref != nullptr) {
     napi_value cached = nullptr;

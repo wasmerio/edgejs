@@ -45,6 +45,8 @@ if(TARGET napi_v8 AND NAPI_V8_LIBRARY)
         NAPI_V8_NODE_ROOT_PATH="${NAPI_V8_NODE_ROOT}"
         PROJECT_ROOT_PATH="${PROJECT_ROOT}"
         NAPI_V8_ROOT_PATH="${EDGE_ROOT}"
+        EDGE_VERSION_COMMIT="${EDGE_VERSION_COMMIT}"
+        EDGE_VERSION_SUFFIX="${EDGE_VERSION_SUFFIX}"
     )
     if(NAPI_V8_DEFINES)
       target_compile_definitions(${target_name} PRIVATE ${NAPI_V8_DEFINES})
@@ -92,6 +94,9 @@ if(TARGET napi_v8 AND NAPI_V8_LIBRARY)
   )
   add_edge_node_api_test(edge_test_5_internal_binding_parity_phase03
     "${EDGE_ROOT}/tests/runners/test_5_internal_binding_parity_phase03.cc"
+  )
+  add_edge_node_api_test(edge_test_6_binding_registry_phase04
+    "${EDGE_ROOT}/tests/runners/test_6_binding_registry_phase04.cc"
   )
 else()
   message(STATUS "Skipping edge node-api tests: napi_v8 runtime target/linkage is unavailable")

@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -543,7 +543,7 @@ napi_value StreamPipePendingWrites(napi_env env, napi_callback_info info) {
 
 }  // namespace
 
-napi_value ResolveStreamPipe(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitStreamPipe(napi_env env) {
   StreamPipeBindingState& state = EnsureState(env);
   napi_value cached = GetRefValue(env, state.binding_ref);
   if (cached != nullptr) return cached;

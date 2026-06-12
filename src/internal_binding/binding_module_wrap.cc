@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <string>
 #include <unordered_map>
@@ -737,7 +737,7 @@ napi_value ModuleWrapThrowIfPromiseRejected(napi_env env, napi_callback_info inf
 
 }  // namespace
 
-napi_value ResolveModuleWrap(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitModuleWrap(napi_env env) {
   auto& state = EnsureBindingState(env);
   if (state.binding_ref != nullptr) {
     napi_value existing = GetRefValue(env, state.binding_ref);

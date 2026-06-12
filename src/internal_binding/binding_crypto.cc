@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <array>
 #include <cctype>
@@ -39,6 +39,7 @@
 #include <openssl/x509.h>
 
 #include "ncrypto.h"
+#include "edge_crypto.h"
 #include "crypto/edge_crypto_binding.h"
 #include "internal_binding/helpers.h"
 #include "edge_environment.h"
@@ -8991,9 +8992,8 @@ void EnsureClass(napi_env env,
 
 }  // namespace
 
-napi_value ResolveCrypto(napi_env env, const ResolveOptions& options) {
-  if (options.callbacks.resolve_binding == nullptr) return Undefined(env);
-  napi_value out = options.callbacks.resolve_binding(env, options.state, "crypto");
+napi_value InitCrypto(napi_env env) {
+  napi_value out = EdgeInstallCryptoBinding(env);
   if (out == nullptr || IsUndefined(env, out)) return Undefined(env);
 
   auto& st = EnsureState(env);

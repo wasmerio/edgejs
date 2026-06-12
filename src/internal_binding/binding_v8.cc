@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include <cstring>
 #include <string>
@@ -269,7 +269,7 @@ napi_value V8GetHashSeed(napi_env env, napi_callback_info /*info*/) {
 
 }  // namespace
 
-napi_value ResolveV8(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitV8(napi_env env) {
   napi_value out = nullptr;
   if (napi_create_object(env, &out) != napi_ok || out == nullptr) return Undefined(env);
 

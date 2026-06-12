@@ -1,4 +1,4 @@
-#include "internal_binding/dispatch.h"
+#include "internal_binding/binding_initializers.h"
 
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
@@ -68,7 +68,7 @@ napi_value GetCachedWasmWebApi(napi_env env) {
 
 }  // namespace
 
-napi_value ResolveWasmWebApi(napi_env env, const ResolveOptions& /*options*/) {
+napi_value InitWasmWebApi(napi_env env) {
   const napi_value undefined = Undefined(env);
   napi_value cached = GetCachedWasmWebApi(env);
   if (cached != nullptr) return cached;

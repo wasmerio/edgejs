@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "binding_registry/binding_registry.h"
 #include "edge_environment.h"
 #include "internal_binding/binding_async_wrap.h"
 #include "unofficial_napi.h"
@@ -48,41 +49,7 @@ napi_value GetRefValue(napi_env env, napi_ref ref) {
 
 napi_value ResolveInternalBinding(napi_env env, const char* name) {
   if (env == nullptr || name == nullptr) return nullptr;
-
-  napi_value global = internal_binding::GetGlobal(env);
-  if (global == nullptr) return nullptr;
-
-  napi_value internal_binding = EdgeGetInternalBinding(env);
-  if (internal_binding == nullptr) {
-    if (napi_get_named_property(env, global, "internalBinding", &internal_binding) != napi_ok ||
-        internal_binding == nullptr) {
-      return nullptr;
-    }
-  }
-
-  napi_valuetype type = napi_undefined;
-  if (napi_typeof(env, internal_binding, &type) != napi_ok || type != napi_function) {
-    return nullptr;
-  }
-
-  napi_value binding_name = nullptr;
-  if (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &binding_name) != napi_ok ||
-      binding_name == nullptr) {
-    return nullptr;
-  }
-
-  napi_value binding = nullptr;
-  napi_value argv[1] = {binding_name};
-  if (napi_call_function(env, global, internal_binding, 1, argv, &binding) != napi_ok ||
-      binding == nullptr) {
-    bool pending = false;
-    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-      napi_value ignored = nullptr;
-      napi_get_and_clear_last_exception(env, &ignored);
-    }
-    return nullptr;
-  }
-  return binding;
+  return edge::binding_registry::Get(env, name);
 }
 
 AsyncWrapCache& GetCache(napi_env env) {
