@@ -503,14 +503,6 @@ napi_value GuessHandleType(napi_env env, napi_callback_info info) {
     return Undefined(env);
   }
   uv_handle_type t = uv_guess_handle(static_cast<uv_file>(fd));
-#ifdef __wasi__
-  if (t == UV_TTY && fd >= 0 && fd <= 2) {
-    struct stat fd_stat {};
-    if (fstat(fd, &fd_stat) == 0) {
-      t = UV_NAMED_PIPE;
-    }
-  }
-#endif
 #ifndef _WIN32
   if (fd == 0 && t == UV_FILE) {
     struct stat fd_stat {};

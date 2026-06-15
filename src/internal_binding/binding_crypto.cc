@@ -728,22 +728,6 @@ void ThrowLastOpenSslMessage(napi_env env, const char* fallback_message) {
   napi_throw(env, CreateOpenSslError(env, MapOpenSslErrorCode(selected), selected, fallback_message));
 }
 
-unsigned long ConsumePreferredOpenSslError() {
-  unsigned long first = 0;
-  unsigned long selected = 0;
-  int selected_priority = 0;
-  unsigned long err = 0;
-  while ((err = ERR_get_error()) != 0) {
-    if (first == 0) first = err;
-    const int priority = OpenSslMappedErrorPriority(err, true);
-    if (priority > selected_priority) {
-      selected = err;
-      selected_priority = priority;
-    }
-  }
-  return selected != 0 ? selected : first;
-}
-
 unsigned long ConsumePreferredOpenSslKeyParseError(bool require_private) {
   unsigned long first = 0;
   unsigned long selected = 0;
@@ -758,6 +742,10 @@ unsigned long ConsumePreferredOpenSslKeyParseError(bool require_private) {
     }
   }
   return selected != 0 ? selected : first;
+}
+
+unsigned long ConsumePreferredOpenSslError() {
+  return ConsumePreferredOpenSslKeyParseError(true);
 }
 
 constexpr unsigned long kOpenSslDecoderUnsupportedError = 0x1E08010CUL;
