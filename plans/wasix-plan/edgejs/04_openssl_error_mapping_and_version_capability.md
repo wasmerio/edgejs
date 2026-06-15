@@ -107,5 +107,5 @@ which OpenSSL stack entry should become a Node.js error.
 
 ### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
 
-- edgejs [5254f803](https://github.com/wasmerio/edgejs/commit/5254f803ff93200d79231d87501f813eb1b35147) OpenSSL update to 3.5
-- edgejs [b9ef182f](https://github.com/wasmerio/edgejs/commit/b9ef182f2322eb0e111f40427e4685852ec6a241) Fixes for OpenSSL error code mapping
+- Sadhbh: edgejs [5254f803](https://github.com/wasmerio/edgejs/commit/5254f803ff93200d79231d87501f813eb1b35147) OpenSSL update to 3.5
+- Sadhbh: edgejs [b9ef182f](https://github.com/wasmerio/edgejs/commit/b9ef182f2322eb0e111f40427e4685852ec6a241) Fixes for OpenSSL error code mapping

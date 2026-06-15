@@ -77,8 +77,8 @@ claiming that WASIX already implements every TCP timing option.
 
 ### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
 
-- edgejs [9fa61f18](https://github.com/wasmerio/edgejs/commit/9fa61f1888f34c0785f54da8dd99ae193e536439) UV keep alive fix (disable unsupported options)
+- Sadhbh: edgejs [9fa61f18](https://github.com/wasmerio/edgejs/commit/9fa61f1888f34c0785f54da8dd99ae193e536439) UV keep alive fix (disable unsupported options)
 
 ### Commits without PR
 
-- libuv-wasix [8d537440](https://github.com/Anodized-Titanium/libuv-wasix/commit/8d537440533cfc290e33c7bcbf181ab414dd1850) Wasix-LibC supports SOL_SOCKET + SO_KEEPALIVE, however does not support additional options such as TCP_KEEPIDLE, TCP_KEEPINTVL, or TCP_KEEPCNT - so we disable them
+- Sadhbh: libuv-wasix [8d537440](https://github.com/Anodized-Titanium/libuv-wasix/commit/8d537440533cfc290e33c7bcbf181ab414dd1850) Wasix-LibC supports SOL_SOCKET + SO_KEEPALIVE, however does not support additional options such as TCP_KEEPIDLE, TCP_KEEPINTVL, or TCP_KEEPCNT - so we disable them

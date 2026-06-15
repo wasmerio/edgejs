@@ -85,4 +85,4 @@ shape of JavaScript stack overflow errors.
 
 ### Commits without PR
 
-- quickjs [9a59f17](https://github.com/wasmerio/quickjs/commit/9a59f17a026ebc3b6932afa886c21ebf02689a2e) Set WASI stack limit same as non-WASI
+- Sadhbh: quickjs [9a59f17](https://github.com/wasmerio/quickjs/commit/9a59f17a026ebc3b6932afa886c21ebf02689a2e) Set WASI stack limit same as non-WASI

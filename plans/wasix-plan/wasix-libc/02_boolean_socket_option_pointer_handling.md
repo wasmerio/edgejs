@@ -124,4 +124,4 @@ return __wasi_sock_set_opt_flag(fd, level, optname, enabled != 0);
 
 ### [wasix-org/wasix-libc#116: Fix socket options and last error](https://github.com/wasix-org/wasix-libc/pull/116)
 
-- wasix-libc [17e686c](https://github.com/Anodized-Titanium/wasix-libc/commit/17e686c6a1cd6f11b3085aa23a42c0263fe99de5) Socket option incorrectly deferenced pointer
+- Sadhbh: wasix-libc [17e686c](https://github.com/Anodized-Titanium/wasix-libc/commit/17e686c6a1cd6f11b3085aa23a42c0263fe99de5) Socket option incorrectly deferenced pointer

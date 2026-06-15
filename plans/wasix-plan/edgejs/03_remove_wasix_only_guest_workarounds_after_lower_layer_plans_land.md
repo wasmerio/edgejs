@@ -124,6 +124,6 @@ branch.
 
 ### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
 
-- edgejs [f1999f45](https://github.com/wasmerio/edgejs/commit/f1999f45d43453d508db45b3b52e4115983e26a8) Removed hacks: loopback, and spawn
-- edgejs [27118329](https://github.com/wasmerio/edgejs/commit/27118329f47b9876c3f415bf42669f9cc4a6568b) Fixes around edge process wrap, plus w/a for edge -e eval
-- edgejs [61ba9604](https://github.com/wasmerio/edgejs/commit/61ba9604327a7326a555c2d537d7214421c60a9c) various fixes
+- Sadhbh: edgejs [f1999f45](https://github.com/wasmerio/edgejs/commit/f1999f45d43453d508db45b3b52e4115983e26a8) Removed hacks: loopback, and spawn
+- Sadhbh: edgejs [27118329](https://github.com/wasmerio/edgejs/commit/27118329f47b9876c3f415bf42669f9cc4a6568b) Fixes around edge process wrap, plus w/a for edge -e eval
+- Sadhbh: edgejs [61ba9604](https://github.com/wasmerio/edgejs/commit/61ba9604327a7326a555c2d537d7214421c60a9c) various fixes

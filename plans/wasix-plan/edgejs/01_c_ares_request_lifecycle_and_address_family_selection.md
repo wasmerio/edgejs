@@ -129,5 +129,5 @@ and preserve the requested address family when constructing c-ares work.
 
 ### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
 
-- edgejs [929a9151](https://github.com/wasmerio/edgejs/commit/929a9151c336b5862839d7b3d3e2bec219f852ca) c-ares requests are now tracked per channel, cancellation completes still-active requests with ECANCELLED, reverse lookup includes h_name, and loopback reverse/nameinfo returns localhost
-- edgejs [64faa6ca](https://github.com/wasmerio/edgejs/commit/64faa6caba3648b7393c69c9a339a4b90f2a697e) Respect address family (IPv4 or IPv6) when asked GetAddrInfo
+- Sadhbh: edgejs [929a9151](https://github.com/wasmerio/edgejs/commit/929a9151c336b5862839d7b3d3e2bec219f852ca) c-ares requests are now tracked per channel, cancellation completes still-active requests with ECANCELLED, reverse lookup includes h_name, and loopback reverse/nameinfo returns localhost
+- Sadhbh: edgejs [64faa6ca](https://github.com/wasmerio/edgejs/commit/64faa6caba3648b7393c69c9a339a4b90f2a697e) Respect address family (IPv4 or IPv6) when asked GetAddrInfo

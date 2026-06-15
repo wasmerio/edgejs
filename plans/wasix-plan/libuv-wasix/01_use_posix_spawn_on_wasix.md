@@ -10,6 +10,13 @@ exit event.
 This occurs whenever Node uses `child_process.spawn()`, `execFile()`, `exec()`,
 `fork()`, or cluster worker creation on WASIX.
 
+Branch context:
+
+`libuv-wasix` uses `ubi` as its mainline branch. In the local history, `ubi`
+points at Martin's `ea792e22` "disable fork" baseline. The spawn proposal is
+the next commit on `fix/spawn`: Artem's `ba06698b`, which replaces the disabled
+fork path with WASIX `posix_spawn` / `proc_join` behavior.
+
 Minimal Example:
 
 ```c
@@ -80,8 +87,7 @@ Node child_process.spawn()
 The minimal libuv piece is just translation from libuv's process options and
 stdio container into `posix_spawn_file_actions_*` calls plus `posix_spawnp()`.
 
-## Proposed Solution References
+## Related Commits
 
-### Commits without PR
-
-- libuv-wasix [ba06698b](https://github.com/Anodized-Titanium/libuv-wasix/commit/ba06698ba3f3b508a7a4eeacb23e0c911ebf4576) libuv-wasix: use WASIX posix_spawn/proc_join for child processes
+- Martin: libuv-wasix [ea792e22](https://github.com/wasix-org/libuv/commit/ea792e22c8e88149d8279883ab4c7fd1fd716392) disable fork
+- Artem: libuv-wasix [ba06698b](https://github.com/Anodized-Titanium/libuv-wasix/commit/ba06698ba3f3b508a7a4eeacb23e0c911ebf4576) libuv-wasix: use WASIX posix_spawn/proc_join for child processes

@@ -12,6 +12,18 @@ reach the behavior they are trying to assert.
 This occurs in connected UDP, default-host send, multicast TTL/interface/loop,
 and cluster/dgram tests.
 
+Branch context:
+
+`libuv-wasix` uses `ubi` as its mainline branch. In the local history, the UDP
+and multicast work is Sadhbh's `0ae770b9` on top of Artem's `ba06698b` spawn
+commit, with Martin's `ea792e22` `ubi` commit as the baseline:
+
+```text
+Sadhbh 0ae770b9 multicast TTL/loop/interface shims for WASIX, plus WASIX UDP disconnect avoids the unsupported AF_UNSPEC connect() trick. WASIX connected-state checks now trust libuv's handle flag.
+Artem  ba06698b libuv-wasix: use WASIX posix_spawn/proc_join for child processes
+Martin ea792e22 disable fork   # origin/ubi, ubi baseline
+```
+
 Minimal Example:
 
 ```c
@@ -94,4 +106,4 @@ multicast implementation remains a Wasmer task.
 
 ### Commits without PR
 
-- libuv-wasix [0ae770b9](https://github.com/Anodized-Titanium/libuv-wasix/commit/0ae770b9daae35d97d3c9a2693a5b22362124f12) multicast TTL/loop/interface shims and UDP disconnect handling
+- Sadhbh: libuv-wasix [0ae770b9](https://github.com/Anodized-Titanium/libuv-wasix/commit/0ae770b9daae35d97d3c9a2693a5b22362124f12) multicast TTL/loop/interface shims and UDP disconnect handling

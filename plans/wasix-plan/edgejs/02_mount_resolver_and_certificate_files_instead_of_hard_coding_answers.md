@@ -117,5 +117,5 @@ logic.
 
 ### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
 
-- edgejs [dc9a0465](https://github.com/wasmerio/edgejs/commit/dc9a046509ff36b4f1e952967528480a5873e4b2) Added /etc/hosts, removed stream type normalization
-- edgejs [38e01f79](https://github.com/wasmerio/edgejs/commit/38e01f79c15636badbab17faf6c31eef7d16abc6) Napi/Qjs: SharedArrayBuffer. Ssl certs in wasix tests.
+- Sadhbh: edgejs [dc9a0465](https://github.com/wasmerio/edgejs/commit/dc9a046509ff36b4f1e952967528480a5873e4b2) Added /etc/hosts, removed stream type normalization
+- Sadhbh: edgejs [38e01f79](https://github.com/wasmerio/edgejs/commit/38e01f79c15636badbab17faf6c31eef7d16abc6) Napi/Qjs: SharedArrayBuffer. Ssl certs in wasix tests.
