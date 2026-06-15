@@ -14,10 +14,58 @@ flags, the fd remains blocking and code that expects `EAGAIN` can hang.
 
 Minimal Example:
 
-```c
-#include <sys/socket.h>
+This is a complete C program that asks libc for a UDP socket that is both
+nonblocking and close-on-exec at creation time. Without the fix, libc can pass
+the combined type bits to WASIX as if they were the base socket type, or it can
+create the socket but lose one of the requested flags.
 
-int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+```c
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+int main(void) {
+  int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    perror("socket");
+    return 1;
+  }
+
+  int status_flags = fcntl(fd, F_GETFL, 0);
+  if (status_flags < 0) {
+    perror("fcntl(F_GETFL)");
+    return 1;
+  }
+  if ((status_flags & O_NONBLOCK) == 0) {
+    fprintf(stderr, "socket is not nonblocking\n");
+    return 1;
+  }
+
+  int fd_flags = fcntl(fd, F_GETFD, 0);
+  if (fd_flags < 0) {
+    perror("fcntl(F_GETFD)");
+    return 1;
+  }
+  if ((fd_flags & FD_CLOEXEC) == 0) {
+    fprintf(stderr, "socket is not close-on-exec\n");
+    return 1;
+  }
+
+  char byte;
+  ssize_t nread = recv(fd, &byte, sizeof(byte), 0);
+  if (nread < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    puts("socket flags are visible through POSIX APIs");
+    close(fd);
+    return 0;
+  }
+
+  fprintf(stderr, "expected nonblocking recv, got nread=%zd errno=%d (%s)\n",
+          nread, errno, strerror(errno));
+  return 1;
+}
 ```
 
 When it occurs:

@@ -13,10 +13,58 @@ expect.
 
 Minimal Example:
 
+This is a complete C program that uses a nonblocking connect and then asks libc
+for the pending socket error through the normal POSIX `SO_ERROR` path. Without
+the fix, libc can report success or a generic value instead of the runtime's
+last socket error.
+
 ```c
-int err = 0;
-socklen_t len = sizeof(err);
-getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+int main(void) {
+  int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    perror("socket");
+    return 1;
+  }
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(1);
+  if (inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) != 1) {
+    perror("inet_pton");
+    return 1;
+  }
+
+  int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  if (rc < 0 && errno != EINPROGRESS) {
+    perror("connect");
+    return 1;
+  }
+
+  struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+  poll(&pfd, 1, 1000);
+
+  int err = 0;
+  socklen_t len = sizeof(err);
+  if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0) {
+    perror("getsockopt(SO_ERROR)");
+    return 1;
+  }
+
+  printf("SO_ERROR=%d (%s), len=%u\n", err, strerror(err), (unsigned)len);
+  close(fd);
+  return err == 0 ? 1 : 0;
+}
 ```
 
 Callgraph and boundary:
