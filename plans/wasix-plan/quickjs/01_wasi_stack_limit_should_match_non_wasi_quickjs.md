@@ -1,20 +1,17 @@
-# WASI Stack Limit Should Match Non-WASI QuickJS
+# QuickJS: WASI stack limit should match non-WASI QuickJS
 
 Why this is a problem:
 
-If QuickJS disables its stack limit under WASI, recursive JavaScript can run
-until the Wasm stack exhausts. Then the runtime reports `RuntimeError: call
-stack exhausted` instead of QuickJS producing the JS-facing overflow behavior
-that Node tests expect.
+QuickJS should own JavaScript stack overflow behavior. If the WASI build disables
+QuickJS stack limits, deep JavaScript recursion falls through to the Wasm/native
+runtime stack and appears as `RuntimeError: call stack exhausted`. Native
+QuickJS/EdgeJS reports the JS-level stack overflow path instead, so Node tests
+that assert stack/error behavior fail only on WASIX.
 
-When it occurs:
+This occurs in console, error, X509, and ttywrap tests that intentionally stress
+stack handling or expect Node to catch/report stack overflow cleanly.
 
-- console recursion tests;
-- `test-x509-escaping`;
-- `test-ttywrap-stack`;
-- any test that intentionally exercises stack overflow handling.
-
-Minimal manifestation:
+Minimal Example:
 
 ```js
 function recurse() {
@@ -24,49 +21,67 @@ function recurse() {
 try {
   recurse();
 } catch (err) {
-  console.log(err.name, err.message);
+  if (!/stack|recursion|call/i.test(String(err && err.message))) {
+    throw err;
+  }
 }
 ```
 
-Boundary:
+Representative failing tests:
 
 ```text
-JavaScript recursion
-  -> QuickJS stack check
-  -> JS RangeError/InternalError path
-  -> EdgeJS/Node error assertion
-
-Bad path:
-JavaScript recursion
-  -> no QuickJS stack limit under WASI
-  -> Wasm stack exhaustion
-  -> Wasmer RuntimeError
+parallel/test-console-log-throw-primitive
+parallel/test-console-no-swallow-stack-overflow
+parallel/test-console-sync-write-error
+parallel/test-x509-escaping
+parallel/test-ttywrap-stack
 ```
+
+Callgraph and boundary:
+
+Current problematic path:
+
+```text
+JavaScript recursive/error-heavy path
+  -> QuickJS function calls grow the JS stack
+  -> WASI-specific QuickJS setup has stack_limit disabled
+     HERE IS THE PROBLEM: QuickJS does not stop recursion at its JS stack limit,
+     so execution falls through to Wasm runtime stack exhaustion.
+  -> Wasmer reports RuntimeError: call stack exhausted
+  -> Node test sees the wrong error surface
+```
+
+The boundary is QuickJS <-> runtime. Wasmer can report Wasm stack exhaustion, but
+QuickJS should prevent normal JS recursion from reaching that boundary.
 
 Proposed solution:
 
-Remove the WASI-only `rt->stack_limit = 0` special case. Use the same stack
-limit setup for WASI that non-WASI QuickJS uses.
+Use the same QuickJS stack-limit mechanism for WASI as for non-WASI builds. The
+WASI port may need a careful stack-base setter, but it should not special-case
+`rt->stack_limit = 0` for ordinary EdgeJS execution.
 
-Sketch:
+Relevant QuickJS code paths:
 
-```c
-/* Avoid WASI-only unlimited stack behavior. */
-JS_SetMaxStackSize(rt, stack_size);
+```text
+~/src/edgejs/napi/quickjs/deps/quickjs/quickjs.c
+~/src/edgejs/napi/quickjs/deps/quickjs/quickjs.h
+~/src/edgejs/napi/quickjs/src/js_native_api_quickjs.cc
 ```
+
+Proposed callgraph:
+
+```text
+JavaScript recursive/error-heavy path
+  -> QuickJS function calls grow the JS stack
+  -> QuickJS checks configured stack limit
+  -> QuickJS raises a JS-level stack overflow/internal error
+  -> EdgeJS/Node error handling observes the same class of behavior as native
+```
+
+This belongs in QuickJS because the JS engine owns stack accounting and the
+shape of JavaScript stack overflow errors.
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
-
-**Reference commits:**
-
-```text
-quickjs 9a59f17 Set WASI stack limit same as non-WASI
-```
-
-**Related recovery note:**
-
-```text
-quickjs cec4427 Improved stack setter
-```
+- quickjs `9a59f17` `Set WASI stack limit same as non-WASI`
+- quickjs `cec4427` `Improved stack setter`

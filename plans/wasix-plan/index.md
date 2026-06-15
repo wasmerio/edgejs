@@ -25,7 +25,7 @@ already contains the behavior.
 The source comparison document is:
 
 ```text
-/Users/sadhbh/src/dev/wasmer-workspace/docs/edgejs/006_acoose_vs_dunlewy_recovered_tests.md
+~/src/wasmer-workspace/docs/edgejs/006_acoose_vs_dunlewy_recovered_tests.md
 ```
 
 

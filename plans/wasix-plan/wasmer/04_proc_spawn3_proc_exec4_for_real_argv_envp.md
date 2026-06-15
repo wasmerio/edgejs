@@ -2,38 +2,67 @@
 
 Why this is a problem:
 
-Older WASIX process syscalls encode `argv` and `envp` as newline-delimited
-strings. That cannot represent an argument that itself contains `\n` or `\r`.
-Node frequently spawns itself as:
+In the baseline process ABI, argv and envp are represented as newline-delimited
+strings. That encoding cannot distinguish between a newline that separates two
+arguments and a newline that is part of one argument. Any C program using
+`posix_spawn()` or `execv()` with an argument containing `\n` can have that one
+argument split into several arguments before the child starts.
 
-```text
-edge -e "<multi-line script>"
+The fix will add and use process syscalls that carry argument vectors as real
+pointer/count arrays. Wasmer should reconstruct each argv/envp string from its
+own pointer and length, preserving embedded newlines and other bytes.
+
+Minimal Example:
+
+```c
+#include <spawn.h>
+#include <stdio.h>
+#include <sys/wait.h>
+
+extern char **environ;
+
+int main(void) {
+  pid_t pid;
+  char *argv[] = {
+    "argv-dump",
+    "first line\nsecond line",
+    NULL,
+  };
+
+  int err = posix_spawnp(&pid, "argv-dump", NULL, NULL, argv, environ);
+  if (err != 0) {
+    printf("posix_spawnp failed: %d\n", err);
+    return 1;
+  }
+
+  int status = 0;
+  waitpid(pid, &status, 0);
+  return status;
+}
 ```
 
-Splitting that by line feed turns one argument into many.
+`argv-dump` can be any tiny C helper that prints `argv[1]`. The important
+property is that `argv[1]` contains an embedded line feed and must arrive as one
+argument.
 
-Minimal manifestation:
+Callgraph and boundary:
 
-```js
-const { spawnSync } = require('node:child_process');
-
-const script = [
-  "console.log('line 1')",
-  "console.log('line 2')",
-].join('\n');
-
-const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
-console.log(r.stdout);
-```
-
-Boundary:
+Current problematic path:
 
 ```text
-Node child_process.spawn()
-  -> libuv uv_spawn()
+C posix_spawnp("argv-dump", ["argv-dump", "first line\nsecond line"])
   -> wasix-libc posix_spawn()
-  -> wasix_32v1.proc_spawn3(argv_ptrs, argv_lens, env_ptrs, env_lens)
-  -> Wasmer process runner
+  -> old WASIX proc_spawn/proc_spawn2-style ABI
+     -> combines argv into one newline-delimited buffer
+        HERE IS THE PROBLEM: embedded newline is indistinguishable from separator
+  -> Wasmer process runner parses line-delimited arguments
+  -> child receives argv = ["argv-dump", "first line", "second line"]
+     HERE IS THE PROBLEM: child argv shape is corrupted before program starts
+
+C execv(path, argv_with_newline)
+  -> wasix-libc execv()/execvpe()
+  -> old proc_exec/proc_exec3-style ABI
+     -> same delimiter corruption for replacement process
 ```
 
 Proposed solution:
@@ -41,6 +70,45 @@ Proposed solution:
 Add Wasmer imports that receive argument vectors as pointer/count arrays rather
 than delimiter-encoded strings. The runtime should reconstruct exact byte
 strings per argument.
+
+Relevant Wasmer code paths:
+
+```text
+lib/wasix/src/lib.rs
+  export wasix_32v1.proc_spawn3 / wasix_64v1.proc_spawn3
+  export wasix_32v1.proc_exec4 / wasix_64v1.proc_exec4
+
+lib/wasix/src/syscalls/wasix/proc_spawn3.rs
+  proc_spawn3(...)
+  proc_spawn3_impl(...)
+    read argv/envp arrays from guest memory as pointer/length pairs
+
+lib/wasix/src/syscalls/wasix/proc_exec4.rs
+  proc_exec4(...)
+  proc_exec4_impl(...)
+    read replacement argv/envp arrays the same way
+
+lib/wasix/src/syscalls/wasix/proc_spawn2.rs
+lib/wasix/src/syscalls/wasix/proc_exec3.rs
+  keep legacy newline-delimited wrappers only as compatibility shims
+```
+
+Proposed callgraph:
+
+```text
+C posix_spawnp("argv-dump", argv)
+  -> wasix-libc posix_spawn()
+  -> __wasi_proc_spawn3(name, argv_ptrs, argv_lens, env_ptrs, env_lens, ...)
+  -> Wasmer proc_spawn3_impl(...)
+  -> read each argv[i] from its own pointer and length
+  -> child receives argv[1] = "first line\nsecond line"
+
+C execv(path, argv)
+  -> wasix-libc execv()/execvpe()
+  -> __wasi_proc_exec4(name, argv_ptrs, argv_lens, env_ptrs, env_lens, ...)
+  -> Wasmer proc_exec4_impl(...)
+  -> replacement process receives exact argv strings
+```
 
 Sketch:
 

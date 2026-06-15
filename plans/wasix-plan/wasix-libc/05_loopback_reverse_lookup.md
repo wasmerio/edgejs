@@ -2,24 +2,55 @@
 
 Why this is a problem:
 
-POSIX applications expect loopback reverse lookup and `getnameinfo()` to return
-`localhost` in ordinary environments. The guest should not need EdgeJS-specific
-hard-coded answers for `127.0.0.1` or `::1`.
+In the baseline resolver path, `getnameinfo()` can fail to return `localhost`
+for IPv4 or IPv6 loopback addresses. That pushes guests toward hard-coded
+application-level loopback answers, which is the wrong layer. A POSIX-like libc
+should provide ordinary loopback reverse lookup behavior itself, using
+`/etc/hosts` where available and a small loopback fallback where appropriate.
 
-Minimal manifestation:
+The fix will make `getnameinfo()` recognize loopback addresses by family and
+return `localhost` when no hosts-file result has already filled the name.
 
-```js
-const dns = require('node:dns');
-dns.reverse('127.0.0.1', (err, names) => console.log(err, names));
+Minimal Example:
+
+```c
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+
+int main(void) {
+  struct sockaddr_in addr = {0};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(80);
+  inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+  char host[NI_MAXHOST];
+  int err = getnameinfo((struct sockaddr *)&addr, sizeof(addr),
+                        host, sizeof(host), NULL, 0, NI_NAMEREQD);
+  if (err != 0) {
+    printf("getnameinfo: %s\n", gai_strerror(err));
+    return 1;
+  }
+
+  printf("host: %s\n", host);
+}
 ```
 
-Boundary:
+Callgraph and boundary:
+
+Current problematic path:
 
 ```text
-Node dns.reverse()
-  -> c-ares / getnameinfo-shaped resolver behavior
-  -> wasix-libc getnameinfo()
-  -> /etc/hosts or loopback fallback
+C getnameinfo(127.0.0.1, NI_NAMEREQD)
+  -> wasix-libc libc-top-half/musl/src/network/getnameinfo.c
+  -> reverse_hosts(...)
+     -> /etc/hosts may be unavailable or may not fill result
+  -> no loopback fallback by family
+     HERE IS THE PROBLEM: 127.0.0.1/::1 can remain unnamed
+  -> getnameinfo returns failure or numeric fallback
+     HERE IS THE PROBLEM: guest does not get normal localhost reverse lookup
 ```
 
 Proposed solution:
@@ -27,6 +58,30 @@ Proposed solution:
 In libc resolver code, switch on address family and return `localhost` for IPv4
 and IPv6 loopback. Also support a mounted `/etc/hosts`; do not create synthetic
 hosts files in Wasmer.
+
+Relevant wasix-libc code paths:
+
+```text
+libc-top-half/musl/src/network/getnameinfo.c
+  getnameinfo(...)
+    after reverse_hosts(...), if host buffer is empty, call reverse_loopback(...)
+
+  reverse_loopback(...)
+    switch on AF_INET / AF_INET6
+    map 127.0.0.1 and ::1 to localhost
+```
+
+Proposed callgraph:
+
+```text
+C getnameinfo(127.0.0.1, NI_NAMEREQD)
+  -> wasix-libc getnameinfo(...)
+  -> reverse_hosts(...)
+  -> if result is still empty, reverse_loopback(...)
+  -> family == AF_INET and addr == 127.0.0.1
+  -> host = "localhost"
+  -> caller receives localhost
+```
 
 Sketch:
 

@@ -2,10 +2,14 @@
 
 Why this is a problem:
 
-`setsockopt()` receives a pointer to the option value. If libc accidentally
-interprets the pointer address as the option value, boolean options become
-nondeterministic. A pointer address is almost always nonzero, so an intended
-`0` can be treated as `1`.
+In the baseline libc socket option wrapper, `setsockopt()` can treat `optval` as
+the option value instead of reading the integer stored at `optval`. That makes
+boolean options depend on the pointer address. Since a valid stack pointer is
+almost always nonzero, a caller trying to set an option to `0` can accidentally
+set it to `1`.
+
+The fix will make libc validate `optlen`, copy the pointed-to integer, and pass
+that integer's boolean meaning to the WASIX socket option syscall.
 
 When it occurs:
 
@@ -13,26 +17,57 @@ When it occurs:
 - keepalive toggles;
 - local-address/autoselect-family tests.
 
-Minimal manifestation:
+Minimal Example:
 
 ```c
 int off = 0;
 setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
 ```
 
-Boundary:
+Callgraph and boundary:
+
+Current problematic path:
 
 ```text
-Node/net/libuv option setup
-  -> setsockopt(fd, level, name, &value, sizeof(value))
-  -> wasix-libc reads pointed-to value
-  -> Wasmer sock_set_opt_flag/size/time
+C setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off))
+  -> wasix-libc libc-top-half/musl/src/network/setsockopt.c
+  -> wasix-libc libc-bottom-half/cloudlibc/src/libc/sys/socket/setsockopt.c
+     -> receives option_value = &off
+     -> may convert option_value pointer itself to boolean
+        HERE IS THE PROBLEM: stack address is nonzero even when `off == 0`
+  -> __wasi_sock_set_opt_flag(fd, IPV6_V6ONLY, true)
+     HERE IS THE PROBLEM: caller asked to disable the option, runtime enables it
 ```
 
 Proposed solution:
 
 Read the pointed-to integer/boolean value after validating `optlen`, then pass
 that value through the WASIX socket option syscall.
+
+Relevant wasix-libc code paths:
+
+```text
+libc-top-half/musl/src/network/setsockopt.c
+  POSIX-facing wrapper
+
+libc-bottom-half/cloudlibc/src/libc/sys/socket/setsockopt.c
+  validate option_len
+  memcpy integer value from option_value
+  lower boolean options to __wasi_sock_set_opt_flag(...)
+  lower size/time options to matching WASIX calls
+```
+
+Proposed callgraph:
+
+```text
+C setsockopt(..., &off, sizeof(off)) where off == 0
+  -> wasix-libc setsockopt()
+  -> validate option_len >= sizeof(int)
+  -> memcpy enabled from option_value
+  -> enabled = 0
+  -> __wasi_sock_set_opt_flag(fd, IPV6_V6ONLY, false)
+  -> runtime receives the caller's intended value
+```
 
 Sketch:
 
