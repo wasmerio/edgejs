@@ -63,6 +63,7 @@ socket modes, stat modes, or process behavior.
 - [`getsockopt(SO_ERROR)`](wasix-libc/03_getsockopt_so_error.md)
 - [POSIX `st_mode` for Files and Directories](wasix-libc/04_posix_st_mode_for_files_and_directories.md)
 - [Loopback Reverse Lookup](wasix-libc/05_loopback_reverse_lookup.md)
+- [Child Stdio Pipe `isatty()` Classification](wasix-libc/06_child_stdio_pipe_isatty.md)
 
 ### libuv-wasix
 

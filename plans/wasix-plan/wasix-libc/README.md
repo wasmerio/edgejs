@@ -5,3 +5,4 @@
 - [`getsockopt(SO_ERROR)`](03_getsockopt_so_error.md)
 - [POSIX `st_mode` for Files and Directories](04_posix_st_mode_for_files_and_directories.md)
 - [Loopback Reverse Lookup](05_loopback_reverse_lookup.md)
+- [Child Stdio Pipe `isatty()` Classification](06_child_stdio_pipe_isatty.md)

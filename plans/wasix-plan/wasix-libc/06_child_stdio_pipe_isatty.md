@@ -1,4 +1,4 @@
-# libuv-wasix: child stdio pipe `isatty()` classification
+# wasix-libc: child stdio pipe `isatty()` classification
 
 Why this is a problem:
 
