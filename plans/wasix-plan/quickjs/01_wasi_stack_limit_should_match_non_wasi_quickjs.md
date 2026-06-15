@@ -83,5 +83,7 @@ shape of JavaScript stack overflow errors.
 
 ## Proposed Solution References
 
-- quickjs `9a59f17` `Set WASI stack limit same as non-WASI`
-- quickjs `cec4427` `Improved stack setter`
+### No PR group
+
+- quickjs [9a59f17](https://github.com/wasmerio/quickjs/commit/9a59f17a026ebc3b6932afa886c21ebf02689a2e) Set WASI stack limit same as non-WASI
+- quickjs [cec4427](https://github.com/wasmerio/quickjs/commit/cec44274d0b0abb9670e978a32ed4b4c2dd3b0bd) Improved stack setter

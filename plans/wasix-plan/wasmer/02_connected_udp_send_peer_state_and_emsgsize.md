@@ -181,11 +181,7 @@ fn udp_connected_send(iovs: &[IoSlice<'_>], peer: SocketAddr) -> Result<usize, E
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### [wasmerio/wasmer#6685: Udp datagram receive and last err](https://github.com/wasmerio/wasmer/pull/6685)
 
-**Reference commits:**
-
-```text
-wasmer 50e5c1f1375 connected UDP send() now coalesces iovecs into one datagram...
-wasmer dc9e005159a WASIX UDP connect() now preserves the auto-bound UDP socket...
-```
+- wasmer [50e5c1f1375](https://github.com/Anodized-Titanium/wasmer/commit/50e5c1f137523e683e1b52a8f847dcdc35ca0b37) connected UDP send() now coalesces iovecs into one datagram...
+- wasmer [dc9e005159a](https://github.com/Anodized-Titanium/wasmer/commit/dc9e005159ad7be200d9daa3e16e8da775cf0f9e) WASIX UDP connect() now preserves the auto-bound UDP socket...

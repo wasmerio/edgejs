@@ -87,5 +87,7 @@ EdgeJS feature that happens to need caller metadata.
 
 ## Proposed Solution References
 
-- quickjs `41b00d4` `Added callsites into QuickJS`
-- napi `5a5c3b2` `Improved quickjs callsites similar to v8`
+### No PR group
+
+- quickjs [41b00d4](https://github.com/wasmerio/quickjs/commit/41b00d4cc34cf79188cd9255f050e95ea1a2e9d6) Added callsites into QuickJS
+- napi [5a5c3b2](https://github.com/wasmerio/napi/commit/5a5c3b283aa9b37e53898543fb33ee0255a43e1e) Improved quickjs callsites similar to v8

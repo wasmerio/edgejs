@@ -100,10 +100,6 @@ case AF_INET6:
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### No PR group
 
-**Reference commits:**
-
-```text
-wasix-libc f157cd9 Reverse loopback
-```
+- wasix-libc [f157cd9](https://github.com/Anodized-Titanium/wasix-libc/commit/f157cd9aaa3ee6c3e6aafa4b2afb6192b543783b) Reverse loopback

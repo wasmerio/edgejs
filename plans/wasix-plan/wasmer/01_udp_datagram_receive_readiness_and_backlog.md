@@ -189,14 +189,13 @@ guest buffer.
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### [wasmerio/wasmer#6685: Udp datagram receive and last err](https://github.com/wasmerio/wasmer/pull/6685)
 
-**Reference commits:**
+- wasmer [c56897f3bec](https://github.com/Anodized-Titanium/wasmer/commit/c56897f3beced2c9c4861137bf81f32320a14b7c) Fixed UDP socket dgram receive
+- wasmer [65e0eb571ef](https://github.com/Anodized-Titanium/wasmer/commit/65e0eb571ef4fde1aee765fae2955956dcbd1d8f) Peek UDP packets correctly
+- wasmer [66552d27be9](https://github.com/Anodized-Titanium/wasmer/commit/66552d27be9a7efc7962aab22bd60375476c07bb) Fix merge conflict mistake
+- wasmer [8e92612e917](https://github.com/Anodized-Titanium/wasmer/commit/8e92612e917cb9745f21aab2634dd7687c229d33) Merge branch 'main' into udp-datagram-receive-and-last-err
 
-```text
-wasmer c56897f3bec Fixed UDP socket dgram receive
-wasmer 65e0eb571ef Peek UDP packets correctly
-wasmer 66552d27be9 Fix merge conflict mistake
-wasmer 8e92612e917 Merge branch 'main' into udp-datagram-receive-and-last-err
-wasmer bee1e0ab8ae Merge branch 'udp-datagram-receive-and-last-err' into tmp-work-4
-```
+### No PR group
+
+- wasmer [bee1e0ab8ae](https://github.com/Anodized-Titanium/wasmer/commit/bee1e0ab8aef47c6794d89fd5263f9301cc5837b) Merge branch 'udp-datagram-receive-and-last-err' into tmp-work-4

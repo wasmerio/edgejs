@@ -96,10 +96,12 @@ This is an EdgeJS-owned test-infra plan. It should not change runtime semantics.
 
 ## Proposed Solution References
 
-- edgejs `f87e6848` `Added note test runner for wasix quickjs`
-- edgejs `2baeceea` `Added node test runner wasix quickjs to gh workflow`
-- edgejs `352c55f3` `Set wasmer version to 7.2.0-alpha.3 for wasix tests`
-- edgejs `c63d7771` `Install wasmer 7.2.0-alpha.3 using curl and shell script. Disable (temporarily other workflows).`
-- edgejs `fbbb21f7` `Updated sysroot=v2026-05-26.1 wasixcc=v0.4.3`
-- edgejs `566e59a5` `Force llvm runtime`
-- edgejs `9aefbbe2` `Isolate mapped host directories for wasix node test runner`
+### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
+
+- edgejs [f87e6848](https://github.com/wasmerio/edgejs/commit/f87e68487996f12d447974d0cefb85c3e956e885) Added note test runner for wasix quickjs
+- edgejs [2baeceea](https://github.com/wasmerio/edgejs/commit/2baeceeaba641eb8e5ad61a88c1caf5b75a24547) Added node test runner wasix quickjs to gh workflow
+- edgejs [352c55f3](https://github.com/wasmerio/edgejs/commit/352c55f3cf2d2b1083c48eb4cf190b3b43859ce0) Set wasmer version to 7.2.0-alpha.3 for wasix tests
+- edgejs [c63d7771](https://github.com/wasmerio/edgejs/commit/c63d77715b7f0d96ac1ef027cfa885ffcae229e2) Install wasmer 7.2.0-alpha.3 using curl and shell script. Disable (temporarily other workflows).
+- edgejs [fbbb21f7](https://github.com/wasmerio/edgejs/commit/fbbb21f7500bfa0f80cd84a49e63e579c929bebe) Updated sysroot=v2026-05-26.1 wasixcc=v0.4.3
+- edgejs [566e59a5](https://github.com/wasmerio/edgejs/commit/566e59a5b5dc451c4970dcc095ed80d6ed9e3120) Force llvm runtime
+- edgejs [9aefbbe2](https://github.com/wasmerio/edgejs/commit/9aefbbe29753d32a43dcd3b11b9cd8dbbcb99b30) Isolate mapped host directories for wasix node test runner

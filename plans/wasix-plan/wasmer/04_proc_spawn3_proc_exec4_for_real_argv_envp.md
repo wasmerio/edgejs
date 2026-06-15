@@ -132,20 +132,11 @@ spawn_process(path, argv, envp, file_actions)
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### No PR group
 
-**Reference commits:**
-
-```text
-wasmer d80c3d8c980 Add proc_spawn3 and proc_exec4...
-wasmer b5880b5268b apply review comments
-wasmer e9d1478b914 fix tests
-wasmer bda2ead2504 Merge branch 'feat/wasix-proc-spawn3' into tmp-work-4
-```
-
-**Cross-project pair:**
-
-```text
-wasix-libc proc_spawn3/proc_exec4 lowering
-libuv-wasix ba06698b libuv-wasix: use WASIX posix_spawn/proc_join...
-```
+- wasmer [d80c3d8c980](https://github.com/Anodized-Titanium/wasmer/commit/d80c3d8c98065562c845c2ec8acfe0668798a166) Add proc_spawn3 and proc_exec4...
+- wasmer [b5880b5268b](https://github.com/Anodized-Titanium/wasmer/commit/b5880b5268b74aefc5b4295767286976d83b0deb) apply review comments
+- wasmer [e9d1478b914](https://github.com/Anodized-Titanium/wasmer/commit/e9d1478b914c224051541d35281ff0a0638fab21) fix tests
+- wasmer [bda2ead2504](https://github.com/Anodized-Titanium/wasmer/commit/bda2ead2504246057a4d91d3dc5b7b071e7ed9bd) Merge branch 'feat/wasix-proc-spawn3' into tmp-work-4
+- wasix-libc proc_spawn3/proc_exec4 lowering
+- libuv-wasix [ba06698b](https://github.com/Anodized-Titanium/libuv-wasix/commit/ba06698ba3f3b508a7a4eeacb23e0c911ebf4576) libuv-wasix: use WASIX posix_spawn/proc_join...

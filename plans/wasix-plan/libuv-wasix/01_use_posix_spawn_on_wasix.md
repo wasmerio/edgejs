@@ -82,4 +82,6 @@ stdio container into `posix_spawn_file_actions_*` calls plus `posix_spawnp()`.
 
 ## Proposed Solution References
 
-- libuv-wasix `ba06698b` `libuv-wasix: use WASIX posix_spawn/proc_join for child processes`
+### No PR group
+
+- libuv-wasix [ba06698b](https://github.com/Anodized-Titanium/libuv-wasix/commit/ba06698ba3f3b508a7a4eeacb23e0c911ebf4576) libuv-wasix: use WASIX posix_spawn/proc_join for child processes

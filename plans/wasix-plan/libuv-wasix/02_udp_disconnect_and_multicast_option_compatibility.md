@@ -92,4 +92,6 @@ multicast implementation remains a Wasmer task.
 
 ## Proposed Solution References
 
-- libuv-wasix `0ae770b9` `multicast TTL/loop/interface shims and UDP disconnect handling`
+### No PR group
+
+- libuv-wasix [0ae770b9](https://github.com/Anodized-Titanium/libuv-wasix/commit/0ae770b9daae35d97d3c9a2693a5b22362124f12) multicast TTL/loop/interface shims and UDP disconnect handling

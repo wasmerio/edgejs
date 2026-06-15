@@ -67,16 +67,10 @@ C getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len)
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### [wasix-org/wasix-libc#116: Fix socket options and last error](https://github.com/wasix-org/wasix-libc/pull/116)
 
-**Reference commits:**
+- wasix-libc [13626ca](https://github.com/Anodized-Titanium/wasix-libc/commit/13626cacc589cd284f97bd724715fb0184e2bc38) Last socket error
 
-```text
-wasix-libc 13626ca Last socket error
-```
+### [wasmerio/wasmer#6685: Udp datagram receive and last err](https://github.com/wasmerio/wasmer/pull/6685)
 
-**Cross-project pair:**
-
-```text
-wasmer 0780b11bb2a Last socket error
-```
+- wasmer [0780b11bb2a](https://github.com/Anodized-Titanium/wasmer/commit/0780b11bb2abc4bfd532695c5887b215f6efbed7) Last socket error

@@ -146,11 +146,7 @@ more honest than pretending descriptor passing worked.
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### No PR group
 
-**Reference status:**
-
-```text
-WITX/libc payload ABI exists as plan/input.
-Phase 2 SCM_RIGHTS/handle passing remains a Wasmer runtime task.
-```
+- WITX/libc payload ABI exists as plan/input.
+- Phase 2 SCM_RIGHTS/handle passing remains a Wasmer runtime task.

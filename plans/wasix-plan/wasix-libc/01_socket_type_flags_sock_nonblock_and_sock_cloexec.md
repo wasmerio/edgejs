@@ -94,10 +94,6 @@ int socket(int domain, int type, int protocol) {
 
 ## Proposed Solution References
 
-Proposed solution can be found in:
+### [wasix-org/wasix-libc#116: Fix socket options and last error](https://github.com/wasix-org/wasix-libc/pull/116)
 
-**Reference commits:**
-
-```text
-wasix-libc c0853db Open sockets with nonblock|cloexec flags correctly
-```
+- wasix-libc [c0853db](https://github.com/Anodized-Titanium/wasix-libc/commit/c0853db552fc0b85a23cdbe35a4f1d5b37c3cb8a) Open sockets with nonblock|cloexec flags correctly

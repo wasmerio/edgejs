@@ -75,4 +75,6 @@ claiming that WASIX already implements every TCP timing option.
 
 ## Proposed Solution References
 
-- edgejs `9fa61f18` `UV keep alive fix (disable unsupported options)`
+### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
+
+- edgejs [9fa61f18](https://github.com/wasmerio/edgejs/commit/9fa61f1888f34c0785f54da8dd99ae193e536439) UV keep alive fix (disable unsupported options)

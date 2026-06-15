@@ -88,5 +88,10 @@ bridges QuickJS SAB lifetime with Node/N-API ownership.
 
 ## Proposed Solution References
 
-- napi `21f22e3` `QJS: Serdes for SharedArrayBuffer`
-- edgejs `38e01f79` `Napi/Qjs: SharedArrayBuffer. Ssl certs in wasix tests.`
+### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
+
+- edgejs [38e01f79](https://github.com/wasmerio/edgejs/commit/38e01f79c15636badbab17faf6c31eef7d16abc6) Napi/Qjs: SharedArrayBuffer. Ssl certs in wasix tests.
+
+### No PR group
+
+- napi [21f22e3](https://github.com/wasmerio/napi/commit/21f22e3cc3b90a2c453d2e4115e0db42c5d8f68a) QJS: Serdes for SharedArrayBuffer
