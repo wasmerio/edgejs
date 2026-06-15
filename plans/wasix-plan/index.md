@@ -15,19 +15,12 @@ This plan is written as if the tree starts from the GitHub-style baseline:
 - Wasmer is on `main`.
 - `wasix-libc` is on `main`.
 - QuickJS is on `master`.
-- `libuv-wasix` is on its baseline branch.
-- EdgeJS is on the current WASIX QuickJS test branch.
+- `libuv-wasix` is on its `ubi` branch.
+- EdgeJS is on `main` branch.
 
 The commit hashes in headings are reference points only. Treat them as prior art
 for the shape and scope of the change, not as statements that the baseline
 already contains the behavior.
-
-The source comparison document is:
-
-```text
-~/src/wasmer-workspace/docs/edgejs/006_acoose_vs_dunlewy_recovered_tests.md
-```
-
 
 ## Cross-Project Rule
 
