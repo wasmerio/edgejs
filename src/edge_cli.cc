@@ -39,6 +39,9 @@
 #include "edge_stream_base.h"
 #include "edge_timers_host.h"
 #include "edge_runtime_platform.h"
+#include "edge_builtin_bytecode.h"
+#include "edge_bytecode_cache.h"
+#include "edge_precompile.h"
 #include "edge_runtime.h"
 #include "edge_worker_control.h"
 #include "edge_worker_env.h"
@@ -67,6 +70,9 @@ constexpr const char kNativeHelpText[] =
     "  --run <command>             run a package script command\n"
     "  --watch                     run in watch mode\n"
     "  --test                      run tests\n"
+    "  --precompile <path>...      compile .js/.cjs files to bytecode sidecars\n"
+    "  --bytecode-cache            enable per-file bytecode sidecars (off by default)\n"
+    "  --no-bytecode-cache         disable all bytecode caching (incl. builtins)\n"
     "  --completion-bash           print source-able bash completion script\n"
     "  -v, --version               print Edge.js / Node.js version\n"
     "  -h, --help                  print this help\n";
@@ -267,6 +273,7 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner,
   }
   EdgeEnvironmentRunCleanup(env);
   EdgeEnvironmentRunAtExitCallbacks(env);
+  edge_builtin_bytecode::FlushIfDirty();
   EDGE_STARTUP_TRACE(startup_trace, "cli.env.cleanup");
   const napi_status release_status = unofficial_napi_release_env(env_scope);
   if (release_status != napi_ok) {
@@ -361,6 +368,20 @@ bool IsBooleanOptionEnabled(const std::vector<std::string>& tokens, const char* 
     if (value != "false" && value != "0") return true;
   }
   return false;
+}
+
+// --bytecode-cache / --no-bytecode-cache, last occurrence wins. Returns
+// -1 (disable everything), +1 (opt user sidecars in), or 0 (neither given).
+int BytecodeCacheCliOverride(const std::vector<std::string>& tokens) {
+  int override_state = 0;
+  for (const auto& token : tokens) {
+    if (token == "--no-bytecode-cache") {
+      override_state = -1;
+    } else if (token == "--bytecode-cache") {
+      override_state = 1;
+    }
+  }
+  return override_state;
 }
 
 bool TokenHasInlineValue(const std::string& token) {
@@ -470,6 +491,7 @@ bool IsBooleanOptionForNegation(const std::string& option) {
       "--allow-wasi",
       "--allow-worker",
       "--async-context-frame",
+      "--bytecode-cache",
       "--check",
       "--enable-source-maps",
       "--entry-url",
@@ -514,6 +536,7 @@ bool IsBooleanOptionForNegation(const std::string& option) {
       "--openssl-shared-config",
       "--pending-deprecation",
       "--permission",
+      "--precompile",
       "--preserve-symlinks",
       "--preserve-symlinks-main",
       "--print",
@@ -614,6 +637,7 @@ bool HasDisallowedNodeOption(const std::string& token) {
       "--expose_internals",
       "--help",
       "--interactive",
+      "--precompile",
       "--print",
       "--test",
       "--v8-options",
@@ -1380,6 +1404,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     kPrint,
     kCheck,
     kRun,
+    kPrecompile,
   };
 
   CliMode mode = CliMode::kNone;
@@ -1390,6 +1415,7 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   int script_index = argc;
   std::string run_target;
   bool saw_check = false;
+  bool saw_precompile = false;
   bool print_flag = false;
   bool has_eval_string = false;
   bool force_repl = false;
@@ -1475,6 +1501,12 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
       raw_exec_argv.push_back(token);
       saw_check = true;
       mode = CliMode::kCheck;
+      continue;
+    }
+    if (token == "--precompile") {
+      raw_exec_argv.push_back(token);
+      saw_precompile = true;
+      mode = CliMode::kPrecompile;
       continue;
     }
     if (token == "-i" || token == "--interactive") {
@@ -1572,6 +1604,19 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
   EdgeSetExecArgv(raw_exec_argv);
   ApplySupportedV8Flags(raw_exec_argv);
   EDGE_STARTUP_TRACE(startup_trace, "cli.apply-v8-flags");
+
+  // Bytecode cache defaults: builtins ON, per-file user sidecars OFF.
+  //   --no-bytecode-cache / --check  -> kill switch (builtins + sidecars off)
+  //   --bytecode-cache / --precompile -> opt user sidecars in
+  // --check must never touch sidecars: a syntax check should not write to the
+  // checked tree.
+  const int bytecode_cache_override =
+      BytecodeCacheCliOverride(effective_state.effective_tokens);
+  if (bytecode_cache_override == -1 || mode == CliMode::kCheck) {
+    edge_bytecode_cache::SetCacheDisabledFromCli();
+  } else if (bytecode_cache_override == 1 || saw_precompile) {
+    edge_bytecode_cache::SetSidecarsEnabledFromCli();
+  }
   if (HasExactOptionToken(effective_state.effective_tokens, "--completion-bash")) {
     EDGE_STARTUP_TRACE(startup_trace, "cli.dispatch.completion-bash");
     std::cout << GetBashCompletion();
@@ -1619,6 +1664,32 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     if (HasOptionTokenWithInlineValue(effective_state.effective_tokens, "--watch-path")) {
       if (error_out != nullptr) {
         *error_out = FormatCliError("--watch-path cannot be used in combination with --test");
+      }
+      return 9;
+    }
+  }
+
+  if (saw_precompile) {
+    const char* conflicting = nullptr;
+    if (saw_check) {
+      conflicting = "--check";
+    } else if (has_eval_string) {
+      conflicting = "--eval";
+    } else if (force_repl) {
+      conflicting = "--interactive";
+    } else if (requested_test_flag) {
+      conflicting = "--test";
+    } else if (use_watch_mode) {
+      conflicting = "--watch";
+    } else if (!run_target.empty()) {
+      conflicting = "--run";
+    } else if (bytecode_cache_override == -1) {
+      conflicting = "--no-bytecode-cache";
+    }
+    if (conflicting != nullptr) {
+      if (error_out != nullptr) {
+        *error_out = FormatCliError(std::string("either --precompile or ") + conflicting +
+                                    " can be used, not both");
       }
       return 9;
     }
@@ -1739,6 +1810,32 @@ int EdgeRunCli(int argc, const char* const* argv, std::string* error_out) {
     EdgeSetScriptArgv(script_argv);
     EDGE_STARTUP_TRACE(startup_trace, "cli.dispatch.watch");
     return RunCliBuiltin(";", "internal/main/watch_mode", nullptr, error_out, init_options);
+  }
+
+  if (mode == CliMode::kPrecompile) {
+    int path_index = script_index;
+    if (path_index < argc && argv[path_index] != nullptr && std::strcmp(argv[path_index], "--") == 0) {
+      path_index++;
+    }
+    std::vector<std::string> precompile_paths;
+    precompile_paths.reserve(static_cast<size_t>(argc - path_index));
+    for (int argi = path_index; argi < argc; ++argi) {
+      if (argv[argi] != nullptr) precompile_paths.emplace_back(argv[argi]);
+    }
+    if (precompile_paths.empty()) {
+      if (error_out != nullptr) {
+        *error_out = FormatCliError("--precompile requires at least one file or directory");
+      }
+      return 9;
+    }
+    EdgeSetScriptArgv(precompile_paths);
+    EDGE_STARTUP_TRACE(startup_trace, "cli.dispatch.precompile");
+    return RunWithFreshEnv(
+        [&](napi_env env) {
+          return edge_precompile::RunPrecompile(env, precompile_paths, error_out);
+        },
+        error_out,
+        init_options);
   }
 
   const bool use_stdin_entry =

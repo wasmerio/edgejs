@@ -4686,9 +4686,10 @@ napi_value CreateMovedMessagePortWrapperInContext(napi_env env,
   }
 
   napi_value out = nullptr;
+  const unofficial_napi_js_source run_source{source, nullptr};
   const napi_status status = unofficial_napi_contextify_run_script(env,
                                                                    contextified_object,
-                                                                   source,
+                                                                   &run_source,
                                                                    filename,
                                                                    0,
                                                                    0,

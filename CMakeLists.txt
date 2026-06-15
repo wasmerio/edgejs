@@ -124,6 +124,25 @@ if(DEFINED NAPI_V8_INCLUDE_DIR AND EXISTS "${NAPI_V8_INCLUDE_DIR}/v8-version.h")
   endif()
 endif()
 
+set(EDGE_EMBEDDED_QUICKJS_VERSION "0.0.0")
+if(EDGE_NAPI_PROVIDER STREQUAL "quickjs" AND EXISTS "${EDGE_QUICKJS_ROOT}/quickjs.h")
+  file(STRINGS "${EDGE_QUICKJS_ROOT}/quickjs.h" _qjs_major_line
+       REGEX "^#define QJS_VERSION_MAJOR [0-9]+$")
+  file(STRINGS "${EDGE_QUICKJS_ROOT}/quickjs.h" _qjs_minor_line
+       REGEX "^#define QJS_VERSION_MINOR [0-9]+$")
+  file(STRINGS "${EDGE_QUICKJS_ROOT}/quickjs.h" _qjs_patch_line
+       REGEX "^#define QJS_VERSION_PATCH [0-9]+$")
+  if(_qjs_major_line AND _qjs_minor_line AND _qjs_patch_line)
+    string(REGEX REPLACE "^#define QJS_VERSION_MAJOR ([0-9]+)$" "\\1"
+           _qjs_major "${_qjs_major_line}")
+    string(REGEX REPLACE "^#define QJS_VERSION_MINOR ([0-9]+)$" "\\1"
+           _qjs_minor "${_qjs_minor_line}")
+    string(REGEX REPLACE "^#define QJS_VERSION_PATCH ([0-9]+)$" "\\1"
+           _qjs_patch "${_qjs_patch_line}")
+    set(EDGE_EMBEDDED_QUICKJS_VERSION "${_qjs_major}.${_qjs_minor}.${_qjs_patch}")
+  endif()
+endif()
+
 add_library(edge_node_api STATIC
   src/node_api.cc
   src/edge_napi_embedder_hooks.cc
@@ -210,6 +229,7 @@ function(edge_apply_runtime_compile_surface target_name)
       EDGE_ENABLE_TRACE_DIAGNOSTICS=$<IF:$<CONFIG:Debug>,1,0>
       EDGE_NODE_SHARED_OPENSSL=${EDGE_NODE_SHARED_OPENSSL}
       EDGE_EMBEDDED_V8_VERSION="${EDGE_EMBEDDED_V8_VERSION}"
+      EDGE_EMBEDDED_QUICKJS_VERSION="${EDGE_EMBEDDED_QUICKJS_VERSION}"
       EDGE_VERSION_COMMIT="${EDGE_VERSION_COMMIT}"
       EDGE_VERSION_SUFFIX="${EDGE_VERSION_SUFFIX}"
   )

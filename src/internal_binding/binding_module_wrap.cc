@@ -1,6 +1,8 @@
 #include "internal_binding/binding_initializers.h"
 
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -8,7 +10,9 @@
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
 #include "unofficial_napi.h"
+#include "../edge_bytecode_cache.h"
 #include "../edge_module_loader.h"
+#include "../edge_path.h"
 
 namespace internal_binding {
 
@@ -304,6 +308,82 @@ bool ThrowCodeError(napi_env env, const char* code, const char* message) {
   return napi_throw(env, error_value) == napi_ok;
 }
 
+bool IsNullishValue(napi_env env, napi_value value) {
+  if (value == nullptr) return true;
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok) return true;
+  return type == napi_undefined || type == napi_null;
+}
+
+// Extracts the bytes of any ArrayBufferView (typed array or DataView) —
+// Node's vm cachedData accepts every view flavor over the same buffer.
+bool GetArrayBufferViewBytes(napi_env env, napi_value value, const uint8_t** data_out, size_t* len_out) {
+  *data_out = nullptr;
+  *len_out = 0;
+  if (value == nullptr) return false;
+
+  bool is_typedarray = false;
+  if (napi_is_typedarray(env, value, &is_typedarray) == napi_ok && is_typedarray) {
+    napi_typedarray_type type = napi_uint8_array;
+    size_t length = 0;
+    void* data = nullptr;
+    if (napi_get_typedarray_info(env, value, &type, &length, &data, nullptr, nullptr) != napi_ok ||
+        data == nullptr) {
+      return false;
+    }
+    size_t element_size = 1;
+    switch (type) {
+      case napi_int8_array:
+      case napi_uint8_array:
+      case napi_uint8_clamped_array:
+        element_size = 1;
+        break;
+      case napi_int16_array:
+      case napi_uint16_array:
+      case napi_float16_array:
+        element_size = 2;
+        break;
+      case napi_int32_array:
+      case napi_uint32_array:
+      case napi_float32_array:
+        element_size = 4;
+        break;
+      case napi_float64_array:
+      case napi_bigint64_array:
+      case napi_biguint64_array:
+        element_size = 8;
+        break;
+      default:
+        return false;
+    }
+    *data_out = static_cast<const uint8_t*>(data);
+    *len_out = length * element_size;
+    return true;
+  }
+
+  bool is_dataview = false;
+  if (napi_is_dataview(env, value, &is_dataview) == napi_ok && is_dataview) {
+    size_t byte_length = 0;
+    void* data = nullptr;
+    if (napi_get_dataview_info(env, value, &byte_length, &data, nullptr, nullptr) != napi_ok ||
+        data == nullptr) {
+      return false;
+    }
+    *data_out = static_cast<const uint8_t*>(data);
+    *len_out = byte_length;
+    return true;
+  }
+  return false;
+}
+
+bool IsArrayBufferViewValue(napi_env env, napi_value value) {
+  if (value == nullptr) return false;
+  bool is_typedarray = false;
+  if (napi_is_typedarray(env, value, &is_typedarray) == napi_ok && is_typedarray) return true;
+  bool is_dataview = false;
+  return napi_is_dataview(env, value, &is_dataview) == napi_ok && is_dataview;
+}
+
 napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
   size_t argc = 6;
   napi_value argv[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
@@ -353,16 +433,137 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       int32_t column_offset = 0;
       if (argc >= 4 && argv[3] != nullptr) (void)napi_get_value_int32(env, argv[3], &line_offset);
       if (argc >= 5 && argv[4] != nullptr) (void)napi_get_value_int32(env, argv[4], &column_offset);
+
+      // arg5 is dual-purpose at the JS boundary: the ESM loader passes its
+      // host-defined-option Symbol; vm.SourceTextModule passes user cachedData
+      // (an ArrayBufferView).
+      napi_value arg5 = argc >= 6 ? argv[5] : nullptr;
+      const bool arg5_is_cached_data = IsArrayBufferViewValue(env, arg5);
+      napi_value host_defined_option = arg5_is_cached_data ? nullptr : arg5;
+
+      void* module_bytecode = nullptr;
+      if (arg5_is_cached_data) {
+        // vm.SourceTextModule cachedData: validate and consume. The provider
+        // validates source/shape/integrity itself (V8 CachedData / QuickJS
+        // QJSB header) and reports a mismatch via rejected_out. Node throws
+        // ERR_VM_MODULE_CACHED_DATA_REJECTED from the constructor on reject.
+        bool rejected = true;
+        const uint8_t* data = nullptr;
+        size_t length = 0;
+        if (GetArrayBufferViewBytes(env, arg5, &data, &length) && length > 0) {
+          bool deserialize_rejected = false;
+          if (unofficial_napi_bytecode_deserialize(env,
+                                                   data,
+                                                   length,
+                                                   argv[2],
+                                                   argc >= 1 ? argv[0] : nullptr,
+                                                   unofficial_napi_bytecode_shape_module,
+                                                   nullptr,
+                                                   nullptr,
+                                                   &module_bytecode,
+                                                   &deserialize_rejected) == napi_ok) {
+            rejected = deserialize_rejected || module_bytecode == nullptr;
+          }
+        }
+        SetNamedBool(env, this_arg, "cachedDataRejected", rejected);
+        if (rejected) {
+          ThrowCodeError(env, "ERR_VM_MODULE_CACHED_DATA_REJECTED",
+                         "cachedData buffer was rejected");
+          delete instance;
+          return nullptr;
+        }
+      } else if (edge_bytecode_cache::Enabled() && (argc < 2 || IsNullishValue(env, argv[1])) &&
+                 line_offset == 0 && column_offset == 0) {
+        // Bytecode sidecar cache for file-backed modules loaded by the default
+        // ESM loader (a vm context in argv[1] opts out). Deserialize
+        // <path>.v8b/.qjsb when it matches the exact source, otherwise compile
+        // to a fresh handle and persist it (write-on-first-run). Non-zero
+        // line/column offsets are baked into the payload but absent from the
+        // sidecar key, so they are excluded here — otherwise a
+        // `new vm.SourceTextModule(src, {identifier:'file://…', lineOffset:N})`
+        // would poison the real loader's sidecar with shifted positions.
+        const std::string url_utf8 = argc >= 1 && argv[0] != nullptr ? ValueToUtf8(env, argv[0]) : "";
+        if (url_utf8.rfind("file://", 0) == 0) {
+          const std::string sidecar_source_path = edge_path::NormalizeFileURLOrPath(url_utf8);
+          std::error_code ec;
+          if (!sidecar_source_path.empty() &&
+              std::filesystem::is_regular_file(std::filesystem::path(sidecar_source_path), ec) && !ec) {
+            const std::string sidecar_source_utf8 = ValueToUtf8(env, argv[2]);
+            edge_bytecode_cache::SidecarPayload payload;
+            if (edge_bytecode_cache::ReadSidecar(sidecar_source_path, sidecar_source_utf8,
+                                                 edge_bytecode_cache::kFlagEsmModuleV1, &payload)) {
+              bool rejected = false;
+              if (unofficial_napi_bytecode_deserialize(env,
+                                                       payload.data(),
+                                                       payload.payload_size,
+                                                       argv[2],
+                                                       argv[0],
+                                                       unofficial_napi_bytecode_shape_module,
+                                                       nullptr,
+                                                       host_defined_option,
+                                                       &module_bytecode,
+                                                       &rejected) != napi_ok ||
+                  rejected || module_bytecode == nullptr) {
+                edge_bytecode_cache::RemoveSidecar(sidecar_source_path);
+                module_bytecode = nullptr;
+              }
+            }
+            if (module_bytecode == nullptr) {
+              if (unofficial_napi_bytecode_compile(env,
+                                                   argv[2],
+                                                   argv[0],
+                                                   unofficial_napi_bytecode_shape_module,
+                                                   nullptr,
+                                                   host_defined_option,
+                                                   line_offset,
+                                                   column_offset,
+                                                   &module_bytecode,
+                                                   nullptr) == napi_ok &&
+                  module_bytecode != nullptr) {
+                napi_value cache_buffer = nullptr;
+                if (unofficial_napi_bytecode_serialize(env, module_bytecode, &cache_buffer) == napi_ok &&
+                    cache_buffer != nullptr) {
+                  napi_typedarray_type type = napi_uint8_array;
+                  size_t length = 0;
+                  void* data = nullptr;
+                  if (napi_get_typedarray_info(env, cache_buffer, &type, &length, &data, nullptr, nullptr) ==
+                          napi_ok &&
+                      type == napi_uint8_array && data != nullptr && length > 0) {
+                    edge_bytecode_cache::WriteSidecar(sidecar_source_path,
+                                                      sidecar_source_utf8,
+                                                      edge_bytecode_cache::kFlagEsmModuleV1,
+                                                      static_cast<const uint8_t*>(data),
+                                                      length);
+                  }
+                }
+              } else {
+                // Compile failed (syntax error): clear it and let the text
+                // path below regenerate it with the existing error decoration.
+                bool has_pending = false;
+                napi_value ignored = nullptr;
+                if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
+                  (void)napi_get_and_clear_last_exception(env, &ignored);
+                }
+                module_bytecode = nullptr;
+              }
+            }
+          }
+        }
+      }
+
+      const unofficial_napi_js_source module_source{module_bytecode != nullptr ? nullptr : argv[2],
+                                                    module_bytecode};
       const napi_status create_status =
           unofficial_napi_module_wrap_create_source_text(env,
                                                          this_arg,
                                                          argc >= 1 ? argv[0] : nullptr,
                                                          argc >= 2 ? argv[1] : nullptr,
-                                                         argv[2],
+                                                         &module_source,
                                                          line_offset,
                                                          column_offset,
-                                                         argc >= 6 ? argv[5] : nullptr,
+                                                         host_defined_option,
                                                          &instance->module_handle);
+      if (module_bytecode != nullptr) (void)unofficial_napi_bytecode_release(env, module_bytecode);
       if (create_status != napi_ok || instance->module_handle == nullptr) {
         napi_value err = nullptr;
         if (napi_get_and_clear_last_exception(env, &err) == napi_ok && err != nullptr) {
@@ -553,6 +754,25 @@ napi_value ModuleWrapCreateCachedData(napi_env env, napi_callback_info info) {
     napi_value out = nullptr;
     if (unofficial_napi_module_wrap_create_cached_data(env, instance->module_handle, &out) == napi_ok &&
         out != nullptr) {
+      // The provider's bytes self-validate (V8 CachedData / QuickJS QJSB
+      // header, which now carries the module source hash); just hand back a
+      // node Buffer. vm.SourceTextModule#createCachedData() promises a Buffer;
+      // the QuickJS provider returns a plain Uint8Array.
+      napi_value global = nullptr;
+      napi_value buffer_ctor = nullptr;
+      napi_value from_fn = nullptr;
+      napi_value wrapped = nullptr;
+      bool is_buffer = false;
+      if (napi_get_global(env, &global) == napi_ok && global != nullptr &&
+          napi_get_named_property(env, global, "Buffer", &buffer_ctor) == napi_ok &&
+          buffer_ctor != nullptr &&
+          napi_instanceof(env, out, buffer_ctor, &is_buffer) == napi_ok && !is_buffer &&
+          napi_get_named_property(env, buffer_ctor, "from", &from_fn) == napi_ok &&
+          from_fn != nullptr &&
+          napi_call_function(env, buffer_ctor, from_fn, 1, &out, &wrapped) == napi_ok &&
+          wrapped != nullptr) {
+        return wrapped;
+      }
       return out;
     }
   }

@@ -441,3 +441,18 @@ napi_value EdgeInstallUrlBinding(napi_env env) {
 
   return binding;
 }
+
+namespace edge_url {
+
+std::string PathToFileURLString(std::string_view absolute_path) {
+#if defined(_WIN32)
+  constexpr bool windows = true;
+#else
+  constexpr bool windows = false;
+#endif
+  auto out = ada::parse<ada::url_aggregator>(EncodePathChars(absolute_path, windows), nullptr);
+  if (!out) return std::string();
+  return std::string(out->get_href());
+}
+
+}  // namespace edge_url

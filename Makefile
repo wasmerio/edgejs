@@ -183,12 +183,12 @@ $(EDGE_BINARY):
 test: build test-only
 
 test-only:
-	NODE_TEST_RUNNER=$(EDGE_BINARY) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
+	EDGE_BYTECODE_CACHE=0 NODE_TEST_RUNNER=$(EDGE_BINARY) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(EDGE_NODE_TEST_SKIP_TESTS) \
 	  -j $(TEST_JOBS)
 
 test-quickjs-only:
-	NODE_TEST_RUNNER=$(BUILD_EDGE_QUICKJS_CLI_DIR)/edge ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
+	EDGE_BYTECODE_CACHE=0 NODE_TEST_RUNNER=$(BUILD_EDGE_QUICKJS_CLI_DIR)/edge ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
 	  -j $(TEST_JOBS)
 
@@ -196,6 +196,26 @@ test-wasix-quickjs-only:
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
 	  -j $(TEST_JOBS)
+
+test-bytecode-cache:
+	EDGE_BIN=$(EDGE_BINARY) ./scripts/test-bytecode-cache.sh
+
+test-bytecode-cache-quickjs:
+	EDGE_BIN=$(BUILD_EDGE_QUICKJS_CLI_DIR)/edge ./scripts/test-bytecode-cache.sh
+
+# Generate the shippable builtins (lib/) bytecode cache next to each binary
+# (<binary>.builtins.v8b / .qjsb). The builtins cache is on by default, so a
+# representative run populates it; ship the produced file alongside the binary
+# so opt-in users (and read-only installs) get the builtin startup win from the
+# first run. Re-run after rebuilding (the engine tag invalidates a stale cache).
+PRECOMPILE_BUILTINS_DRIVER ?= ./benchmarks/precompile-builtins-driver.mjs
+precompile-builtins:
+	@for bin in $(EDGE_BINARY) $(BUILD_EDGE_QUICKJS_CLI_DIR)/edge; do \
+		[ -x "$$bin" ] || continue; \
+		rm -f "$$bin".builtins.*; \
+		"$$bin" "$(PRECOMPILE_BUILTINS_DRIVER)" >/dev/null 2>&1 || true; \
+		ls -la "$$bin".builtins.* 2>/dev/null || echo "no builtins cache produced for $$bin"; \
+	done
 
 clean-edge-quickjs-cli:
 	rm -rf $(BUILD_EDGE_QUICKJS_CLI_DIR)
