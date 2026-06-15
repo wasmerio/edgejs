@@ -107,6 +107,6 @@ st->st_mode = mode;
 
 ## Proposed Solution References
 
-### No PR group
+### Commits without PR
 
-- wasix-libc [57b1083](https://github.com/Anodized-Titanium/wasix-libc/commit/57b108379c93b2847d5d8b373067a54f0f083293) Fix dir and file flags
+- wasix-libc [631ef5d5](https://github.com/Anodized-Titanium/wasix-libc/commit/631ef5d5289a56b584fd84e4296627879d8d5e5c) Fix dir and file flags

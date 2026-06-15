@@ -146,7 +146,7 @@ more honest than pretending descriptor passing worked.
 
 ## Proposed Solution References
 
-### No PR group
+### Commits without PR
 
 - WITX/libc payload ABI exists as plan/input.
 - Phase 2 SCM_RIGHTS/handle passing remains a Wasmer runtime task.
