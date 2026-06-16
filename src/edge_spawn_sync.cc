@@ -734,10 +734,23 @@ void PipeShutdownCallback(uv_shutdown_t* req, int status) {
   auto* pipe = static_cast<SyncPipe*>(req->data);
   if (pipe == nullptr || pipe->runner == nullptr) return;
   pipe->shutdown_pending = false;
-  if (status < 0 && status != UV_ENOTCONN) {
+  if (status < 0 &&
+      status != UV_ENOTCONN
+#if defined(__wasi__)
+      // WASIX stdin uses a one-way pipe here rather than a socket-like stream.
+      // Closing the writer through uv_shutdown() can surface as UV_EACCES even
+      // after the child has already consumed stdin successfully, so treat it as
+      // a close/EOF condition instead of a real spawnSync failure.
+      && status != UV_EACCES
+#endif
+  ) {
     SetPipeErrorIfUnset(pipe->runner, status);
   }
-  if (!pipe->writable) {
+  if (!pipe->writable
+#if defined(__wasi__)
+      || status == UV_EACCES
+#endif
+  ) {
     ClosePipeIfNeeded(pipe);
   }
 }
@@ -758,6 +771,15 @@ void StartPipeShutdown(SyncPipe* pipe) {
     if (!pipe->writable) ClosePipeIfNeeded(pipe);
     return;
   }
+#if defined(__wasi__)
+  if (rc == UV_EACCES) {
+    // See PipeShutdownCallback(): on WASIX this means the stdin writer cannot
+    // be shutdown like a socket stream, not that the child spawn failed.
+    pipe->shutdown_pending = false;
+    ClosePipeIfNeeded(pipe);
+    return;
+  }
+#endif
   if (rc < 0) {
     pipe->shutdown_pending = false;
     SetPipeErrorIfUnset(pipe->runner, rc);
