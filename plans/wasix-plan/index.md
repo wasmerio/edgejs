@@ -50,7 +50,8 @@ socket modes, stat modes, or process behavior.
 ### Wasmer
 
 - [UDP Datagram Receive, Readiness, and Backlog](wasmer/01_udp_datagram_receive_readiness_and_backlog.md)
-- [Connected UDP Send, Peer State, and `EMSGSIZE`](wasmer/02_connected_udp_send_peer_state_and_emsgsize.md)
+- [Connected UDP Peer State and `EMSGSIZE`](wasmer/02_connected_udp_send_peer_state_and_emsgsize.md)
+- [UDP Datagram Iovec Boundaries for `writev()` and `sendmsg()`](wasmer/07_udp_datagram_iovec_boundaries_for_writev_and_sendmsg.md)
 - [Last Socket Error / `SO_ERROR`](wasmer/03_last_socket_error_so_error.md)
 - [`proc_spawn3` / `proc_exec4` for Real argv/envp](wasmer/04_proc_spawn3_proc_exec4_for_real_argv_envp.md)
 - [Partial Success for `fd_write`](wasmer/05_partial_success_for_fd_write.md)
