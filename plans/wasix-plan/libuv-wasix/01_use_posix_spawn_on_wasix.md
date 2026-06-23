@@ -12,10 +12,17 @@ This occurs whenever Node uses `child_process.spawn()`, `execFile()`, `exec()`,
 
 Branch context:
 
-`libuv-wasix` uses `ubi` as its mainline branch. In the local history, `ubi`
-points at Martin's `ea792e22` "disable fork" baseline. The spawn proposal is
-the next commit on `fix/spawn`: Artem's `ba06698b`, which replaces the disabled
-fork path with WASIX `posix_spawn` / `proc_join` behavior.
+Merged to [`wasix-1.51.0`](https://github.com/wasix-org/libuv/tree/wasix-1.51.0) as
+[squashed PR #7](https://github.com/wasix-org/libuv/pull/7) ([`cb7e09ae`](https://github.com/wasix-org/libuv/commit/cb7e09aed2fb784255d108d7c78c2063a61b3865)).
+The branch includes Martin's ubi WASIX guards (`876682c4`, `767df34a`), UDP shims,
+and the posix_spawn rework without the `ea792e22` fake fork stub.
+
+Compared to Artem's original `ba06698b`, the merged PR intentionally:
+
+- uses libc `waitpid(WNOHANG)` instead of direct `__wasi_proc_join()` in libuv
+- returns `UV_ENOSYS` from fork only when `__wasm_exception_handling__` is enabled
+- omits `uv_exepath()` argv0 saving in `no-proctitle.c` (EdgeJS sets `process.execPath`)
+- keeps `uv_pipe()` unidirectional stdio setup needed for stdout capture on WASIX
 
 Minimal Example:
 
@@ -89,5 +96,5 @@ stdio container into `posix_spawn_file_actions_*` calls plus `posix_spawnp()`.
 
 ## Related Commits
 
-- Martin: libuv-wasix [ea792e22](https://github.com/wasix-org/libuv/commit/ea792e22c8e88149d8279883ab4c7fd1fd716392) disable fork
-- Artem: libuv-wasix [ba06698b](https://github.com/Anodized-Titanium/libuv-wasix/commit/ba06698ba3f3b508a7a4eeacb23e0c911ebf4576) libuv-wasix: use WASIX posix_spawn/proc_join for child processes
+- EdgeJS submodule: [`cb7e09ae`](https://github.com/wasix-org/libuv/commit/cb7e09aed2fb784255d108d7c78c2063a61b3865) on `wasix-1.51.0` ([PR #7](https://github.com/wasix-org/libuv/pull/7))
+- Prior art: Artem [ba06698b](https://github.com/Anodized-Titanium/libuv-wasix/commit/ba06698ba3f3b508a7a4eeacb23e0c911ebf4576) (superseded by the POSIX-boundary cleanup above)
