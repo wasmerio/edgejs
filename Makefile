@@ -91,6 +91,83 @@ QUICKJS_SKIP_WORKER_TESTS := parallel/test-diagnostics-channel-worker-threads.js
 QUICKJS_SKIP_TLS_TESTS := parallel/test-tls-close-notify.js
 QUICKJS_SKIP_TESTS ?= $(EDGE_NODE_TEST_SKIP_TESTS),$(QUICKJS_SKIP_USING_PARSER_TESTS),$(QUICKJS_SKIP_WORKER_TESTS),$(QUICKJS_SKIP_TLS_TESTS)
 
+# Expected WASIX environment limits from the 2026-06-23 triage run (1674 passed /
+# 64 failed). These 52 tests are unix sockets, cluster/fork, subprocess/shell,
+# homedir/priority, stack-overflow console, UDP gaps, unsupported crypto, and
+# TLS env/keylog subprocess harnesses. Keep the 12 in-process parity targets in
+# plans/quickjs-wasm/development/010_wasix_remaining_node_test_failures.md runnable.
+WASIX_SKIP_UNIX_SOCKET_TESTS := \
+  parallel/test-http-client-abort-keep-alive-queued-unix-socket.js \
+  parallel/test-http-client-abort-unix-socket.js \
+  parallel/test-http-client-pipe-end.js \
+  parallel/test-http-unix-socket-keep-alive.js \
+  parallel/test-http-unix-socket.js \
+  parallel/test-https-unix-socket-self-signed.js \
+  parallel/test-http2-pipe-named-pipe.js \
+  parallel/test-http2-respond-file-error-pipe-offset.js \
+  parallel/test-tls-connect-pipe.js \
+  parallel/test-tls-net-connect-prefer-path.js \
+  parallel/test-tls-wrap-econnreset-pipe.js \
+  parallel/test-http-client-response-domain.js
+WASIX_SKIP_CLUSTER_FORK_TESTS := \
+  parallel/test-dgram-bind-socket-close-before-cluster-reply.js \
+  parallel/test-dgram-cluster-close-during-bind.js \
+  parallel/test-dgram-cluster-close-in-listening.js \
+  parallel/test-dgram-unref-in-cluster.js \
+  parallel/test-http-server-drop-connections-in-cluster.js \
+  parallel/test-tls-ticket-cluster.js \
+  parallel/test-diagnostics-channel-process.js \
+  parallel/test-http-chunk-problem.js \
+  parallel/test-http-client-with-create-connection.js \
+  parallel/test-http-full-response.js \
+  parallel/test-http-server-stale-close.js \
+  parallel/test-dgram-deprecation-error.js \
+  parallel/test-https-agent-unref-socket.js \
+  parallel/test-crypto-secure-heap.js \
+  parallel/test-domain-top-level-error-handler-throw.js \
+  parallel/test-domain-uncaught-exception.js \
+  sequential/test-dgram-bind-shared-ports.js
+WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
+  parallel/test-stream-pipeline-process.js \
+  parallel/test-domain-abort-on-uncaught.js \
+  sequential/test-stream2-stderr-sync.js
+WASIX_SKIP_OS_TESTS := \
+  parallel/test-os-homedir-no-envvar.js \
+  parallel/test-os.js \
+  parallel/test-os-process-priority.js
+WASIX_SKIP_STACK_OVERFLOW_TESTS := \
+  parallel/test-console-log-throw-primitive.js \
+  parallel/test-console-no-swallow-stack-overflow.js \
+  parallel/test-console-sync-write-error.js \
+  parallel/test-ttywrap-stack.js
+WASIX_SKIP_UDP_TESTS := \
+  parallel/test-dgram-createSocket-type.js \
+  parallel/test-dgram-exclusive-implicit-bind.js \
+  parallel/test-dgram-setTTL.js
+WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS := \
+  parallel/test-crypto-argon2.js \
+  parallel/test-crypto-no-algorithm.js \
+  parallel/test-webcrypto-derivebits-argon2.js \
+  parallel/test-crypto-pqc-keygen-slh-dsa.js
+WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
+  parallel/test-tls-enable-keylog-cli.js \
+  parallel/test-tls-env-bad-extra-ca.js \
+  parallel/test-tls-env-extra-ca-no-crypto.js \
+  parallel/test-tls-env-extra-ca.js \
+  parallel/test-tls-env-extra-ca-with-options.js
+WASIX_SKIP_MISC_ENV_TESTS := \
+  parallel/test-http2-tls-disconnect.js
+WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
+  $(WASIX_SKIP_UNIX_SOCKET_TESTS) \
+  $(WASIX_SKIP_CLUSTER_FORK_TESTS) \
+  $(WASIX_SKIP_SUBPROCESS_SHELL_TESTS) \
+  $(WASIX_SKIP_OS_TESTS) \
+  $(WASIX_SKIP_STACK_OVERFLOW_TESTS) \
+  $(WASIX_SKIP_UDP_TESTS) \
+  $(WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS) \
+  $(WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS) \
+  $(WASIX_SKIP_MISC_ENV_TESTS)))
+
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS
 endif
@@ -194,7 +271,7 @@ test-quickjs-only:
 
 test-wasix-quickjs-only:
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
-	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
+	  --skip-tests=$(QUICKJS_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS) \
 	  -j $(TEST_JOBS)
 
 test-bytecode-cache:
