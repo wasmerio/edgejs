@@ -70,16 +70,10 @@ std::filesystem::path ResolveBuiltEdgeenvBinary() {
   return ResolveBuiltBinary("edgeenv");
 }
 
-#if defined(NAPI_V8_NODE_ROOT_PATH) || defined(PROJECT_ROOT_PATH)
+#if defined(PROJECT_ROOT_PATH)
 std::filesystem::path ResolveNodeTestScriptPath(const char* relative_path) {
   namespace fs = std::filesystem;
-#if defined(PROJECT_ROOT_PATH)
   fs::path test_root(PROJECT_ROOT_PATH "/test");
-#elif defined(NAPI_V8_NODE_ROOT_PATH)
-  fs::path test_root = fs::path(NAPI_V8_NODE_ROOT_PATH).parent_path() / "test";
-#else
-  fs::path test_root("test");
-#endif
   if (!test_root.is_absolute()) {
     test_root = fs::absolute(test_root).lexically_normal();
   }
@@ -1330,7 +1324,7 @@ TEST_F(Test1CliPhase01, SerdesBindingMatchesNodeContractAndHostObjectSemantics) 
 TEST_F(Test1CliPhase01, SerdesPassesRawNodeV8SerdesScript) {
 #if defined(_WIN32)
   GTEST_SKIP() << "Serdes raw Node subprocess parity check is POSIX-only";
-#elif !defined(NAPI_V8_NODE_ROOT_PATH) && !defined(PROJECT_ROOT_PATH)
+#elif !defined(PROJECT_ROOT_PATH)
   GTEST_SKIP() << "Node test root path is unavailable";
 #else
   const auto edge_path = ResolveBuiltEdgeBinary();

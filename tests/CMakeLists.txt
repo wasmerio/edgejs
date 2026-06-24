@@ -42,7 +42,6 @@ if(TARGET napi_v8 AND NAPI_V8_LIBRARY)
     )
     target_compile_definitions(${target_name}
       PRIVATE
-        NAPI_V8_NODE_ROOT_PATH="${NAPI_V8_NODE_ROOT}"
         PROJECT_ROOT_PATH="${PROJECT_ROOT}"
         NAPI_V8_ROOT_PATH="${EDGE_ROOT}"
         EDGE_VERSION_COMMIT="${EDGE_VERSION_COMMIT}"
