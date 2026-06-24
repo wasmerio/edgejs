@@ -190,7 +190,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0-alpha.3"
+          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0-rc.1"
           echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
           "${HOME}/.wasmer/bin/wasmer" --version
 
@@ -372,7 +372,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0-alpha.3"
+          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0-rc.1"
           echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
           "${HOME}/.wasmer/bin/wasmer" --version
 
