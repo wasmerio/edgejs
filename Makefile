@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-reset
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -21,7 +21,11 @@ EXTRA_CMAKE_ARGS ?=
 NAPI_V8_PREBUILT_VERSION ?= 11.9.2
 NAPI_V8_PLATFORM :=
 FRAMEWORK_TEST_SCRIPT := $(CURDIR)/scripts/framework-test.js
+STANDALONE_BUILD_TEST_SCRIPT := $(CURDIR)/scripts/standalone-build-test.js
 FRAMEWORK_TEST_SELECTOR := $(filter js-%,$(MAKECMDGOALS))
+FRAMEWORK_TEST_ORCHESTRATOR ?= node
+WASIX_FRAMEWORK_RUNNER := $(CURDIR)/scripts/edge-wasix-framework-runner.sh
+QUICKJS_EDGE_BINARY := $(BUILD_EDGE_QUICKJS_CLI_DIR)/edge
 NAPI_WASMER_DIR ?= napi
 NAPI_WASMER_CARGO_TARGET_DIR ?= $(abspath $(BUILD_WASIX_NAPI_DIR)/target)
 NAPI_WASMER_BINARY ?= $(NAPI_WASMER_CARGO_TARGET_DIR)/debug/napi_wasmer
@@ -351,8 +355,36 @@ dist-only:
 		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
 	fi
 
+framework-test-run:
+	@command -v "$(FRAMEWORK_TEST_ORCHESTRATOR)" >/dev/null 2>&1 || { \
+		echo "error: $(FRAMEWORK_TEST_ORCHESTRATOR) is required to run framework-test" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(SYMLINK_TARGET)" \
+		EDGEJS_ROOT="$(CURDIR)" \
+		FRAMEWORK_TEST_SKIP_SAFE="$(FRAMEWORK_TEST_SKIP_SAFE)" \
+		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
+		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
 framework-test: $(EDGE_BINARY)
 	@"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
+framework-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
+	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
+		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
+
+framework-test-quickjs-wasix: build-quickjs-wasix
+	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for framework-test-quickjs-wasix" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
+		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 framework-test-reset:
 	@if [ -x "$(EDGE_BINARY)" ]; then \
@@ -363,6 +395,34 @@ framework-test-reset:
 		echo "error: $(EDGE_BINARY) is missing and no node fallback is available for framework-test-reset" >&2; \
 		exit 1; \
 	fi
+
+standalone-build-test-run:
+	@command -v "$(FRAMEWORK_TEST_ORCHESTRATOR)" >/dev/null 2>&1 || { \
+		echo "error: $(FRAMEWORK_TEST_ORCHESTRATOR) is required to run standalone-build-test" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(SYMLINK_TARGET)" \
+		EDGEJS_ROOT="$(CURDIR)" \
+		FRAMEWORK_TEST_SKIP_SAFE="$(FRAMEWORK_TEST_SKIP_SAFE)" \
+		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
+		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
+standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
+	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
+		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
+
+standalone-build-test-quickjs-wasix: build-quickjs-wasix
+	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for standalone-build-test-quickjs-wasix" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
+		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 js-%:
 	@:
