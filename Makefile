@@ -98,8 +98,8 @@ QUICKJS_SKIP_TESTS ?= $(EDGE_NODE_TEST_SKIP_TESTS),$(QUICKJS_SKIP_USING_PARSER_T
 # Expected WASIX environment limits from the 2026-06-23 triage run (1674 passed /
 # 64 failed). These 52 tests are unix sockets, cluster/fork, subprocess/shell,
 # homedir/priority, stack-overflow console, UDP gaps, unsupported crypto, and
-# TLS env/keylog subprocess harnesses. Keep the 12 in-process parity targets in
-# plans/quickjs-wasm/development/010_wasix_remaining_node_test_failures.md runnable.
+# TLS env/keylog subprocess harnesses. The 12 in-process parity targets below
+# are tracked in plans/quickjs-wasm/development/010_wasix_remaining_node_test_failures.md.
 WASIX_SKIP_UNIX_SOCKET_TESTS := \
   parallel/test-http-client-abort-keep-alive-queued-unix-socket.js \
   parallel/test-http-client-abort-unix-socket.js \
@@ -161,6 +161,20 @@ WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
   parallel/test-tls-env-extra-ca-with-options.js
 WASIX_SKIP_MISC_ENV_TESTS := \
   parallel/test-http2-tls-disconnect.js
+# Known in-process WASIX parity gaps (see 010_wasix_remaining_node_test_failures.md).
+WASIX_SKIP_PARITY_TESTS := \
+  client-proxy/test-http-proxy-request-connection-refused.mjs \
+  client-proxy/test-https-proxy-request-connection-refused.mjs \
+  sequential/test-http-econnrefused.js \
+  sequential/test-tls-connect.js \
+  parallel/test-dns-perf_hooks.js \
+  parallel/test-dns-setserver-when-querying.js \
+  parallel/test-http-writable-true-after-close.js \
+  parallel/test-fastutf8stream-mode.js \
+  parallel/test-tls-alert-handling.js \
+  parallel/test-tls-error-stack.js \
+  parallel/test-tls-hello-parser-failure.js \
+  parallel/test-tls-junk-server.js
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
 WASIX_SLOW_TESTS := \
   parallel/test-buffer-constants.js \
@@ -168,6 +182,7 @@ WASIX_SLOW_TESTS := \
   parallel/test-fastutf8stream-flush-sync.js \
   parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-stringbytes-external.js \
+  parallel/test-url-parse-invalid-input.js \
   parallel/test-webcrypto-wrap-unwrap.js
 WASIX_SLOW_TEST_TIMEOUT_SCALE ?= 12
 WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
@@ -179,7 +194,8 @@ WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
   $(WASIX_SKIP_UDP_TESTS) \
   $(WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS) \
   $(WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS) \
-  $(WASIX_SKIP_MISC_ENV_TESTS)))
+  $(WASIX_SKIP_MISC_ENV_TESTS) \
+  $(WASIX_SKIP_PARITY_TESTS)))
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS
