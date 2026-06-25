@@ -198,7 +198,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-wasix-quickjs-only
+          make test-wasix-quickjs-only TEST_JOBS=4
 
       - name: Generate dist
         if: ${{ false }}
