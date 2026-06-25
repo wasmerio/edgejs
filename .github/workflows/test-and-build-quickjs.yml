@@ -243,25 +243,12 @@ jobs:
           corepack prepare pnpm@latest --activate
           pnpm --version
 
-      - name: Install Linux build dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libicu-dev
-
       - name: Install wasixcc
         uses: wasix-org/wasixcc@v0.4.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           sysroot-tag: v2026-06-25.1
           version: v0.4.3
-
-      - name: Build edge (QuickJS native CLI)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make build-edge-quickjs-cli CMAKE_BUILD_TYPE=Release JOBS=4
 
       - name: Build edge (QuickJS WASIX)
         shell: bash
@@ -282,18 +269,6 @@ jobs:
         run: |
           set -euo pipefail
           make test-wasix-quickjs-only TEST_JOBS=1
-
-      - name: Test framework apps (QuickJS native)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make framework-test-quickjs-native
-
-      - name: Test standalone builds (QuickJS native)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make standalone-build-test-quickjs-native
 
       - name: Test framework apps (QuickJS WASIX)
         shell: bash

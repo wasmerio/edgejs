@@ -98,13 +98,11 @@ WASIX runner changes required for standalone entries:
 The QuickJS workflow (`.github/workflows/test-and-build-quickjs.yml`) runs these
 targets in the active `quickjs-wasix` job after `make test-wasix-quickjs-only`:
 
-- `make framework-test-quickjs-native`
-- `make standalone-build-test-quickjs-native`
 - `make framework-test-quickjs-wasix`
 - `make standalone-build-test-quickjs-wasix`
 
-The disabled `quickjs-linux` and `quickjs-macos` jobs include the native
-framework and standalone targets for when those jobs are re-enabled.
+The disabled `quickjs-linux` and `quickjs-macos` jobs run the native
+framework/standalone targets when those jobs are re-enabled.
 
 ## Known follow-ups (Tier 2b — deferred)
 
