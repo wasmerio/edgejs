@@ -185,10 +185,6 @@ WASIX_SLOW_TESTS := \
   parallel/test-url-parse-invalid-input.js \
   parallel/test-webcrypto-wrap-unwrap.js
 WASIX_SLOW_TEST_TIMEOUT_SCALE ?= 12
-# Wasmer runtime aborts under parallel WASIX load (RuntimeError: out of bounds memory access).
-# These pass in isolation and on native QuickJS; skip until Wasmer/LLVM stack is stable.
-WASIX_SKIP_FLAKY_WASM_TESTS := \
-  parallel/test-http2-misbehaving-flow-control-paused.js
 WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
   $(WASIX_SKIP_UNIX_SOCKET_TESTS) \
   $(WASIX_SKIP_CLUSTER_FORK_TESTS) \
@@ -199,8 +195,7 @@ WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
   $(WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS) \
   $(WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS) \
   $(WASIX_SKIP_MISC_ENV_TESTS) \
-  $(WASIX_SKIP_PARITY_TESTS) \
-  $(WASIX_SKIP_FLAKY_WASM_TESTS)))
+  $(WASIX_SKIP_PARITY_TESTS)))
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS

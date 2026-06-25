@@ -317,8 +317,9 @@ Do not add those 12 tests to `WASIX_SKIP_ENV_TESTS` once their buckets are fixed
 **Symptom**
 
 Intermittent `RuntimeError: out of bounds memory access` from the Wasmer guest when the
-full WASIX suite runs with `TEST_JOBS=2`. The same test passes in isolation and passed on
-prior CI runs (e.g. run 28187356790 green, 28198678535 failed once).
+full WASIX suite runs with higher harness parallelism (`TEST_JOBS=2+`). The same test passes
+in isolation and passed on prior CI runs (e.g. run 28187356790 green, 28198678535 failed once
+with `TEST_JOBS=2`).
 
 **Example**
 
@@ -327,8 +328,9 @@ prior CI runs (e.g. run 28187356790 green, 28198678535 failed once).
 
 **Mitigation**
 
-Skipped via `WASIX_SKIP_FLAKY_WASM_TESTS` in `Makefile` until Wasmer/LLVM stability under
-parallel guest load is understood. Re-enable when the abort is reproducible and fixed.
+Run WASIX node tests with `TEST_JOBS=1` in CI (`.github/workflows/test-and-build-quickjs.yml`)
+to reduce parallel guest load. Revisit raising parallelism once Wasmer/LLVM stability under
+concurrent guests is understood.
 
 ## Success criteria
 

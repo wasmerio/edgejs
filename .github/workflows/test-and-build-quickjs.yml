@@ -281,7 +281,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-wasix-quickjs-only TEST_JOBS=2
+          make test-wasix-quickjs-only TEST_JOBS=1
 
       - name: Test framework apps (QuickJS native)
         shell: bash
