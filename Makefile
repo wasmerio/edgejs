@@ -161,6 +161,15 @@ WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
   parallel/test-tls-env-extra-ca-with-options.js
 WASIX_SKIP_MISC_ENV_TESTS := \
   parallel/test-http2-tls-disconnect.js
+# CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
+WASIX_SLOW_TESTS := \
+  parallel/test-buffer-constants.js \
+  parallel/test-crypto-oneshot-hash-xof.js \
+  parallel/test-fastutf8stream-flush-sync.js \
+  parallel/test-http2-respond-file-with-pipe.js \
+  parallel/test-stringbytes-external.js \
+  parallel/test-webcrypto-wrap-unwrap.js
+WASIX_SLOW_TEST_TIMEOUT_SCALE ?= 12
 WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
   $(WASIX_SKIP_UNIX_SOCKET_TESTS) \
   $(WASIX_SKIP_CLUSTER_FORK_TESTS) \
@@ -274,6 +283,8 @@ test-quickjs-only:
 	  -j $(TEST_JOBS)
 
 test-wasix-quickjs-only:
+	WASIX_SLOW_TESTS="$(subst $(SPACE),$(COMMA),$(strip $(WASIX_SLOW_TESTS)))" \
+	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_SLOW_TEST_TIMEOUT_SCALE)" \
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(QUICKJS_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS) \
 	  -j $(TEST_JOBS)

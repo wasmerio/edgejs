@@ -1,6 +1,6 @@
 [submodule "test"]
 	path = test
-	url = https://github.com/wasmerio/node-test.git
+	url = https://github.com/Arshia001/node-test.git
 [submodule "wasmer-examples"]
 	path = wasmer-examples
 	url = git@github.com:wasmerio/examples.git
