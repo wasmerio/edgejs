@@ -312,6 +312,24 @@ on the 12 in-process parity targets below (plus any new regressions).
 
 Do not add those 12 tests to `WASIX_SKIP_ENV_TESTS` once their buckets are fixed.
 
+### Bucket F — Wasmer runtime aborts under parallel load (flaky)
+
+**Symptom**
+
+Intermittent `RuntimeError: out of bounds memory access` from the Wasmer guest when the
+full WASIX suite runs with `TEST_JOBS=2`. The same test passes in isolation and passed on
+prior CI runs (e.g. run 28187356790 green, 28198678535 failed once).
+
+**Example**
+
+- `parallel/test-http2-misbehaving-flow-control-paused.js` — CI log shows Wasmer OOB stack,
+  not `NGHTTP2_FLOW_CONTROL_ERROR` assertion failure.
+
+**Mitigation**
+
+Skipped via `WASIX_SKIP_FLAKY_WASM_TESTS` in `Makefile` until Wasmer/LLVM stability under
+parallel guest load is understood. Re-enable when the abort is reproducible and fixed.
+
 ## Success criteria
 
 Re-run:
