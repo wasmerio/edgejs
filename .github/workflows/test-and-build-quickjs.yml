@@ -63,6 +63,19 @@ jobs:
           git submodule sync --recursive
           git -c protocol.version=2 submodule update --init --recursive --depth=1
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
       - name: Install Linux build dependencies
         shell: bash
         run: |
@@ -101,6 +114,18 @@ jobs:
           set -euo pipefail
           make test-quickjs-only TEST_JOBS=4
 
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -127,6 +152,19 @@ jobs:
           set -euo pipefail
           git submodule sync --recursive
           git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
 
       - name: Validate public N-API headers stay V8-agnostic
         shell: bash
@@ -161,6 +199,18 @@ jobs:
           set -euo pipefail
           make test-quickjs-only TEST_JOBS=4
 
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -173,12 +223,45 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libicu-dev
+
       - name: Install wasixcc
         uses: wasix-org/wasixcc@v0.4.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           sysroot-tag: v2026-06-25.1
           version: v0.4.3
+
+      - name: Build edge (QuickJS native CLI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make build-edge-quickjs-cli CMAKE_BUILD_TYPE=Release JOBS=4
 
       - name: Build edge (QuickJS WASIX)
         shell: bash
@@ -199,6 +282,30 @@ jobs:
         run: |
           set -euo pipefail
           make test-wasix-quickjs-only TEST_JOBS=2
+
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
+
+      - name: Test framework apps (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-wasix
+
+      - name: Test standalone builds (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-wasix
 
       - name: Generate dist
         if: ${{ false }}

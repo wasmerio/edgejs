@@ -90,6 +90,9 @@ The helper script also supports direct invocation:
   - same Node build, then runs the standalone entry through the QuickJS WASIX
     package via `scripts/edge-wasix-framework-runner.sh`
 
+CI runs all four QuickJS framework/standalone targets in
+`.github/workflows/test-and-build-quickjs.yml` (`quickjs-wasix` job).
+
 Direct script invocation:
 
 - `scripts/standalone-build-test.js test [js-*-standalone]`
