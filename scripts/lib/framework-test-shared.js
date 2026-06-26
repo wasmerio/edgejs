@@ -1185,7 +1185,12 @@ function create(options) {
 
       logStream.write(`${formatPrefix('INFO')} pnpm install in ${project.name}${os.EOL}`);
 
-      const child = spawn('pnpm', ['install', '--no-lockfile', '--store-dir', PNPM_STORE_DIR], {
+      const child = spawn('pnpm', [
+        'install',
+        '--no-lockfile',
+        '--store-dir', PNPM_STORE_DIR,
+        '--config.dangerouslyAllowAllBuilds=true',
+      ], {
         cwd: project.dir,
         env: {
           ...process.env,
