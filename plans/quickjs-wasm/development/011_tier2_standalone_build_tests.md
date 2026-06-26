@@ -104,6 +104,12 @@ targets in the active `quickjs-wasix` job after `make test-wasix-quickjs-only`:
 The disabled `quickjs-linux` and `quickjs-macos` jobs run the native
 framework/standalone targets when those jobs are re-enabled.
 
+Framework setup runs `pnpm install` serially by default (set
+`FRAMEWORK_TEST_PARALLEL_PNPM=1` to restore parallel installs). Failed installs
+print the last 40 lines of each fixture log in CI output. WASIX framework targets
+depend on `build-quickjs-wasix/edgejs.wasm` rather than re-running a full rebuild
+when the artifact already exists from an earlier workflow step.
+
 ## Known follow-ups (Tier 2b — deferred)
 
 - [`scripts/package-fixture-test.js`](../../../scripts/package-fixture-test.js) for npm package import fixtures (`zustand`, `lucide-react`, `relay-runtime`, `depd`, etc.)

@@ -126,11 +126,13 @@ PY
 
 "${PROJECT_ROOT}/wasix/setup-wasix-deps.sh"
 
-if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
-  rm -f "${BUILD_DIR}/CMakeCache.txt"
-fi
-if [[ -d "${BUILD_DIR}/CMakeFiles" ]]; then
-  rm -rf "${BUILD_DIR}/CMakeFiles"
+if [[ "${WASIX_FORCE_RECONFIGURE:-0}" == "1" ]]; then
+  if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+    rm -f "${BUILD_DIR}/CMakeCache.txt"
+  fi
+  if [[ -d "${BUILD_DIR}/CMakeFiles" ]]; then
+    rm -rf "${BUILD_DIR}/CMakeFiles"
+  fi
 fi
 
 openssl_wasix_ready() {

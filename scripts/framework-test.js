@@ -21,6 +21,7 @@ const EXAMPLES_DIR = harness.EXAMPLES_DIR;
 const STATE_DIR = harness.STATE_DIR;
 const LOG_DIR = harness.LOG_DIR;
 const PNPM_STORE_DIR = harness.PNPM_STORE_DIR;
+const installProjects = harness.installProjects;
 const DEFAULT_RUNNER = harness.DEFAULT_RUNNER;
 const DEFAULT_HOST = harness.DEFAULT_HOST;
 const STATIC_SERVER_SCRIPT_BASENAME = '.framework-test-static-server.cjs';
@@ -475,80 +476,6 @@ function resolveRunnerTarget() {
   }
 
   return { targetPath };
-}
-
-async function installProjects(projects) {
-  log(`running pnpm install in parallel across ${projects.length} framework${projects.length === 1 ? '' : 's'}`);
-
-  let completed = 0;
-  const results = await Promise.all(projects.map(async (project, index) => {
-    log(`pnpm install started for ${project.name} (${index + 1}/${projects.length})`);
-    const result = await installProject(project);
-    completed += 1;
-    const status = result.ok ? 'completed' : 'failed';
-    log(`pnpm install ${status} for ${project.name} (${completed}/${projects.length}, ${formatDuration(result.durationMs)})`);
-    return result;
-  }));
-  const failures = results.filter((result) => !result.ok);
-
-  if (failures.length > 0) {
-    const lines = ['one or more pnpm install commands failed:'];
-    for (const failure of failures) {
-      lines.push(`- ${failure.project.name}: ${failure.logPath}`);
-    }
-    fail(lines.join('\n'));
-  }
-}
-
-function installProject(project) {
-  const logPath = path.join(LOG_DIR, `${project.name}.pnpm-install.log`);
-  const startedAt = Date.now();
-
-  return new Promise((resolve) => {
-    const logStream = fs.createWriteStream(logPath, { flags: 'w' });
-    let settled = false;
-    const finish = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      logStream.end(() => resolve({
-        durationMs: Date.now() - startedAt,
-        ...result,
-      }));
-    };
-
-    logStream.write(`${formatPrefix('INFO')} pnpm install in ${project.name}${os.EOL}`);
-
-    const child = spawn('pnpm', ['install', '--no-lockfile', '--store-dir', PNPM_STORE_DIR], {
-      cwd: project.dir,
-      env: {
-        ...process.env,
-        CI: process.env.CI || 'true',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    child.stdout.on('data', (chunk) => {
-      logStream.write(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      logStream.write(chunk);
-    });
-
-    child.on('error', (error) => {
-      logStream.write(`${formatPrefix('ERROR')} spawn error: ${error.message}${os.EOL}`);
-      finish({ ok: false, project, logPath });
-    });
-
-    child.on('close', (code, signal) => {
-      if (signal) {
-        logStream.write(`${formatPrefix('WARN')} signal: ${signal}${os.EOL}`);
-      }
-      logStream.write(`${formatPrefix(code === 0 ? 'INFO' : 'ERROR')} exit: ${code}${os.EOL}`);
-      finish({ ok: code === 0, project, logPath });
-    });
-  });
 }
 
 async function testProject(project, stage, index, total, preparation) {

@@ -1141,6 +1141,30 @@ function create(options) {
     });
   }
 
+  async function readLogTail(logPath, maxLines = 40) {
+    try {
+      const content = await fs.promises.readFile(logPath, 'utf8');
+      const lines = content.split(/\r?\n/);
+      if (lines.length <= maxLines) {
+        return content.trimEnd();
+      }
+      return lines.slice(-maxLines).join('\n');
+    } catch (error) {
+      return `(unable to read ${logPath}: ${error.message})`;
+    }
+  }
+
+  async function formatPnpmInstallFailures(failures) {
+    const lines = ['one or more pnpm install commands failed:'];
+    for (const failure of failures) {
+      lines.push(`- ${failure.project.name}: ${failure.logPath}`);
+      lines.push('--- log tail ---');
+      lines.push(await readLogTail(failure.logPath));
+      lines.push('--- end log tail ---');
+    }
+    return lines.join('\n');
+  }
+
   async function installProject(project) {
     const logPath = path.join(LOG_DIR, `${project.name}.pnpm-install.log`);
     const startedAt = Date.now();
@@ -1193,25 +1217,33 @@ function create(options) {
   }
 
   async function installProjects(projects) {
-    log(`running pnpm install in parallel across ${projects.length} framework${projects.length === 1 ? '' : 's'}`);
+    const parallel = process.env.FRAMEWORK_TEST_PARALLEL_PNPM === '1';
+    log(`running pnpm install ${parallel ? 'in parallel' : 'serially'} across ${projects.length} framework${projects.length === 1 ? '' : 's'}`);
 
     let completed = 0;
-    const results = await Promise.all(projects.map(async (project, index) => {
+    const runInstall = async (project, index) => {
       log(`pnpm install started for ${project.name} (${index + 1}/${projects.length})`);
       const result = await installProject(project);
       completed += 1;
       const status = result.ok ? 'completed' : 'failed';
       log(`pnpm install ${status} for ${project.name} (${completed}/${projects.length}, ${formatDuration(result.durationMs)})`);
       return result;
-    }));
+    };
+
+    let results;
+    if (parallel) {
+      results = await Promise.all(projects.map((project, index) => runInstall(project, index)));
+    } else {
+      results = [];
+      for (let index = 0; index < projects.length; index += 1) {
+        results.push(await runInstall(projects[index], index));
+      }
+    }
+
     const failures = results.filter((result) => !result.ok);
 
     if (failures.length > 0) {
-      const lines = ['one or more pnpm install commands failed:'];
-      for (const failure of failures) {
-        lines.push(`- ${failure.project.name}: ${failure.logPath}`);
-      }
-      fail(lines.join('\n'));
+      fail(await formatPnpmInstallFailures(failures));
     }
   }
 

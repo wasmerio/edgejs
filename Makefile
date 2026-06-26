@@ -6,6 +6,7 @@ BUILD_DIR ?= build-edge
 BUILD_EDGE_QUICKJS_CLI_DIR ?= build-edge-quickjs-cli
 BUILD_WASIX_NAPI_DIR ?= build-wasix-napi
 BUILD_QUICKJS_WASIX_DIR ?= build-quickjs-wasix
+QUICKJS_WASIX_WASM := $(BUILD_QUICKJS_WASIX_DIR)/edgejs.wasm
 DIST_DIR ?= dist
 DIST_BIN_DIR ?= $(DIST_DIR)/bin
 DIST_BIN_COMPAT_DIR ?= $(DIST_DIR)/bin-compat
@@ -263,6 +264,9 @@ build-wasix:
 build-quickjs-wasix:
 	./quickjs-wasm/build.sh
 
+$(QUICKJS_WASIX_WASM):
+	./quickjs-wasm/build.sh
+
 build-wasix-napi: build-wasix build-napi-wasmer-cli
 
 build-wasix-napi-quickjs: build-quickjs-wasix
@@ -402,7 +406,7 @@ framework-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
-framework-test-quickjs-wasix: build-quickjs-wasix
+framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
 		echo "error: $(WASMER_BIN) is required for framework-test-quickjs-wasix" >&2; \
@@ -440,7 +444,7 @@ standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
 		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
-standalone-build-test-quickjs-wasix: build-quickjs-wasix
+standalone-build-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
 		echo "error: $(WASMER_BIN) is required for standalone-build-test-quickjs-wasix" >&2; \
