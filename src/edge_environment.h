@@ -421,6 +421,7 @@ void EdgeEnvironmentRunCleanup(napi_env env);
 void EdgeEnvironmentRunCleanupPreserveLoop(napi_env env);
 void EdgeEnvironmentRunAtExitCallbacks(napi_env env);
 bool EdgeEnvironmentCleanupStarted(napi_env env);
+bool EdgeEnvironmentCanCallIntoJs(napi_env env);
 edge::SlotEntry EdgeEnvironmentGetOpaqueSlot(napi_env env, size_t slot_id);
 void EdgeEnvironmentSetOpaqueSlot(napi_env env,
                                   size_t slot_id,

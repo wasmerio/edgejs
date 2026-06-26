@@ -2,7 +2,7 @@
 
 | | | Remarks |
 | --- | --- | --- |
-| **Status** | ▶️ | Original QuickJS N-API object/external crash fixed; reopened for new QuickJS macOS HTTP/2 crashes. |
+| **Status** | 🟠 | Original QuickJS N-API object/external crash fixed; native shutdown teardown SIGSEGV fixed for CI crash tests. |
 | **Severity** | High | Signal 10/11 crashes affected a large HTTP/2 test cluster and could terminate the QuickJS CLI. |
 
 ## Symptoms
@@ -238,3 +238,42 @@ python3 test/tools/test.py --timeout 30 --test-root ./test \
 ```
 
 The focused HTTP/2 cluster passed `+4 -0`.
+
+## 2026-06-26 QuickJS native CI crash follow-up
+
+QuickJS native CI on `ci/reenable-native` failed intermittently with Signal 11 in:
+
+```text
+test/parallel/test-http2-session-unref.js
+test/parallel/test-tls-alert-handling.js
+```
+
+LLDB on `test-http2-session-unref.js` showed the crash in
+`EmitAfterShutdownFrom(...)` while opening a handle scope with a stale
+`listener->env` after HTTP/2 session teardown and JSStream `doClose()` deferred
+`finishShutdown()` calls.
+
+Fixes in shared native stream code:
+
+- Save the next listener before invoking shutdown/write/wants-write callbacks
+  (same pattern as the existing `EdgeStreamNotifyClosed()` fix).
+- Route JSStream `finishShutdown()` through the live N-API callback `env`
+  instead of stale listener env pointers.
+- Skip stream listener callbacks when `Environment::can_call_into_js()` is false.
+- Add HTTP/2 `ParentStreamOnAfterShutdown()` pass-through and clear parent
+  listener callbacks during `Http2SessionFinalize()`.
+
+Verification:
+
+```sh
+cmake --build build-edge-quickjs-cli --target edge -j4
+for i in $(seq 1 200); do
+  ./build-edge-quickjs-cli/edge test/parallel/test-http2-session-unref.js || break
+  ./build-edge-quickjs-cli/edge test/parallel/test-tls-alert-handling.js || break
+done
+TEST_PARALLEL=1 NODE_SKIP_FLAG_CHECK=true python3 test/tools/test.py \
+  --timeout 30 --test-root ./test --shell ./build-edge-quickjs-cli/edge -j 1 \
+  parallel/test-http2-session-unref parallel/test-tls-alert-handling
+```
+
+Result: 200/200 direct runs and 100/100 harness runs for each test without SIGSEGV.

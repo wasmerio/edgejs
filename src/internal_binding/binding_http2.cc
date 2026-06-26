@@ -1446,6 +1446,13 @@ void Http2SessionFinalize(napi_env env, void* data, void* /*hint*/) {
     (void)EdgeStreamBaseRemoveListener(wrap->parent_stream_base, &wrap->parent_stream_listener);
     wrap->parent_stream_base = nullptr;
   }
+  wrap->parent_stream_listener.env = nullptr;
+  wrap->parent_stream_listener.on_alloc = nullptr;
+  wrap->parent_stream_listener.on_read = nullptr;
+  wrap->parent_stream_listener.on_after_write = nullptr;
+  wrap->parent_stream_listener.on_after_shutdown = nullptr;
+  wrap->parent_stream_listener.on_close = nullptr;
+  wrap->parent_stream_listener.data = nullptr;
   DeleteRefIfPresent(env, &wrap->parent_handle_ref);
   DeleteRefIfPresent(env, &wrap->fields_ref);
   DeleteRefIfPresent(env, &wrap->wrapper_ref);
@@ -2234,6 +2241,11 @@ bool ParentStreamOnRead(EdgeStreamListener* listener, ssize_t nread, const uv_bu
   return true;
 }
 
+bool ParentStreamOnAfterShutdown(EdgeStreamListener* listener, napi_value req_obj, int status) {
+  if (listener == nullptr) return false;
+  return EdgeStreamPassAfterShutdown(listener, req_obj, status);
+}
+
 bool ParentStreamOnAfterWrite(EdgeStreamListener* listener, napi_value req_obj, int status) {
   if (listener == nullptr) return false;
   auto* session = static_cast<Http2SessionWrap*>(listener->data);
@@ -3001,6 +3013,7 @@ napi_value SessionConsume(napi_env env, napi_callback_info info) {
     wrap->parent_stream_listener.on_alloc = ParentStreamOnAlloc;
     wrap->parent_stream_listener.on_read = ParentStreamOnRead;
     wrap->parent_stream_listener.on_after_write = ParentStreamOnAfterWrite;
+    wrap->parent_stream_listener.on_after_shutdown = ParentStreamOnAfterShutdown;
     wrap->parent_stream_listener.on_close = ParentStreamOnClose;
     wrap->parent_stream_listener.data = wrap;
     (void)EdgeStreamBasePushListener(wrap->parent_stream_base, &wrap->parent_stream_listener);

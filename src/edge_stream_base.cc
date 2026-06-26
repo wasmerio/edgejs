@@ -673,6 +673,9 @@ bool DefaultOnAfterReqFinished(EdgeStreamBase* base,
                                napi_value req_obj,
                                int status) {
   if (base == nullptr || base->env == nullptr || req_obj == nullptr) return true;
+  if (base->finalized || base->destroyed || EdgeStreamBaseEnvCleanupStarted(base->env)) {
+    return true;
+  }
   napi_value stream_obj = EdgeStreamBaseGetWrapper(base);
   napi_value argv[3] = {
       EdgeStreamBaseMakeInt32(base->env, status),
@@ -1100,9 +1103,17 @@ void EdgeStreamBaseEmitAfterWrite(EdgeStreamBase* base, napi_value req_obj, int 
 }
 
 void EdgeStreamBaseEmitAfterShutdown(EdgeStreamBase* base, napi_value req_obj, int status) {
+  EdgeStreamBaseEmitAfterShutdown(base, nullptr, req_obj, status);
+}
+
+void EdgeStreamBaseEmitAfterShutdown(EdgeStreamBase* base,
+                                    napi_env callback_env,
+                                    napi_value req_obj,
+                                    int status) {
   if (base == nullptr) return;
-  if (!EdgeStreamEmitAfterShutdown(&base->listener_state, req_obj, status) && req_obj != nullptr) {
-    EdgeStreamBaseInvokeReqOnComplete(base->env, req_obj, status, nullptr, 0);
+  napi_env env = callback_env != nullptr ? callback_env : base->env;
+  if (!EdgeStreamEmitAfterShutdown(&base->listener_state, req_obj, status, env) && req_obj != nullptr) {
+    EdgeStreamBaseInvokeReqOnComplete(env != nullptr ? env : base->env, req_obj, status, nullptr, 0);
   }
 }
 

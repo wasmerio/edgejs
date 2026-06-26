@@ -72,6 +72,10 @@ void EdgeStreamBaseFinalize(EdgeStreamBase* base);
 void EdgeStreamBaseOnClosed(EdgeStreamBase* base);
 void EdgeStreamBaseEmitAfterWrite(EdgeStreamBase* base, napi_value req_obj, int status);
 void EdgeStreamBaseEmitAfterShutdown(EdgeStreamBase* base, napi_value req_obj, int status);
+void EdgeStreamBaseEmitAfterShutdown(EdgeStreamBase* base,
+                                    napi_env callback_env,
+                                    napi_value req_obj,
+                                    int status);
 void EdgeStreamBaseEmitWantsWrite(EdgeStreamBase* base, size_t suggested_size);
 bool EdgeStreamBaseEmitReadBuffer(EdgeStreamBase* base, const uint8_t* data, size_t len);
 bool EdgeStreamBaseEmitEOF(EdgeStreamBase* base);

@@ -1,5 +1,6 @@
 #include "edge_stream_listener.h"
 
+#include "edge_environment.h"
 #include "edge_handle_scope.h"
 #include "edge_trace.h"
 
@@ -27,11 +28,15 @@ napi_env FindStateEnv(EdgeStreamListenerState* state) {
   return FindListenerEnv(state->current);
 }
 
+bool CanInvokeStreamListenerCallback(napi_env env) {
+  return env != nullptr && EdgeEnvironmentCanCallIntoJs(env);
+}
+
 bool ScopedOnAlloc(napi_env env,
                    EdgeStreamListener* listener,
                    size_t suggested_size,
                    uv_buf_t* out) {
-  if (env == nullptr) return false;
+  if (!CanInvokeStreamListenerCallback(env)) return false;
   edge::HandleScope scope(env);
   if (!scope.is_open()) return false;
   return listener->on_alloc(listener, suggested_size, out);
@@ -41,7 +46,7 @@ bool ScopedOnRead(napi_env env,
                   EdgeStreamListener* listener,
                   ssize_t nread,
                   const uv_buf_t* buf) {
-  if (env == nullptr) return false;
+  if (!CanInvokeStreamListenerCallback(env)) return false;
   edge::HandleScope scope(env);
   if (!scope.is_open()) return false;
   return listener->on_read(listener, nread, buf);
@@ -51,7 +56,7 @@ bool ScopedOnAfterWrite(napi_env env,
                         EdgeStreamListener* listener,
                         napi_value req_obj,
                         int status) {
-  if (env == nullptr) return false;
+  if (!CanInvokeStreamListenerCallback(env)) return false;
   edge::HandleScope scope(env);
   if (!scope.is_open()) return false;
   return listener->on_after_write(listener, req_obj, status);
@@ -61,7 +66,7 @@ bool ScopedOnAfterShutdown(napi_env env,
                            EdgeStreamListener* listener,
                            napi_value req_obj,
                            int status) {
-  if (env == nullptr) return false;
+  if (!CanInvokeStreamListenerCallback(env)) return false;
   edge::HandleScope scope(env);
   if (!scope.is_open()) return false;
   return listener->on_after_shutdown(listener, req_obj, status);
@@ -70,14 +75,14 @@ bool ScopedOnAfterShutdown(napi_env env,
 bool ScopedOnWantsWrite(napi_env env,
                         EdgeStreamListener* listener,
                         size_t suggested_size) {
-  if (env == nullptr) return false;
+  if (!CanInvokeStreamListenerCallback(env)) return false;
   edge::HandleScope scope(env);
   if (!scope.is_open()) return false;
   return listener->on_wants_write(listener, suggested_size);
 }
 
 void ScopedOnClose(napi_env env, EdgeStreamListener* listener) {
-  if (env == nullptr) return;
+  if (!CanInvokeStreamListenerCallback(env)) return;
   edge::HandleScope scope(env);
   if (!scope.is_open()) return;
   listener->on_close(listener);
@@ -147,10 +152,7 @@ bool EdgeStreamEmitAlloc(EdgeStreamListenerState* state,
                    static_cast<void*>(listener->previous),
                    suggested_size);
     }
-    bool handled = ScopedOnAlloc(listener->env != nullptr ? listener->env : env,
-                                 listener,
-                                 suggested_size,
-                                 out);
+    bool handled = ScopedOnAlloc(env, listener, suggested_size, out);
     if (TraceNetEnabled()) {
       std::fprintf(stderr,
                    "EDGE_TRACE_NET listener alloc_done listener=%p handled=%d buf=%p len=%zu\n",
@@ -189,10 +191,7 @@ bool EdgeStreamEmitRead(EdgeStreamListenerState* state,
                    current_buf != nullptr ? static_cast<void*>(current_buf->base) : nullptr,
                    current_buf != nullptr ? static_cast<size_t>(current_buf->len) : 0);
     }
-    bool handled = ScopedOnRead(listener->env != nullptr ? listener->env : env,
-                                listener,
-                                nread,
-                                current_buf);
+    bool handled = ScopedOnRead(env, listener, nread, current_buf);
     if (TraceNetEnabled()) {
       std::fprintf(stderr,
                    "EDGE_TRACE_NET listener read_done listener=%p handled=%d nread=%zd\n",
@@ -214,14 +213,14 @@ bool EmitAfterWriteFrom(EdgeStreamListener* listener,
                         napi_value req_obj,
                         int status) {
   napi_env env = fallback_env != nullptr ? fallback_env : FindListenerEnv(listener);
-  for (; listener != nullptr; listener = listener->previous) {
-    if (listener->on_after_write == nullptr) continue;
-    if (ScopedOnAfterWrite(listener->env != nullptr ? listener->env : env,
-                           listener,
-                           req_obj,
-                           status)) {
+  if (!CanInvokeStreamListenerCallback(env)) return false;
+  while (listener != nullptr) {
+    EdgeStreamListener* next = listener->previous;
+    if (listener->on_after_write != nullptr &&
+        ScopedOnAfterWrite(env, listener, req_obj, status)) {
       return true;
     }
+    listener = next;
   }
   return false;
 }
@@ -231,14 +230,14 @@ bool EmitAfterShutdownFrom(EdgeStreamListener* listener,
                            napi_value req_obj,
                            int status) {
   napi_env env = fallback_env != nullptr ? fallback_env : FindListenerEnv(listener);
-  for (; listener != nullptr; listener = listener->previous) {
-    if (listener->on_after_shutdown == nullptr) continue;
-    if (ScopedOnAfterShutdown(listener->env != nullptr ? listener->env : env,
-                              listener,
-                              req_obj,
-                              status)) {
+  if (!CanInvokeStreamListenerCallback(env)) return false;
+  while (listener != nullptr) {
+    EdgeStreamListener* next = listener->previous;
+    if (listener->on_after_shutdown != nullptr &&
+        ScopedOnAfterShutdown(env, listener, req_obj, status)) {
       return true;
     }
+    listener = next;
   }
   return false;
 }
@@ -247,13 +246,14 @@ bool EmitWantsWriteFrom(EdgeStreamListener* listener,
                         napi_env fallback_env,
                         size_t suggested_size) {
   napi_env env = fallback_env != nullptr ? fallback_env : FindListenerEnv(listener);
-  for (; listener != nullptr; listener = listener->previous) {
-    if (listener->on_wants_write == nullptr) continue;
-    if (ScopedOnWantsWrite(listener->env != nullptr ? listener->env : env,
-                           listener,
-                           suggested_size)) {
+  if (!CanInvokeStreamListenerCallback(env)) return false;
+  while (listener != nullptr) {
+    EdgeStreamListener* next = listener->previous;
+    if (listener->on_wants_write != nullptr &&
+        ScopedOnWantsWrite(env, listener, suggested_size)) {
       return true;
     }
+    listener = next;
   }
   return false;
 }
@@ -269,9 +269,11 @@ bool EdgeStreamEmitAfterWrite(EdgeStreamListenerState* state,
 
 bool EdgeStreamEmitAfterShutdown(EdgeStreamListenerState* state,
                                 napi_value req_obj,
-                                int status) {
+                                int status,
+                                napi_env callback_env) {
   if (state == nullptr) return false;
-  return EmitAfterShutdownFrom(state->current, FindStateEnv(state), req_obj, status);
+  napi_env env = callback_env != nullptr ? callback_env : FindStateEnv(state);
+  return EmitAfterShutdownFrom(state->current, env, req_obj, status);
 }
 
 bool EdgeStreamEmitWantsWrite(EdgeStreamListenerState* state, size_t suggested_size) {
@@ -282,25 +284,32 @@ bool EdgeStreamEmitWantsWrite(EdgeStreamListenerState* state, size_t suggested_s
 bool EdgeStreamPassAfterWrite(EdgeStreamListener* listener,
                              napi_value req_obj,
                              int status) {
-  return EmitAfterWriteFrom(listener != nullptr ? listener->previous : nullptr,
-                            listener != nullptr ? listener->env : nullptr,
-                            req_obj,
-                            status);
+  napi_env env = listener != nullptr ? listener->env : nullptr;
+  if (listener != nullptr && listener->previous != nullptr) {
+    napi_env chain_env = FindListenerEnv(listener->previous);
+    if (chain_env != nullptr) env = chain_env;
+  }
+  return EmitAfterWriteFrom(listener != nullptr ? listener->previous : nullptr, env, req_obj, status);
 }
 
 bool EdgeStreamPassAfterShutdown(EdgeStreamListener* listener,
                                 napi_value req_obj,
                                 int status) {
-  return EmitAfterShutdownFrom(listener != nullptr ? listener->previous : nullptr,
-                               listener != nullptr ? listener->env : nullptr,
-                               req_obj,
-                               status);
+  napi_env env = listener != nullptr ? listener->env : nullptr;
+  if (listener != nullptr && listener->previous != nullptr) {
+    napi_env chain_env = FindListenerEnv(listener->previous);
+    if (chain_env != nullptr) env = chain_env;
+  }
+  return EmitAfterShutdownFrom(listener != nullptr ? listener->previous : nullptr, env, req_obj, status);
 }
 
 bool EdgeStreamPassWantsWrite(EdgeStreamListener* listener, size_t suggested_size) {
-  return EmitWantsWriteFrom(listener != nullptr ? listener->previous : nullptr,
-                            listener != nullptr ? listener->env : nullptr,
-                            suggested_size);
+  napi_env env = listener != nullptr ? listener->env : nullptr;
+  if (listener != nullptr && listener->previous != nullptr) {
+    napi_env chain_env = FindListenerEnv(listener->previous);
+    if (chain_env != nullptr) env = chain_env;
+  }
+  return EmitWantsWriteFrom(listener != nullptr ? listener->previous : nullptr, env, suggested_size);
 }
 
 void EdgeStreamNotifyClosed(EdgeStreamListenerState* state) {
@@ -311,7 +320,7 @@ void EdgeStreamNotifyClosed(EdgeStreamListenerState* state) {
   while (listener != nullptr) {
     EdgeStreamListener* next = listener->previous;
     if (listener->on_close != nullptr) {
-      ScopedOnClose(listener->env != nullptr ? listener->env : env, listener);
+      ScopedOnClose(env, listener);
     }
     listener->previous = nullptr;
     listener = next;

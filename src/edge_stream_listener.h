@@ -59,7 +59,8 @@ bool EdgeStreamEmitAfterWrite(EdgeStreamListenerState* state,
                              int status);
 bool EdgeStreamEmitAfterShutdown(EdgeStreamListenerState* state,
                                 napi_value req_obj,
-                                int status);
+                                int status,
+                                napi_env callback_env = nullptr);
 bool EdgeStreamEmitWantsWrite(EdgeStreamListenerState* state,
                              size_t suggested_size);
 bool EdgeStreamPassAfterWrite(EdgeStreamListener* listener,

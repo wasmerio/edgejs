@@ -1736,6 +1736,13 @@ bool EdgeEnvironmentCleanupStarted(napi_env env) {
   return false;
 }
 
+bool EdgeEnvironmentCanCallIntoJs(napi_env env) {
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    return environment->can_call_into_js();
+  }
+  return false;
+}
+
 edge::SlotEntry EdgeEnvironmentGetOpaqueSlot(napi_env env, size_t slot_id) {
   if (env == nullptr) return edge::SlotEntry{};
   if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {

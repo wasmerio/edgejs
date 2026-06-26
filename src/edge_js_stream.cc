@@ -10,6 +10,7 @@
 #include <uv.h>
 
 #include "edge_async_wrap.h"
+#include "edge_environment.h"
 #include "edge_runtime.h"
 #include "edge_stream_base.h"
 #include "edge_stream_wrap.h"
@@ -405,9 +406,15 @@ napi_value JsStreamFinishShutdown(napi_env env, napi_callback_info info) {
   if (!GetThisAndWrap(env, info, &argc, argv, nullptr, &wrap) || wrap == nullptr || argc < 2) {
     return EdgeStreamBaseUndefined(env);
   }
+  if (!EdgeEnvironmentCanCallIntoJs(env)) {
+    return EdgeStreamBaseUndefined(env);
+  }
+  if (wrap->base.finalized || wrap->base.destroyed) {
+    return EdgeStreamBaseUndefined(env);
+  }
   int32_t status = 0;
   if (napi_get_value_int32(env, argv[1], &status) != napi_ok) status = UV_EINVAL;
-  EdgeStreamBaseEmitAfterShutdown(&wrap->base, argv[0], status);
+  EdgeStreamBaseEmitAfterShutdown(&wrap->base, env, argv[0], status);
   return EdgeStreamBaseUndefined(env);
 }
 
