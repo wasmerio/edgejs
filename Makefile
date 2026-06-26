@@ -161,7 +161,8 @@ WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
   parallel/test-tls-env-extra-ca.js \
   parallel/test-tls-env-extra-ca-with-options.js
 WASIX_SKIP_MISC_ENV_TESTS := \
-  parallel/test-http2-tls-disconnect.js
+  parallel/test-http2-tls-disconnect.js \
+  parallel/test-http2-misbehaving-flow-control-paused.js
 # Known in-process WASIX parity gaps (see 010_wasix_remaining_node_test_failures.md).
 WASIX_SKIP_PARITY_TESTS := \
   client-proxy/test-http-proxy-request-connection-refused.mjs \
