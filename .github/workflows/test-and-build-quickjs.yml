@@ -97,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-quickjs-only TEST_JOBS=4
+          make test-quickjs-only TEST_JOBS=1
 
       - name: Test framework apps (QuickJS native)
         shell: bash
@@ -179,7 +179,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-quickjs-only TEST_JOBS=4
+          make test-quickjs-only TEST_JOBS=1
 
       - name: Test framework apps (QuickJS native)
         shell: bash
