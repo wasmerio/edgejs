@@ -74,6 +74,7 @@ const MAX_HTTP_REDIRECTS = 5;
 const MAX_RESPONSE_BODY_BYTES = 64 * 1024;
 const PORT_BASE = Number(process.env.FRAMEWORK_TEST_PORT_BASE || '4300');
 const PORT_BLOCK_SIZE = Number(process.env.FRAMEWORK_TEST_PORT_BLOCK_SIZE || '10');
+const EDGE_STAGE_SKIP_PROJECTS = parseEdgeStageSkipProjects();
 const USE_COLOR = Boolean(process.stdout.isTTY && !process.env.NO_COLOR);
 const ANSI = {
   blue: '\u001b[34m',
@@ -478,8 +479,33 @@ function resolveRunnerTarget() {
   return { targetPath };
 }
 
+function parseEdgeStageSkipProjects() {
+  const raw = process.env.FRAMEWORK_TEST_EDGE_SKIP;
+  if (!raw || !raw.trim()) {
+    return new Set();
+  }
+
+  return new Set(raw.split(',').map((entry) => entry.trim()).filter(Boolean));
+}
+
+function maybeSkipEdgeStageProject(project, stage) {
+  if (!isEdgeRuntimeStage(stage) || !EDGE_STAGE_SKIP_PROJECTS.has(project.name)) {
+    return null;
+  }
+
+  const error = new Error(`${project.name} skipped on ${stage.label}`);
+  error.skip = true;
+  error.detail = 'listed in FRAMEWORK_TEST_EDGE_SKIP';
+  return error;
+}
+
 async function testProject(project, stage, index, total, preparation) {
   logProgress(index + 1, total, `[${stage.label}] testing ${project.name}`);
+
+  const skipError = maybeSkipEdgeStageProject(project, stage);
+  if (skipError) {
+    throw skipError;
+  }
 
   assertEdgeRuntimeCompatibleProject(project, stage);
 
@@ -509,6 +535,17 @@ async function testProject(project, stage, index, total, preparation) {
   }
   log(`selected runtime for ${project.name}: ${runtime.name} -> ${runtime.command}`);
 
+  const routes = loadRouteMatrix(project, stage, runtime);
+  if (routes.length === 0) {
+    if (isEdgeRuntimeStage(stage)) {
+      const error = new Error(`${project.name} has no routes for ${stage.label}`);
+      error.skip = true;
+      error.detail = 'routes.json limits this project to the Node.js baseline stage';
+      throw error;
+    }
+    fail(`no routes configured for ${project.name} on ${stage.label}`);
+  }
+
   let server = null;
   let activeRuntime = runtime;
   let usedProductionFallback = false;
@@ -526,7 +563,6 @@ async function testProject(project, stage, index, total, preparation) {
     server = await startProjectServer(project, fallbackRuntime, portCandidates, stage, readinessPath);
   }
   try {
-    const routes = loadRouteMatrix(project, stage, activeRuntime);
     const routeResults = await validateRouteMatrix(project, activeRuntime, server.port, routes);
     return {
       buildLogPath: shouldBuild && !reuseExistingBuild ? buildLogPath(project, stage) : null,
