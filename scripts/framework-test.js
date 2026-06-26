@@ -75,6 +75,7 @@ const MAX_RESPONSE_BODY_BYTES = 64 * 1024;
 const PORT_BASE = Number(process.env.FRAMEWORK_TEST_PORT_BASE || '4300');
 const PORT_BLOCK_SIZE = Number(process.env.FRAMEWORK_TEST_PORT_BLOCK_SIZE || '10');
 const EDGE_STAGE_SKIP_PROJECTS = parseEdgeStageSkipProjects();
+const NODE_STAGE_SKIP_PROJECTS = parseNodeStageSkipProjects();
 const USE_COLOR = Boolean(process.stdout.isTTY && !process.env.NO_COLOR);
 const ANSI = {
   blue: '\u001b[34m',
@@ -488,21 +489,37 @@ function parseEdgeStageSkipProjects() {
   return new Set(raw.split(',').map((entry) => entry.trim()).filter(Boolean));
 }
 
-function maybeSkipEdgeStageProject(project, stage) {
-  if (!isEdgeRuntimeStage(stage) || !EDGE_STAGE_SKIP_PROJECTS.has(project.name)) {
-    return null;
+function parseNodeStageSkipProjects() {
+  const raw = process.env.FRAMEWORK_TEST_NODE_SKIP;
+  if (!raw || !raw.trim()) {
+    return new Set();
   }
 
-  const error = new Error(`${project.name} skipped on ${stage.label}`);
-  error.skip = true;
-  error.detail = 'listed in FRAMEWORK_TEST_EDGE_SKIP';
-  return error;
+  return new Set(raw.split(',').map((entry) => entry.trim()).filter(Boolean));
+}
+
+function maybeSkipStageProject(project, stage) {
+  if (stage.key === 'node' && NODE_STAGE_SKIP_PROJECTS.has(project.name)) {
+    const error = new Error(`${project.name} skipped on ${stage.label}`);
+    error.skip = true;
+    error.detail = 'listed in FRAMEWORK_TEST_NODE_SKIP';
+    return error;
+  }
+
+  if (isEdgeRuntimeStage(stage) && EDGE_STAGE_SKIP_PROJECTS.has(project.name)) {
+    const error = new Error(`${project.name} skipped on ${stage.label}`);
+    error.skip = true;
+    error.detail = 'listed in FRAMEWORK_TEST_EDGE_SKIP';
+    return error;
+  }
+
+  return null;
 }
 
 async function testProject(project, stage, index, total, preparation) {
   logProgress(index + 1, total, `[${stage.label}] testing ${project.name}`);
 
-  const skipError = maybeSkipEdgeStageProject(project, stage);
+  const skipError = maybeSkipStageProject(project, stage);
   if (skipError) {
     throw skipError;
   }
