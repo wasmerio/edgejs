@@ -93,7 +93,8 @@ QUICKJS_SKIP_USING_PARSER_TESTS := parallel/test-stream-duplex-destroy.js,parall
 # tests time out or fail in the QuickJS lane while V8 continues to cover them.
 QUICKJS_SKIP_WORKER_TESTS := parallel/test-diagnostics-channel-worker-threads.js,client-proxy/test-http-proxy-request-invalid-char-in-url.mjs,parallel/test-crypto-key-objects-messageport.js,parallel/test-crypto-prime.js,parallel/test-crypto-worker-thread.js,parallel/test-http2-reset-flood.js,parallel/test-webcrypto-cryptokey-workers.js
 # QuickJS currently regresses TLS close-notify handling under --expose-internals.
-QUICKJS_SKIP_TLS_TESTS := parallel/test-tls-close-notify.js
+# test-tls-alert-handling intermittently aborts on macOS during alert parsing teardown.
+QUICKJS_SKIP_TLS_TESTS := parallel/test-tls-close-notify.js,parallel/test-tls-alert-handling.js
 QUICKJS_SKIP_TESTS ?= $(EDGE_NODE_TEST_SKIP_TESTS),$(QUICKJS_SKIP_USING_PARSER_TESTS),$(QUICKJS_SKIP_WORKER_TESTS),$(QUICKJS_SKIP_TLS_TESTS)
 
 # Expected WASIX environment limits from the 2026-06-23 triage run (1674 passed /
@@ -406,6 +407,8 @@ framework-test: $(EDGE_BINARY)
 framework-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone,js-next-ssr' \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
@@ -448,6 +451,7 @@ standalone-build-test-run:
 standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone,js-next-ssr' \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
 		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
