@@ -464,6 +464,8 @@ const char* DetectPlatform() {
   return "darwin";
 #elif defined(__linux__)
   return "linux";
+#elif defined(__wasi__)
+  return "wasi";
 #elif defined(__sun)
   return "sunos";
 #elif defined(_AIX)
@@ -516,6 +518,8 @@ std::string DetectExecPath() {
   return "edge";
 #elif defined(_WIN32)
   return "edge.exe";
+#elif defined(__wasi__)
+  return "/bin/edge";
 #else
   return "edge";
 #endif

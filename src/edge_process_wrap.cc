@@ -238,9 +238,76 @@ bool ParseStringArray(napi_env env, napi_value value, std::vector<std::string>* 
   return true;
 }
 
-bool ParseStdioOptions(napi_env env, napi_value js_options, std::vector<uv_stdio_container_t>* options_stdio) {
+void RebuildEnvPointers(std::vector<std::string>* storage, std::vector<char*>* out) {
+  if (storage == nullptr || out == nullptr) return;
+  out->clear();
+  out->reserve(storage->size() + 1);
+  for (std::string& text : *storage) {
+    out->push_back(const_cast<char*>(text.c_str()));
+  }
+  out->push_back(nullptr);
+}
+
+void UpdateEnvPairInt(std::vector<std::string>* storage,
+                      std::vector<char*>* out,
+                      const char* key,
+                      int value) {
+  if (storage == nullptr || out == nullptr || key == nullptr) return;
+  const std::string prefix = std::string(key) + "=";
+  const std::string replacement = prefix + std::to_string(value);
+  for (std::string& text : *storage) {
+    if (text.rfind(prefix, 0) == 0) {
+      text = replacement;
+      RebuildEnvPointers(storage, out);
+      return;
+    }
+  }
+}
+
+#if defined(__wasi__)
+// WASIX (Wasmer) preopens directories on FDs 3 through 5 (virtual root,
+// "/", and "."). proc_spawn refuses dup2 onto preopened FDs, which breaks
+// Node's default IPC stdio slot at index 3 with ENOTSUP. Use FD 10 to stay
+// clear of the reserved range with extra headroom.
+constexpr int kWasixIpcFd = 10;
+
+void SetIgnoreStdio(uv_stdio_container_t* entry) {
+  if (entry == nullptr) return;
+  std::memset(entry, 0, sizeof(*entry));
+  entry->flags = UV_IGNORE;
+  entry->data.fd = -1;
+}
+
+void RelocateWasixIpcStdio(std::vector<uv_stdio_container_t>* stdio, int ipc_index) {
+  if (stdio == nullptr || ipc_index < 0 || ipc_index == kWasixIpcFd) return;
+
+  const size_t ipc_entry_index = static_cast<size_t>(ipc_index);
+  if (ipc_entry_index >= stdio->size()) return;
+
+  uv_stdio_container_t ipc_entry = (*stdio)[ipc_entry_index];
+  SetIgnoreStdio(&(*stdio)[ipc_entry_index]);
+
+  while (stdio->size() < static_cast<size_t>(kWasixIpcFd)) {
+    uv_stdio_container_t ignore{};
+    SetIgnoreStdio(&ignore);
+    stdio->push_back(ignore);
+  }
+
+  if (stdio->size() == static_cast<size_t>(kWasixIpcFd)) {
+    stdio->push_back(ipc_entry);
+  } else {
+    (*stdio)[static_cast<size_t>(kWasixIpcFd)] = ipc_entry;
+  }
+}
+#endif
+
+bool ParseStdioOptions(napi_env env,
+                       napi_value js_options,
+                       std::vector<uv_stdio_container_t>* options_stdio,
+                       int* ipc_index) {
   if (options_stdio == nullptr) return false;
   options_stdio->clear();
+  if (ipc_index != nullptr) *ipc_index = -1;
 
   napi_value stdio_value = nullptr;
   if (!GetNamedValue(env, js_options, "stdio", &stdio_value) || stdio_value == nullptr) return true;
@@ -286,6 +353,9 @@ bool ParseStdioOptions(napi_env env, napi_value js_options, std::vector<uv_stdio
       }
       entry.flags = flags;
       entry.data.stream = stream;
+      if (ipc_index != nullptr && IsTruthyProperty(env, stdio, "ipc")) {
+        *ipc_index = static_cast<int>(i);
+      }
       continue;
     }
 
@@ -478,8 +548,9 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
     if (!ParseStringArray(env, args_value, &args_storage, &args)) return MakeInt32(env, UV_EINVAL);
   }
   if (args_storage.empty()) {
+    args.clear();
     args_storage.push_back(file);
-    args.push_back(const_cast<char*>(args_storage[0].c_str()));
+    args.push_back(const_cast<char*>(args_storage.back().c_str()));
     args.push_back(nullptr);
   }
 
@@ -502,7 +573,8 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
   const bool has_gid = GetInt32Property(env, argv[0], "gid", &gid);
 
   std::vector<uv_stdio_container_t> stdio;
-  if (!ParseStdioOptions(env, argv[0], &stdio)) return MakeInt32(env, UV_EINVAL);
+  int ipc_index = -1;
+  if (!ParseStdioOptions(env, argv[0], &stdio, &ipc_index)) return MakeInt32(env, UV_EINVAL);
   if (stdio.empty()) {
     stdio.resize(3);
     for (uint32_t i = 0; i < 3; ++i) {
@@ -510,6 +582,14 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
       stdio[i].data.fd = static_cast<int>(i);
     }
   }
+#if defined(__wasi__)
+  if (ipc_index >= 0) {
+    RelocateWasixIpcStdio(&stdio, ipc_index);
+    if (!env_storage.empty()) {
+      UpdateEnvPairInt(&env_storage, &envp, "NODE_CHANNEL_FD", kWasixIpcFd);
+    }
+  }
+#endif
 
   uv_process_options_t options{};
   options.file = file.c_str();

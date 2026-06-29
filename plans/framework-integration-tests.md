@@ -37,6 +37,14 @@ The supported operator entrypoints are:
 
 - `make framework-test`
 - `make framework-test <framework>`
+- `make framework-test-quickjs-native`
+- `make framework-test-quickjs-native <framework>`
+- `make framework-test-quickjs-wasix`
+- `make framework-test-quickjs-wasix <framework>`
+- `make standalone-build-test-quickjs-native`
+- `make standalone-build-test-quickjs-native <framework>`
+- `make standalone-build-test-quickjs-wasix`
+- `make standalone-build-test-quickjs-wasix <framework>`
 - `make framework-test-reset`
 - `make framework-test-reset <framework>`
 
@@ -51,10 +59,45 @@ The helper script also supports direct invocation:
 - `SYMLINK_TARGET=<path>`
   - selects the comparison runner for the non-Node stages
   - defaults to `build-edge/edge`
+- `FRAMEWORK_TEST_RUNNER_LABEL=<label>`
+  - overrides the comparison-stage label in the matrix output
+- `FRAMEWORK_TEST_SKIP_SAFE=1`
+  - skips the `Wasmer + EdgeJS Safe` stage (used by QuickJS native runs)
 - `FRAMEWORK_TEST_PORT_BASE=<port>`
   - defaults to `4300`
 - `FRAMEWORK_TEST_PORT_BLOCK_SIZE=<count>`
   - defaults to `10`
+
+### QuickJS Matrix Targets
+
+- `make framework-test-quickjs-native`
+  - runs the Node.js baseline, then validates the same frameworks under the
+    native QuickJS CLI (`build-edge-quickjs-cli/edge`)
+  - sets `FRAMEWORK_TEST_SKIP_SAFE=1` so the V8 `--safe` stage is not run
+- `make framework-test-quickjs-wasix`
+  - runs the Node.js baseline, then validates frameworks through
+    `scripts/edge-wasix-framework-runner.sh`, which launches the QuickJS WASIX
+    package via `wasmer run --net`
+  - requires a built QuickJS WASIX artifact (`make build-quickjs-wasix`) and
+    `wasmer` on `PATH`
+
+### Standalone Build Matrix Targets
+
+- `make standalone-build-test-quickjs-native [js-*-standalone]`
+  - discovers canary apps with `standalone.json`, builds on host Node, runs the
+    configured standalone entry under native QuickJS
+- `make standalone-build-test-quickjs-wasix [js-*-standalone]`
+  - same Node build, then runs the standalone entry through the QuickJS WASIX
+    package via `scripts/edge-wasix-framework-runner.sh`
+
+CI runs the QuickJS WASIX framework/standalone targets in
+`.github/workflows/test-and-build-quickjs.yml` (`quickjs-wasix` job). Native
+targets run in the disabled `quickjs-linux` / `quickjs-macos` jobs when those
+are re-enabled.
+
+Direct script invocation:
+
+- `scripts/standalone-build-test.js test [js-*-standalone]`
 
 ## Target Discovery
 
@@ -171,25 +214,63 @@ and port flags, and downward when it looks development-oriented.
 
 ### Build Behavior
 
-The harness runs `pnpm run build` before validation when:
+Framework builds always use **host Node.js**, never EdgeJS or QuickJS. SWC and
+other native build tooling stay on the Node side; EdgeJS stages only run
+prebuilt artifacts.
+
+The harness runs `pnpm run build` through host `pnpm`/Node before validation
+when:
 
 - the project has a `build` script; and
 - the chosen runtime script is not obviously dev-only.
 
+On EdgeJS runtime stages the build log is written as
+`<project>.node-build.build.log` to make the split explicit.
+
 Generated framework outputs are then reused by later stages whenever possible,
 so `Node.js` does the initial build and the later stages generally validate the
-same build output.
+same build output without rebuilding under EdgeJS.
+
+### Next.js Node Build / Edge Runtime Policy
+
+Next.js apps follow a strict split in this harness:
+
+1. **Build on Node.js** with `next build` so `@next/swc-*` runs on native
+   binaries.
+2. **Run on EdgeJS** with `next start`, a static export server, or another
+   production runtime script.
+
+EdgeJS runtime stages reject Next.js projects that ship **only**
+`next.config.ts`. Loading TypeScript config at startup requires SWC at runtime,
+which QuickJS cannot load today. Projects must also provide
+`next.config.js`, `.mjs`, or `.cjs` for EdgeJS stages.
+
+EdgeJS runtime stages **never run development servers** (`next dev`,
+`docusaurus-start`, `gatsby develop`, `vite dev`, framework preview commands,
+etc.). They always validate **prebuilt production artifacts** produced by host
+Node.js (`build/`, `out/`, `dist/`, Gatsby `public/`, Docusaurus v1
+`build/<projectName>/`, etc.).
+
+`next dev` is never selected when a production script such as `start` exists.
+Do not expect EdgeJS to compile or serve development-mode framework apps.
 
 ### Static Export Handling
 
-Projects that resolve to a Next export flow are treated specially:
+Projects that ship static production output are served through a generated
+helper instead of framework preview/dev commands on EdgeJS runtime stages.
+Examples include:
 
-- the harness serves `out/` through a generated static server helper
-- that helper is written inside the framework project itself as:
-  - `.framework-test-static-server.js`
+- Next.js `output: "export"` (`out/`)
+- SvelteKit static adapter output (`build/`)
+- Astro static build output (`dist/`)
+- Gatsby production output (`public/` after `gatsby build`)
+- Docusaurus production output (`build/` after `docusaurus build`)
 
-The helper is project-local on purpose so the safe stage can execute it without
-depending on an out-of-tree script path.
+The helper is written inside the framework project itself as:
+
+- `.framework-test-static-server.cjs`
+
+Using `.cjs` keeps the helper loadable from `"type": "module"` packages.
 
 ### Host And Port Injection
 
@@ -213,9 +294,161 @@ A runtime stage only passes when the framework:
 
 - starts a local process;
 - responds on localhost;
-- returns an HTTP response that looks like HTML.
+- passes **all configured routes** in the app's route matrix (Tier 3).
 
-The harness validates HTTP success, not just process liveness.
+Each `wasmer-examples/js-*` app may ship a [`routes.json`](../wasmer-examples/js-astro-staticsite/routes.json) beside `package.json`. When present, the harness validates every applicable route after the server is ready. Apps without `routes.json` keep the legacy single-route check (`GET /`, HTML).
+
+## Standalone Build Artifacts (Tier 2)
+
+Tier 2 exercises **production standalone server entries** instead of framework
+dev/start scripts (`next start`, `astro preview`, etc.). It sits between Tier 1
+smoke tests ([`scripts/framework-test.js`](../scripts/framework-test.js) on the
+minimal `js-*` apps) and Tier 3 route depth ([`routes.json`](#route-matrix-tier-3)).
+
+| | Tier 1/3 (`framework-test.js`) | Tier 2 (`standalone-build-test.js`) |
+| --- | --- | --- |
+| Build | Host Node `pnpm run build` | Same |
+| Run target | Framework script or static server | **Direct entry file** from standalone output |
+| Apps | All `js-*` with `package.json` | Canary `js-*` with `standalone.json` |
+| Validates | Boot + route matrix | Boot + route matrix **through traced/pruned artifacts** |
+
+### Discovery
+
+Apps opt in by colocating `standalone.json` beside `package.json` under
+`wasmer-examples/js-*`. Apps without `standalone.json` remain Tier 1/3 only.
+
+### `standalone.json` schema (version 1)
+
+```json
+{
+  "version": 1,
+  "build": {
+    "command": "pnpm run build"
+  },
+  "entry": {
+    "path": ".next/standalone/server.js",
+    "cwd": ".next/standalone",
+    "args": [],
+    "env": {
+      "HOSTNAME": "127.0.0.1",
+      "PORT": "{port}"
+    },
+    "prelaunch": ["node scripts/prepare-standalone.cjs"]
+  },
+  "routes": "routes.json",
+  "skipStages": {
+    "comparison": "optional reason to skip Edge/WASIX stages only"
+  }
+}
+```
+
+Field rules:
+
+- `entry.path` — file executed by the runner (relative to project root)
+- `entry.cwd` — process working directory for the entry (critical for Next asset layout)
+- `entry.env` — `{port}` placeholder expanded per attempt
+- `entry.prelaunch` — optional shell steps after build (for example Next static copy)
+- `routes` — path to Tier 3 [`routes.json`](#route-matrix-tier-3); default `./routes.json`
+- `skip` / `skipReason` — omit the app from discovery entirely
+- `skipStages.comparison` — skip Edge native and WASIX while still running the Node baseline
+
+### Harness and Makefile targets
+
+- Harness: [`scripts/standalone-build-test.js`](../scripts/standalone-build-test.js)
+- Shared runner/HTTP/route helpers: [`scripts/lib/framework-test-shared.js`](../scripts/lib/framework-test-shared.js)
+- State and logs: `.standalone-build-test/`
+
+```sh
+make standalone-build-test-quickjs-native [js-next-standalone]
+make standalone-build-test-quickjs-wasix [js-next-standalone]
+```
+
+Policy matches Tier 1:
+
+- Edge stages never run dev servers or rebuild with SWC; Node owns the build
+- WASIX uses [`scripts/edge-wasix-framework-runner.sh`](../scripts/edge-wasix-framework-runner.sh), which walks up to the project root for `node_modules`, forwards `PORT`/`HOST`/`HOSTNAME`/`STATIC_ROOT`, and sets guest `--cwd` to the standalone entry directory
+
+### Current canary apps
+
+| App | Standalone entry | Notes |
+| --- | --- | --- |
+| `js-next-standalone` | `.next/standalone/server.js` | `output: 'standalone'` + post-build static/public copy |
+| `js-vite-standalone` | `dist/server/index.cjs` | Vite client build + esbuild server bundle |
+| `js-astro-ssr-standalone` | `dist/server/entry.mjs` | Node adapter standalone; Edge stages skipped pending WebAssembly support |
+
+Tier 2b (deferred): package fixture runner for expanded dependency graphs (`zustand`, `lucide-react`, etc.).
+
+## Route Matrix (Tier 3)
+
+Per-app route configs live at:
+
+```text
+wasmer-examples/js-*/routes.json
+```
+
+### Schema (version 1)
+
+```json
+{
+  "version": 1,
+  "routes": [
+    {
+      "name": "home",
+      "path": "/",
+      "method": "GET",
+      "expect": {
+        "status": [200, 304],
+        "contentType": "html",
+        "bodyContains": ["Welcome to Wasmer+Astro"]
+      }
+    }
+  ]
+}
+```
+
+Supported route fields:
+
+| Field | Purpose |
+| --- | --- |
+| `path` | Request path (must start with `/`) |
+| `method` | HTTP method; default `GET` |
+| `body` | Optional request body for POST/PUT |
+| `headers` | Optional request headers |
+| `expect.status` | Acceptable status code or array (default `[200, 304]`) |
+| `expect.contentType` | `html` (default), `json`, or `any` |
+| `expect.bodyContains` | All substrings must appear in the response body |
+| `expect.bodyRegex` | All regex patterns must match the response body |
+| `stages` | Optional allowlist: `node`, `comparison`, `safe` |
+| `skipOnStatic` | Skip when the runtime serves static export output |
+
+Stage categories map to harness stage keys:
+
+- `node` → Node.js baseline
+- `comparison` → EdgeJS native or other comparison runner (including QuickJS WASIX when `FRAMEWORK_TEST_SKIP_SAFE=1`)
+- `safe` → Wasmer + EdgeJS Safe stage
+
+Routes can be limited to specific stages. For example, Gatsby SSR/DSG pages in `js-gatsby-staticsite2` use `"stages": ["node"]` because they require `gatsby serve` and are not available when Edge stages serve prebuilt static output.
+
+### Static server path resolution
+
+When Edge stages serve static export output through `.framework-test-static-server.cjs`, the generated server resolves paths in this order:
+
+1. Exact file under the output root
+2. `{path}.html`
+3. `{path}/index.html`
+4. `{path}/index.html` when the request path ends with `/`
+
+This allows route matrices to use framework-friendly paths such as `/about` and `/docs/intro` without trailing slashes.
+
+### Route validation flow
+
+1. Resolve the production runtime for the stage.
+2. Load and filter `routes.json` for the stage/runtime mode.
+3. Poll server readiness against the first configured route.
+4. Request and validate every remaining route before stopping the server.
+5. Report pass/fail per app with a route count summary (for example, `3/3 routes`).
+
+Failures include the route name, path, expected status/body, and a short body snippet.
 
 ## Retry And Speed Behavior
 
@@ -276,7 +509,7 @@ The reset scope includes:
   - `public/build`
   - `public/_gatsby`
   - `public/page-data`
-- project-local `.framework-test-static-server.js`
+- project-local `.framework-test-static-server.cjs`
 - `.framework-test/`
 - `build-edge/`
 - repo-root `.pnpm-store/`
@@ -293,6 +526,7 @@ Important outputs include:
 
 - `.framework-test/logs/<project>.pnpm-install.log`
 - `.framework-test/logs/<project>.<stage>.build.log`
+- `.framework-test/logs/<project>.node-build.build.log` for EdgeJS-stage builds
 - `.framework-test/logs/<project>.<stage>.server.log`
 
 These logs are the primary debugging artifact for framework startup failures and
@@ -302,8 +536,8 @@ stage-to-stage regressions.
 
 The following are current intentional limits of the implementation:
 
-- runtime validation is boot-and-serve validation, not deep application
-  correctness
+- runtime validation is boot-and-serve validation with configurable per-route
+  assertions, not deep application correctness
 - runtime stages are sequential, not parallelized across frameworks
 - safe mode is only attempted for an EdgeJS-like comparison runner
 - the harness compares one baseline and one comparison runner, not an arbitrary

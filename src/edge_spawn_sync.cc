@@ -9,6 +9,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <uv.h>

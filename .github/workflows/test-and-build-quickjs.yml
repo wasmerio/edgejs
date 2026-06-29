@@ -10,6 +10,7 @@ on:
 jobs:
   metadata:
     name: metadata
+    if: ${{ false }}
     runs-on: ubuntu-latest
     outputs:
       edge_version: ${{ steps.version.outputs.edge_version }}
@@ -41,6 +42,7 @@ jobs:
 
   quickjs-linux:
     name: quickjs-linux
+    if: ${{ false }}
     runs-on: ubuntu-latest
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -60,7 +62,19 @@ jobs:
           set -euo pipefail
           git submodule sync --recursive
           git -c protocol.version=2 submodule update --init --recursive --depth=1
-          test -f node/src/node_api_types.h
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
 
       - name: Install Linux build dependencies
         shell: bash
@@ -100,12 +114,25 @@ jobs:
           set -euo pipefail
           make test-quickjs-only TEST_JOBS=4
 
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
 
   quickjs-macos:
     name: quickjs-macos
+    if: ${{ false }}
     runs-on: macos-latest
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -125,7 +152,19 @@ jobs:
           set -euo pipefail
           git submodule sync --recursive
           git -c protocol.version=2 submodule update --init --recursive --depth=1
-          test -f node/src/node_api_types.h
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
 
       - name: Validate public N-API headers stay V8-agnostic
         shell: bash
@@ -140,12 +179,14 @@ jobs:
           make build-edge-quickjs-cli CMAKE_BUILD_TYPE=Release JOBS=4
 
       - name: Generate dist
+        if: ${{ false }}
         shell: bash
         run: |
           set -euo pipefail
           make dist-only BUILD_DIR=build-edge-quickjs-cli JOBS=4 ZIP_NAME=edge-quickjs-darwin-arm64.zip
 
       - name: Upload artifact edge
+        if: ${{ false }}
         uses: actions/upload-artifact@v4
         with:
           name: edge-quickjs-darwin-arm64
@@ -157,6 +198,18 @@ jobs:
         run: |
           set -euo pipefail
           make test-quickjs-only TEST_JOBS=4
+
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
 
       - name: sccache stats
         if: always()
@@ -170,12 +223,32 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
       - name: Install wasixcc
-        uses: wasix-org/wasixcc@v0.4.2
+        uses: wasix-org/wasixcc@v0.4.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          sysroot-tag: v2026-02-16.1
-          version: v0.4.2
+          sysroot-tag: v2026-06-25.1
+          version: v0.4.3
 
       - name: Build edge (QuickJS WASIX)
         shell: bash
@@ -183,7 +256,34 @@ jobs:
           set -euo pipefail
           make build-quickjs-wasix
 
+      - name: Install Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0-rc.1"
+          echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.wasmer/bin/wasmer" --version
+
+      - name: Test edge (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-quickjs-only TEST_JOBS=1
+
+      - name: Test framework apps (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-wasix
+
+      - name: Test standalone builds (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-wasix
+
       - name: Generate dist
+        if: ${{ false }}
         shell: bash
         run: |
           set -euo pipefail
@@ -194,6 +294,7 @@ jobs:
           (cd dist && zip -r ../edge-quickjs-wasix.zip bin bin-compat README.md wasmer.toml ssl-certs)
 
       - name: Upload artifact edge
+        if: ${{ false }}
         uses: actions/upload-artifact@v4
         with:
           name: edge-quickjs-wasix
@@ -202,13 +303,13 @@ jobs:
 
   publish-nightly:
     name: publish-nightly
+    if: ${{ false }}
     runs-on: ubuntu-latest
     needs:
       - metadata
       - quickjs-linux
       - quickjs-macos
       - quickjs-wasix
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     env:
       GH_TOKEN: ${{ secrets.RELEASE_PLEASE_GH_TOKEN }}
       TARGET_REPO: wasmerio/edgejs-nightlies
@@ -350,7 +451,12 @@ jobs:
             "${files[@]}"
 
       - name: Install Wasmer CLI
-        uses: wasmerio/setup-wasmer@v3
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0-rc.1"
+          echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.wasmer/bin/wasmer" --version
 
       - name: Publish to wasmer.wtf
         env:

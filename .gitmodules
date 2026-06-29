@@ -1,10 +1,6 @@
-[submodule "node"]
-	path = node
-	url = https://github.com/nodejs/node.git
-	branch = v24.x
 [submodule "test"]
 	path = test
-	url = https://github.com/wasmerio/node-test.git
+	url = https://github.com/Arshia001/node-test.git
 [submodule "wasmer-examples"]
 	path = wasmer-examples
 	url = git@github.com:wasmerio/examples.git
@@ -15,3 +11,11 @@
 [submodule "ssl-certs"]
 	path = ssl-certs
 	url = https://github.com/wasix-org/ssl-certs.git
+[submodule "deps/libuv-wasix"]
+	path = deps/libuv-wasix
+	url = https://github.com/wasix-org/libuv.git
+	branch = wasix-1.51.0
+[submodule "deps/openssl-wasix"]
+	path = deps/openssl-wasix
+	url = https://github.com/wasix-org/openssl.git
+	branch = wasix-3.5.8

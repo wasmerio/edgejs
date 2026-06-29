@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-reset
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -6,6 +6,7 @@ BUILD_DIR ?= build-edge
 BUILD_EDGE_QUICKJS_CLI_DIR ?= build-edge-quickjs-cli
 BUILD_WASIX_NAPI_DIR ?= build-wasix-napi
 BUILD_QUICKJS_WASIX_DIR ?= build-quickjs-wasix
+QUICKJS_WASIX_WASM := $(BUILD_QUICKJS_WASIX_DIR)/edgejs.wasm
 DIST_DIR ?= dist
 DIST_BIN_DIR ?= $(DIST_DIR)/bin
 DIST_BIN_COMPAT_DIR ?= $(DIST_DIR)/bin-compat
@@ -21,7 +22,11 @@ EXTRA_CMAKE_ARGS ?=
 NAPI_V8_PREBUILT_VERSION ?= 11.9.2
 NAPI_V8_PLATFORM :=
 FRAMEWORK_TEST_SCRIPT := $(CURDIR)/scripts/framework-test.js
+STANDALONE_BUILD_TEST_SCRIPT := $(CURDIR)/scripts/standalone-build-test.js
 FRAMEWORK_TEST_SELECTOR := $(filter js-%,$(MAKECMDGOALS))
+FRAMEWORK_TEST_ORCHESTRATOR ?= node
+WASIX_FRAMEWORK_RUNNER := $(CURDIR)/scripts/edge-wasix-framework-runner.sh
+QUICKJS_EDGE_BINARY := $(BUILD_EDGE_QUICKJS_CLI_DIR)/edge
 NAPI_WASMER_DIR ?= napi
 NAPI_WASMER_CARGO_TARGET_DIR ?= $(abspath $(BUILD_WASIX_NAPI_DIR)/target)
 NAPI_WASMER_BINARY ?= $(NAPI_WASMER_CARGO_TARGET_DIR)/debug/napi_wasmer
@@ -30,6 +35,7 @@ WASIX_NAPI_SMOKE_JS ?= console.log('hello world!');
 WASMER_BIN ?= wasmer
 WASIX_PACKAGE_DIR ?= $(CURDIR)
 WASIX_SSL_CERTS_DIR ?= ssl-certs
+WASIX_QUICKJS_NODE_TEST_RUNNER ?= $(CURDIR)/scripts/edge-wasix-node-runner.sh
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -89,6 +95,109 @@ QUICKJS_SKIP_WORKER_TESTS := parallel/test-diagnostics-channel-worker-threads.js
 # QuickJS currently regresses TLS close-notify handling under --expose-internals.
 QUICKJS_SKIP_TLS_TESTS := parallel/test-tls-close-notify.js
 QUICKJS_SKIP_TESTS ?= $(EDGE_NODE_TEST_SKIP_TESTS),$(QUICKJS_SKIP_USING_PARSER_TESTS),$(QUICKJS_SKIP_WORKER_TESTS),$(QUICKJS_SKIP_TLS_TESTS)
+
+# Expected WASIX environment limits from the 2026-06-23 triage run (1674 passed /
+# 64 failed). These 52 tests are unix sockets, cluster/fork, subprocess/shell,
+# homedir/priority, stack-overflow console, UDP gaps, unsupported crypto, and
+# TLS env/keylog subprocess harnesses. The 12 in-process parity targets below
+# are tracked in plans/quickjs-wasm/development/010_wasix_remaining_node_test_failures.md.
+WASIX_SKIP_UNIX_SOCKET_TESTS := \
+  parallel/test-http-client-abort-keep-alive-queued-unix-socket.js \
+  parallel/test-http-client-abort-unix-socket.js \
+  parallel/test-http-client-pipe-end.js \
+  parallel/test-http-unix-socket-keep-alive.js \
+  parallel/test-http-unix-socket.js \
+  parallel/test-https-unix-socket-self-signed.js \
+  parallel/test-http2-pipe-named-pipe.js \
+  parallel/test-http2-respond-file-error-pipe-offset.js \
+  parallel/test-tls-connect-pipe.js \
+  parallel/test-tls-net-connect-prefer-path.js \
+  parallel/test-tls-wrap-econnreset-pipe.js \
+  parallel/test-http-client-response-domain.js
+WASIX_SKIP_CLUSTER_FORK_TESTS := \
+  parallel/test-dgram-bind-socket-close-before-cluster-reply.js \
+  parallel/test-dgram-cluster-close-during-bind.js \
+  parallel/test-dgram-cluster-close-in-listening.js \
+  parallel/test-dgram-unref-in-cluster.js \
+  parallel/test-http-server-drop-connections-in-cluster.js \
+  parallel/test-tls-ticket-cluster.js \
+  parallel/test-diagnostics-channel-process.js \
+  parallel/test-http-chunk-problem.js \
+  parallel/test-http-client-with-create-connection.js \
+  parallel/test-http-full-response.js \
+  parallel/test-http-server-stale-close.js \
+  parallel/test-dgram-deprecation-error.js \
+  parallel/test-https-agent-unref-socket.js \
+  parallel/test-crypto-secure-heap.js \
+  parallel/test-domain-top-level-error-handler-throw.js \
+  parallel/test-domain-uncaught-exception.js \
+  sequential/test-dgram-bind-shared-ports.js
+WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
+  parallel/test-stream-pipeline-process.js \
+  parallel/test-domain-abort-on-uncaught.js \
+  sequential/test-stream2-stderr-sync.js
+WASIX_SKIP_OS_TESTS := \
+  parallel/test-os-homedir-no-envvar.js \
+  parallel/test-os.js \
+  parallel/test-os-process-priority.js
+WASIX_SKIP_STACK_OVERFLOW_TESTS := \
+  parallel/test-console-log-throw-primitive.js \
+  parallel/test-console-no-swallow-stack-overflow.js \
+  parallel/test-console-sync-write-error.js \
+  parallel/test-ttywrap-stack.js
+WASIX_SKIP_UDP_TESTS := \
+  parallel/test-dgram-createSocket-type.js \
+  parallel/test-dgram-exclusive-implicit-bind.js \
+  parallel/test-dgram-setTTL.js
+WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS := \
+  parallel/test-crypto-argon2.js \
+  parallel/test-crypto-no-algorithm.js \
+  parallel/test-webcrypto-derivebits-argon2.js \
+  parallel/test-crypto-pqc-keygen-slh-dsa.js
+WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
+  parallel/test-tls-enable-keylog-cli.js \
+  parallel/test-tls-env-bad-extra-ca.js \
+  parallel/test-tls-env-extra-ca-no-crypto.js \
+  parallel/test-tls-env-extra-ca.js \
+  parallel/test-tls-env-extra-ca-with-options.js
+WASIX_SKIP_MISC_ENV_TESTS := \
+  parallel/test-http2-tls-disconnect.js \
+  parallel/test-http2-misbehaving-flow-control-paused.js
+# Known in-process WASIX parity gaps (see 010_wasix_remaining_node_test_failures.md).
+WASIX_SKIP_PARITY_TESTS := \
+  client-proxy/test-http-proxy-request-connection-refused.mjs \
+  client-proxy/test-https-proxy-request-connection-refused.mjs \
+  sequential/test-http-econnrefused.js \
+  sequential/test-tls-connect.js \
+  parallel/test-dns-perf_hooks.js \
+  parallel/test-dns-setserver-when-querying.js \
+  parallel/test-http-writable-true-after-close.js \
+  parallel/test-fastutf8stream-mode.js \
+  parallel/test-tls-alert-handling.js \
+  parallel/test-tls-error-stack.js \
+  parallel/test-tls-hello-parser-failure.js \
+  parallel/test-tls-junk-server.js
+# CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
+WASIX_SLOW_TESTS := \
+  parallel/test-buffer-constants.js \
+  parallel/test-crypto-oneshot-hash-xof.js \
+  parallel/test-fastutf8stream-flush-sync.js \
+  parallel/test-http2-respond-file-with-pipe.js \
+  parallel/test-stringbytes-external.js \
+  parallel/test-url-parse-invalid-input.js \
+  parallel/test-webcrypto-wrap-unwrap.js
+WASIX_SLOW_TEST_TIMEOUT_SCALE ?= 12
+WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
+  $(WASIX_SKIP_UNIX_SOCKET_TESTS) \
+  $(WASIX_SKIP_CLUSTER_FORK_TESTS) \
+  $(WASIX_SKIP_SUBPROCESS_SHELL_TESTS) \
+  $(WASIX_SKIP_OS_TESTS) \
+  $(WASIX_SKIP_STACK_OVERFLOW_TESTS) \
+  $(WASIX_SKIP_UDP_TESTS) \
+  $(WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS) \
+  $(WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS) \
+  $(WASIX_SKIP_MISC_ENV_TESTS) \
+  $(WASIX_SKIP_PARITY_TESTS)))
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_ENV := env -u CPPFLAGS -u LDFLAGS
@@ -156,6 +265,9 @@ build-wasix:
 build-quickjs-wasix:
 	./quickjs-wasm/build.sh
 
+$(QUICKJS_WASIX_WASM):
+	./quickjs-wasm/build.sh
+
 build-wasix-napi: build-wasix build-napi-wasmer-cli
 
 build-wasix-napi-quickjs: build-quickjs-wasix
@@ -189,6 +301,13 @@ test-only:
 test-quickjs-only:
 	EDGE_BYTECODE_CACHE=0 NODE_TEST_RUNNER=$(BUILD_EDGE_QUICKJS_CLI_DIR)/edge ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
+	  -j $(TEST_JOBS)
+
+test-wasix-quickjs-only:
+	WASIX_SLOW_TESTS="$(subst $(SPACE),$(COMMA),$(strip $(WASIX_SLOW_TESTS)))" \
+	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_SLOW_TEST_TIMEOUT_SCALE)" \
+	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
+	  --skip-tests=$(QUICKJS_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS) \
 	  -j $(TEST_JOBS)
 
 test-bytecode-cache:
@@ -268,8 +387,40 @@ dist-only:
 		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
 	fi
 
+framework-test-run:
+	@command -v "$(FRAMEWORK_TEST_ORCHESTRATOR)" >/dev/null 2>&1 || { \
+		echo "error: $(FRAMEWORK_TEST_ORCHESTRATOR) is required to run framework-test" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(SYMLINK_TARGET)" \
+		EDGEJS_ROOT="$(CURDIR)" \
+		FRAMEWORK_TEST_SKIP_SAFE="$(FRAMEWORK_TEST_SKIP_SAFE)" \
+		FRAMEWORK_TEST_NODE_SKIP="$(FRAMEWORK_TEST_NODE_SKIP)" \
+		FRAMEWORK_TEST_EDGE_SKIP="$(FRAMEWORK_TEST_EDGE_SKIP)" \
+		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
+		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
 framework-test: $(EDGE_BINARY)
 	@"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
+framework-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
+	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
+		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
+
+framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
+	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for framework-test-quickjs-wasix" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone,js-next-ssr' \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
+		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 framework-test-reset:
 	@if [ -x "$(EDGE_BINARY)" ]; then \
@@ -280,6 +431,37 @@ framework-test-reset:
 		echo "error: $(EDGE_BINARY) is missing and no node fallback is available for framework-test-reset" >&2; \
 		exit 1; \
 	fi
+
+standalone-build-test-run:
+	@command -v "$(FRAMEWORK_TEST_ORCHESTRATOR)" >/dev/null 2>&1 || { \
+		echo "error: $(FRAMEWORK_TEST_ORCHESTRATOR) is required to run standalone-build-test" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(SYMLINK_TARGET)" \
+		EDGEJS_ROOT="$(CURDIR)" \
+		FRAMEWORK_TEST_SKIP_SAFE="$(FRAMEWORK_TEST_SKIP_SAFE)" \
+		FRAMEWORK_TEST_NODE_SKIP="$(FRAMEWORK_TEST_NODE_SKIP)" \
+		FRAMEWORK_TEST_EDGE_SKIP="$(FRAMEWORK_TEST_EDGE_SKIP)" \
+		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
+		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
+standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
+	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
+		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
+
+standalone-build-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
+	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for standalone-build-test-quickjs-wasix" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone,js-next-ssr' \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
+		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 js-%:
 	@:

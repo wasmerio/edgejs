@@ -4,14 +4,6 @@ function(edge_configure_options)
     CACHE STRING "Default Wasmer package used by edge --safe"
   )
 
-  set(NAPI_V8_NODE_ROOT_DEFAULT "${PROJECT_ROOT}/node")
-  if(DEFINED ENV{NAPI_V8_NODE_ROOT})
-    set(NAPI_V8_NODE_ROOT_DEFAULT "$ENV{NAPI_V8_NODE_ROOT}")
-  endif()
-  set(NAPI_V8_NODE_ROOT
-    "${NAPI_V8_NODE_ROOT_DEFAULT}"
-    CACHE PATH "Path to Node source root (for raw Node tests/fixtures)"
-  )
   option(EDGE_EXTERNAL_NAPI_V8
     "Deprecated alias. Use EDGE_NAPI_PROVIDER=imports."
     OFF
@@ -61,7 +53,6 @@ function(edge_configure_options)
   endif()
 
   set(EDGE_DEFAULT_WASMER_PACKAGE "${EDGE_DEFAULT_WASMER_PACKAGE}" PARENT_SCOPE)
-  set(NAPI_V8_NODE_ROOT "${NAPI_V8_NODE_ROOT}" PARENT_SCOPE)
   set(EDGE_EXTERNAL_NAPI_V8 "${EDGE_EXTERNAL_NAPI_V8}" PARENT_SCOPE)
   set(EDGE_ALLOW_UNDEFINED_IMPORTS "${EDGE_ALLOW_UNDEFINED_IMPORTS}" PARENT_SCOPE)
   set(EDGE_PREFER_REPO_LOCAL_V8 "${EDGE_PREFER_REPO_LOCAL_V8}" PARENT_SCOPE)

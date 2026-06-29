@@ -922,3 +922,48 @@ full quickjs category set total=1779 passed=1740 failed=39
 
 That matches the macOS-sized residual failure set and removes the Linux-only
 allocator-abort wave from the downloaded CI logs.
+
+## 2026-06-05 WASIX Node Test Temp Isolation
+
+A later full local `make test-wasix-quickjs-only` run showed a repeated block
+failure:
+
+```text
+EEXIST: file already exists, mkdir '/workspace/test/.tmp.0'
+```
+
+This was a harness isolation issue, not independent HTTP, HTTP/2, TLS, zlib, or
+stream subsystem breakage. `test/common/tmpdir.js` names the shared test temp
+directory from `TEST_SERIAL_ID || TEST_THREAD_ID || '0'`. The Python Node test
+harness sets per-test serial IDs, but the WASIX runner only forwarded `HOME`
+and `NODE_TEST_DIR` through `wasmer run`, so guest tests fell back to `.tmp.0`.
+
+`scripts/edge-wasix-node-runner.sh` now:
+
+- forwards `TEST_SERIAL_ID` into the guest;
+- synthesizes `wasix-<hash>-<pid>` for direct runner invocations without a
+  harness-provided serial;
+- sets `NODE_TEST_DIR=/tmp/edgejs-node-test`;
+- mounts that temp root separately from the source tree;
+- mounts a temporary empty root at `/workspace` and then mounts individual
+  source directories under it instead of mounting the whole checkout as
+  `/workspace`.
+
+The default individual source mounts are configurable through
+`WASIX_EDGEJS_WORKSPACE_DIRS` and currently default to
+`test,lib,deps,node,assets`.
+
+Focused verification:
+
+```sh
+bash -n /Users/sadhbh/src/dev/edgejs/scripts/edge-wasix-node-runner.sh
+/Users/sadhbh/src/dev/edgejs/scripts/edge-wasix-node-runner.sh \
+  -e "const tmpdir=require('/workspace/test/common/tmpdir.js'); tmpdir.refresh(); console.log(tmpdir.path);"
+/Users/sadhbh/src/dev/edgejs/scripts/edge-wasix-node-runner.sh \
+  /Users/sadhbh/src/dev/edgejs/test/parallel/test-url-format.js
+```
+
+The tmpdir probe resolved under
+`/tmp/edgejs-node-test/.tmp.wasix-...`, and two concurrent direct probes used
+different pid-suffixed temp directories. `parallel/test-url-format.js` passed
+through the WASIX runner.

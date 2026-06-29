@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include <openssl/asn1err.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 #include <openssl/bnerr.h>
@@ -25,11 +26,16 @@
 #include <openssl/dherr.h>
 #include <openssl/ec.h>
 #include <openssl/ecdh.h>
+#include <openssl/ecerr.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/evperr.h>
 #include <openssl/obj_mac.h>
 #include <openssl/pem.h>
+#include <openssl/pemerr.h>
+#include <openssl/proverr.h>
 #include <openssl/rsa.h>
+#include <openssl/rsaerr.h>
 #include <openssl/x509.h>
 
 #include "ncrypto.h"
@@ -567,88 +573,71 @@ void SetErrorStringProperty(napi_env env, napi_value err, const char* name, cons
 
 const char* MapOpenSslErrorCode(unsigned long err) {
   if (err == 0) return nullptr;
-  const char* library = ERR_lib_error_string(err);
-  const char* reason = ERR_reason_error_string(err);
-  if (reason != nullptr &&
-      std::strcmp(reason, "invalid digest") == 0) {
-    return "ERR_OSSL_INVALID_DIGEST";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bad decrypt") == 0) {
-    return "ERR_OSSL_BAD_DECRYPT";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "operation not supported for this keytype") == 0) {
-    return "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "wrong final block length") == 0) {
-    return "ERR_OSSL_WRONG_FINAL_BLOCK_LENGTH";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "data not multiple of block length") == 0) {
-    return "ERR_OSSL_DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bignum too long") == 0) {
-    return "ERR_OSSL_BN_BIGNUM_TOO_LONG";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "missing OID") == 0) {
-    return "ERR_OSSL_MISSING_OID";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "modulus too small") == 0) {
-    return "ERR_OSSL_DH_MODULUS_TOO_SMALL";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bits too small") == 0) {
-    return "ERR_OSSL_BN_BITS_TOO_SMALL";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "bad generator") == 0) {
-    return "ERR_OSSL_DH_BAD_GENERATOR";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "mismatching domain parameters") == 0) {
-    return "ERR_OSSL_MISMATCHING_DOMAIN_PARAMETERS";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "different parameters") == 0) {
-    return "ERR_OSSL_EVP_DIFFERENT_PARAMETERS";
-  }
-  if (reason != nullptr &&
-      std::strcmp(reason, "interrupted or cancelled") == 0) {
-    return "ERR_OSSL_CRYPTO_INTERRUPTED_OR_CANCELLED";
-  }
-  if (library != nullptr &&
-      reason != nullptr &&
-      std::strcmp(library, "DECODER routines") == 0 &&
-      std::strcmp(reason, "unsupported") == 0) {
-    return "ERR_OSSL_UNSUPPORTED";
-  }
+  switch (ERR_PACK(ERR_GET_LIB(err), 0, ERR_GET_REASON(err))) {
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_INVALID_DIGEST):
+    case ERR_PACK(ERR_LIB_RSA, 0, RSA_R_INVALID_DIGEST):
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_INVALID_DIGEST):
+      return "ERR_OSSL_INVALID_DIGEST";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_BAD_DECRYPT):
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_BAD_DECRYPT):
+    case ERR_PACK(ERR_LIB_PEM, 0, PEM_R_BAD_DECRYPT):
+      return "ERR_OSSL_BAD_DECRYPT";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE):
+    case ERR_PACK(ERR_LIB_RSA, 0, RSA_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE):
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE):
+      return "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_COMMAND_NOT_SUPPORTED):
+      return "ERR_OSSL_EVP_COMMAND_NOT_SUPPORTED";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_DECODE_ERROR):
+      return "ERR_OSSL_EVP_DECODE_ERROR";
+    case ERR_PACK(ERR_LIB_ASN1, 0, ASN1_R_DECODE_ERROR):
+      return "ERR_OSSL_ASN1_DECODE_ERROR";
+    case ERR_PACK(ERR_LIB_ASN1, 0, ASN1_R_WRONG_TAG):
+      return "ERR_OSSL_ASN1_WRONG_TAG";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_WRONG_FINAL_BLOCK_LENGTH):
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_WRONG_FINAL_BLOCK_LENGTH):
+      return "ERR_OSSL_WRONG_FINAL_BLOCK_LENGTH";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH):
+      return "ERR_OSSL_DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH";
+    case ERR_PACK(ERR_LIB_BN, 0, BN_R_BIGNUM_TOO_LONG):
+      return "ERR_OSSL_BN_BIGNUM_TOO_LONG";
+    case ERR_PACK(ERR_LIB_EC, 0, EC_R_MISSING_OID):
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_MISSING_OID):
+      return "ERR_OSSL_MISSING_OID";
+    case ERR_PACK(ERR_LIB_DH, 0, DH_R_MODULUS_TOO_SMALL):
+      return "ERR_OSSL_DH_MODULUS_TOO_SMALL";
+    case ERR_PACK(ERR_LIB_BN, 0, BN_R_BITS_TOO_SMALL):
+      return "ERR_OSSL_BN_BITS_TOO_SMALL";
+    case ERR_PACK(ERR_LIB_DH, 0, DH_R_BAD_GENERATOR):
+      return "ERR_OSSL_DH_BAD_GENERATOR";
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_MISMATCHING_DOMAIN_PARAMETERS):
+      return "ERR_OSSL_MISMATCHING_DOMAIN_PARAMETERS";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_DIFFERENT_PARAMETERS):
+      return "ERR_OSSL_EVP_DIFFERENT_PARAMETERS";
+    case ERR_PACK(ERR_LIB_EVP, 0, ERR_R_INTERRUPTED_OR_CANCELLED):
+      return "ERR_OSSL_CRYPTO_INTERRUPTED_OR_CANCELLED";
+    case ERR_PACK(ERR_LIB_RSA, 0, RSA_R_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE):
+      return "ERR_OSSL_RSA_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE";
+    case ERR_PACK(ERR_LIB_PROV, 0, PROV_R_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE):
+      return "ERR_OSSL_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_UNSUPPORTED_ALGORITHM):
+      return "ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM";
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_UNSUPPORTED_KEY_TYPE):
+      return "ERR_OSSL_EVP_UNSUPPORTED_KEY_TYPE";
+    case ERR_PACK(ERR_LIB_OSSL_DECODER, 0, ERR_R_UNSUPPORTED):
+      return "ERR_OSSL_UNSUPPORTED";
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
-  const char* function = ERR_func_error_string(err);
-  if (library != nullptr &&
-      reason != nullptr &&
-      function != nullptr &&
-      std::strcmp(library, "PEM routines") == 0 &&
-      std::strcmp(function, "get_name") == 0 &&
-      std::strcmp(reason, "no start line") == 0) {
-    return "ERR_OSSL_PEM_NO_START_LINE";
-  }
+    case ERR_PACK(ERR_LIB_PEM, 0, PEM_R_NO_START_LINE):
+      return "ERR_OSSL_PEM_NO_START_LINE";
 #endif
+  }
   return nullptr;
 }
 
 bool IsOpenSslDecoderUnsupportedError(unsigned long err) {
   if (err == 0) return false;
-  const char* library = ERR_lib_error_string(err);
-  const char* reason = ERR_reason_error_string(err);
-  return library != nullptr &&
-         reason != nullptr &&
-         std::strcmp(library, "DECODER routines") == 0 &&
-         std::strcmp(reason, "unsupported") == 0;
+  return ERR_GET_LIB(err) == ERR_LIB_OSSL_DECODER &&
+         ERR_GET_REASON(err) == ERR_R_UNSUPPORTED;
 }
 
 const char* MapOpenSslKeyParseErrorCode(unsigned long err, bool require_private) {
@@ -656,6 +645,21 @@ const char* MapOpenSslKeyParseErrorCode(unsigned long err, bool require_private)
     return "ERR_OSSL_EVP_DECODE_ERROR";
   }
   return MapOpenSslErrorCode(err);
+}
+
+int OpenSslMappedErrorPriority(unsigned long err, bool require_private) {
+  if (err == 0) return 0;
+  if (!require_private && IsOpenSslDecoderUnsupportedError(err)) return 3;
+
+  switch (ERR_PACK(ERR_GET_LIB(err), 0, ERR_GET_REASON(err))) {
+    case ERR_PACK(ERR_LIB_EVP, 0, EVP_R_DECODE_ERROR):
+      return 3;
+    case ERR_PACK(ERR_LIB_ASN1, 0, ASN1_R_DECODE_ERROR):
+    case ERR_PACK(ERR_LIB_ASN1, 0, ASN1_R_WRONG_TAG):
+      return 1;
+  }
+
+  return MapOpenSslErrorCode(err) != nullptr ? 2 : 0;
 }
 
 napi_value CreateOpenSslError(napi_env env,
@@ -724,11 +728,24 @@ void ThrowLastOpenSslMessage(napi_env env, const char* fallback_message) {
   napi_throw(env, CreateOpenSslError(env, MapOpenSslErrorCode(selected), selected, fallback_message));
 }
 
-unsigned long ConsumePreferredOpenSslError() {
-  const unsigned long selected = ERR_get_error();
-  while (ERR_get_error() != 0) {
+unsigned long ConsumePreferredOpenSslKeyParseError(bool require_private) {
+  unsigned long first = 0;
+  unsigned long selected = 0;
+  int selected_priority = 0;
+  unsigned long err = 0;
+  while ((err = ERR_get_error()) != 0) {
+    if (first == 0) first = err;
+    const int priority = OpenSslMappedErrorPriority(err, require_private);
+    if (priority > selected_priority) {
+      selected = err;
+      selected_priority = priority;
+    }
   }
-  return selected;
+  return selected != 0 ? selected : first;
+}
+
+unsigned long ConsumePreferredOpenSslError() {
+  return ConsumePreferredOpenSslKeyParseError(true);
 }
 
 constexpr unsigned long kOpenSslDecoderUnsupportedError = 0x1E08010CUL;
@@ -754,9 +771,7 @@ void SetPreferredOpenSslError(std::string* code,
                               const char* fallback_message) {
   if (code == nullptr || message == nullptr) return;
 
-  const unsigned long selected = ERR_get_error();
-  while (ERR_get_error() != 0) {
-  }
+  const unsigned long selected = ConsumePreferredOpenSslError();
 
   if (selected != 0) {
     if (const char* mapped = MapOpenSslErrorCode(selected)) {
@@ -778,9 +793,7 @@ void SetPreferredOpenSslError(std::string* code,
 }
 
 void ThrowLastOpenSslKeyParseError(napi_env env, bool require_private, const char* fallback_message) {
-  const unsigned long selected = ERR_get_error();
-  while (ERR_get_error() != 0) {
-  }
+  const unsigned long selected = ConsumePreferredOpenSslKeyParseError(require_private);
   if (selected == 0) {
     napi_throw_error(env, nullptr, fallback_message);
     return;
@@ -797,9 +810,7 @@ void SetPreferredOpenSslKeyParseError(std::string* code,
                                       const char* fallback_message) {
   if (code == nullptr || message == nullptr) return;
 
-  const unsigned long selected = ERR_get_error();
-  while (ERR_get_error() != 0) {
-  }
+  const unsigned long selected = ConsumePreferredOpenSslKeyParseError(require_private);
 
   if (selected != 0) {
     if (const char* mapped = MapOpenSslKeyParseErrorCode(selected, require_private)) {

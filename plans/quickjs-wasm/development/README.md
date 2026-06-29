@@ -39,6 +39,8 @@ also has a troubleshooting page, treat the troubleshooting page as canonical.
 | [007_framework_standalone_builds.md](007_framework_standalone_builds.md) | 🟠 | Standalone framework build findings; current issues live under troubleshooting. |
 | [008_runtime_change_containment_rollback.md](008_runtime_change_containment_rollback.md) | 🟢 | Runtime containment and rollback history. |
 | [009_node_test_failures_analysis.md](009_node_test_failures_analysis.md) | ▶️ | Node test failure clustering; per-problem pages live under `troubleshooting/node-test`. |
+| [010_wasix_remaining_node_test_failures.md](010_wasix_remaining_node_test_failures.md) | ▶️ | Fix plan for the 12 in-process WASIX Node test failures after environment exclusions. |
+| [011_tier2_standalone_build_tests.md](011_tier2_standalone_build_tests.md) | 🟢 | Tier 2 standalone build artifact harness, canary apps, and verification. |
 
 ## Development Task Notes
 

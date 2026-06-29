@@ -3937,6 +3937,9 @@ napi_value SessionCtor(napi_env env, napi_callback_info info) {
   if (option != nullptr) {
     nghttp2_option_set_no_closed_streams(option, 1);
     nghttp2_option_set_no_auto_window_update(option, 1);
+#if defined(__wasi__) || defined(__wasm32__)
+    nghttp2_option_set_max_outbound_ack(option, 512);
+#endif
     if (wrap->type == kSessionTypeClient) {
       nghttp2_option_set_builtin_recv_extension_type(option, NGHTTP2_ALTSVC);
       nghttp2_option_set_builtin_recv_extension_type(option, NGHTTP2_ORIGIN);
