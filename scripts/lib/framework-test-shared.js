@@ -554,15 +554,36 @@ function create(options) {
     };
   }
 
-  function ensurePnpm() {
-    const check = spawnSync('pnpm', ['--version'], {
-      cwd: ROOT_DIR,
-      stdio: 'ignore',
-    });
+  let pnpmMajorVersion;
 
-    if (check.error || check.status !== 0) {
+  function detectPnpmMajorVersion() {
+    if (pnpmMajorVersion !== undefined) {
+      return pnpmMajorVersion;
+    }
+    const result = spawnSync('pnpm', ['--version'], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const match = !result.error && result.status === 0
+      ? String(result.stdout || '').trim().match(/^(\d+)\./)
+      : null;
+    pnpmMajorVersion = match ? Number(match[1]) : null;
+    return pnpmMajorVersion;
+  }
+
+  function ensurePnpm() {
+    if (detectPnpmMajorVersion() === null) {
       fail(`pnpm is required but was not found on PATH.\n${PNPM_HINT}`);
     }
+  }
+
+  // pnpm 11 dropped support for the `pnpm` field in package.json; settings
+  // (including onlyBuiltDependencies) now live in pnpm-workspace.yaml. Only
+  // pnpm <= 10 still reads onlyBuiltDependencies from package.json, and only
+  // there does it conflict with --config.dangerouslyAllowAllBuilds.
+  function pnpmReadsPackageJsonPnpmField() {
+    const major = detectPnpmMajorVersion();
+    return typeof major === 'number' && major <= 10;
   }
 
   function buildPortCandidates(index) {
@@ -1174,9 +1195,12 @@ function create(options) {
       '--no-lockfile',
       '--store-dir', PNPM_STORE_DIR,
     ];
-    // pnpm 10 rejects combining dangerouslyAllowAllBuilds with package.json
-    // pnpm.onlyBuiltDependencies (js-gatsby-staticsite2).
-    if (!projectHasOnlyBuiltDependencies(project)) {
+    // Approve all dependency build scripts so installs do not abort on
+    // ERR_PNPM_IGNORED_BUILDS. pnpm <= 10 rejects combining
+    // dangerouslyAllowAllBuilds with a package.json pnpm.onlyBuiltDependencies
+    // field (js-gatsby-staticsite2); pnpm 11 ignores that field entirely, so
+    // the flag is always safe and required there.
+    if (!(pnpmReadsPackageJsonPnpmField() && projectHasOnlyBuiltDependencies(project))) {
       args.push('--config.dangerouslyAllowAllBuilds=true');
     }
     return args;
