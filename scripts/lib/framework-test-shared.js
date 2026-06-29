@@ -1154,6 +1154,34 @@ function create(options) {
     }
   }
 
+  function readProjectPackageJson(project) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(project.dir, 'package.json'), 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  function projectHasOnlyBuiltDependencies(project) {
+    const pkg = readProjectPackageJson(project);
+    return Array.isArray(pkg?.pnpm?.onlyBuiltDependencies)
+      && pkg.pnpm.onlyBuiltDependencies.length > 0;
+  }
+
+  function pnpmInstallArgs(project) {
+    const args = [
+      'install',
+      '--no-lockfile',
+      '--store-dir', PNPM_STORE_DIR,
+    ];
+    // pnpm 10 rejects combining dangerouslyAllowAllBuilds with package.json
+    // pnpm.onlyBuiltDependencies (js-gatsby-staticsite2).
+    if (!projectHasOnlyBuiltDependencies(project)) {
+      args.push('--config.dangerouslyAllowAllBuilds=true');
+    }
+    return args;
+  }
+
   async function formatPnpmInstallFailures(failures) {
     const lines = ['one or more pnpm install commands failed:'];
     for (const failure of failures) {
@@ -1185,12 +1213,7 @@ function create(options) {
 
       logStream.write(`${formatPrefix('INFO')} pnpm install in ${project.name}${os.EOL}`);
 
-      const child = spawn('pnpm', [
-        'install',
-        '--no-lockfile',
-        '--store-dir', PNPM_STORE_DIR,
-        '--config.dangerouslyAllowAllBuilds=true',
-      ], {
+      const child = spawn('pnpm', pnpmInstallArgs(project), {
         cwd: project.dir,
         env: {
           ...process.env,
