@@ -136,8 +136,19 @@ arrays. 14-check regression sweep + all 5 acceptance criteria pass on native.
 NumberFormat notation/signDisplay/compact/unit-name mapping; Locale calendar/numberingSystem/collation
 extension keywords; RelativeTimeFormat/PluralRules formatToParts/selectRange.
 
-**Not yet done (Phase 3):** WASIX build re-verification; a committed conformance probe inside the quickjs
-package; Ghost monkeypatch removal + boot; Etherpad Makefile un-skip + boot.
+### Phase 3 — conformance + app validation (2026-07-01)
+- **Conformance probe DONE:** `test/parallel/test-edge-intl-icu.js` — runs inside the package on both the
+  native CLI and WASIX lanes (standard Node test/parallel category), guarded by `common.hasIntl`. Covers all
+  9 constructors + getCanonicalLocales, the 5 acceptance snippets, formatToParts, bound-method detach,
+  Locale/Segmenter. Passes on `build-edge-quickjs-cli`.
+- **WASIX re-verification:** in progress (`make build-quickjs-wasix`); run the probe under `wasmer`.
+- **Ghost:** OUT OF SCOPE IN THIS REPO — Ghost's `start.js` Intl monkeypatch lives in the Ghost app
+  artifact, not here (`javascript/` does not exist). The Intl surface Ghost needs (NumberFormat currency,
+  DateTimeFormat) is covered by the conformance test; the monkeypatch removal happens in the Ghost deploy.
+- **Etherpad:** the `Intl.ListFormat` blocker (ECO-381, folded into this issue) is RESOLVED and verified.
+  But `js-etherpad` stays edge-skipped for the **other**, separately-tracked blockers the Makefile names
+  (GC use-after-free on native + WASIX esbuild call, `Makefile:407-409`). Un-skipping now would fail on
+  those, so it is intentionally left skipped until they land. Intl is no longer a gating factor.
 _Original design notes:_
 - New `src/edge_intl.{cc,h}`; delete `edge_intl_fallback.*`; update `src/CMakeLists.txt:7` and the call site
   at `edge_runtime.cc:2631` (`EdgeInstallIntl`). Remove the `HasUsableDateTimeFormat` short-circuit (we now
