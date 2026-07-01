@@ -658,6 +658,8 @@ struct NumberFormatState {
   std::string notation;          // "standard" | "scientific" | "engineering" | "compact"
   std::string compact_display;   // "short" | "long"
   std::string sign_display;      // "auto" | "never" | "always" | "exceptZero" | "negative"
+  std::string rounding_mode;     // ECMA-402 roundingMode
+  std::string trailing_zero_display;  // "auto" | "stripIfInteger"
   bool use_grouping = true;
   int32_t min_integer = -1;
   int32_t min_fraction = -1;  // -1 == unset (ICU default)
@@ -705,23 +707,36 @@ std::string BuildNumberSkeleton(const NumberFormatState& s) {
     else add("unit-width-short");
   }
   // Precision: significant digits take precedence over fraction digits (ECMA-402).
+  std::string prec;
   if (s.min_significant >= 0 || s.max_significant >= 0) {
     int32_t lo = s.min_significant < 0 ? 1 : s.min_significant;
     int32_t hi = s.max_significant < 0 ? 21 : s.max_significant;
     if (hi < lo) hi = lo;
-    std::string sig(static_cast<size_t>(lo), '@');
-    sig.append(static_cast<size_t>(hi - lo), '#');
-    add(sig);
+    prec.assign(static_cast<size_t>(lo), '@');
+    prec.append(static_cast<size_t>(hi - lo), '#');
   } else if (s.min_fraction >= 0 || s.max_fraction >= 0) {
     int32_t lo = s.min_fraction < 0 ? 0 : s.min_fraction;
     int32_t hi = s.max_fraction < 0 ? (lo > 3 ? lo : 3) : s.max_fraction;
     if (hi < lo) hi = lo;
-    std::string frac = ".";
-    frac.append(static_cast<size_t>(lo), '0');
-    frac.append(static_cast<size_t>(hi - lo), '#');
-    add(frac);
+    prec = ".";
+    prec.append(static_cast<size_t>(lo), '0');
+    prec.append(static_cast<size_t>(hi - lo), '#');
+  }
+  if (!prec.empty()) {
+    if (s.trailing_zero_display == "stripIfInteger") prec += "/w";  // strip fraction if whole
+    add(prec);
   }
   if (s.min_integer > 1) add("integer-width/+" + std::string(static_cast<size_t>(s.min_integer), '0'));
+  // Rounding mode.
+  if (s.rounding_mode == "ceil") add("rounding-mode-ceiling");
+  else if (s.rounding_mode == "floor") add("rounding-mode-floor");
+  else if (s.rounding_mode == "expand") add("rounding-mode-up");
+  else if (s.rounding_mode == "trunc") add("rounding-mode-down");
+  else if (s.rounding_mode == "halfCeil") add("rounding-mode-half-ceiling");
+  else if (s.rounding_mode == "halfFloor") add("rounding-mode-half-floor");
+  else if (s.rounding_mode == "halfExpand") add("rounding-mode-half-up");
+  else if (s.rounding_mode == "halfTrunc") add("rounding-mode-half-down");
+  else if (s.rounding_mode == "halfEven") add("rounding-mode-half-even");
   // Notation.
   if (s.notation == "scientific") add("scientific");
   else if (s.notation == "engineering") add("engineering");
@@ -778,6 +793,11 @@ napi_value NumberFormatConstructor(napi_env env, napi_callback_info info) {
   state->compact_display = GetStringOption(env, options, "compactDisplay", {"short", "long"}, "short");
   state->sign_display = GetStringOption(env, options, "signDisplay",
       {"auto", "never", "always", "exceptZero", "negative"}, "auto");
+  state->rounding_mode = GetStringOption(env, options, "roundingMode",
+      {"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven"},
+      "halfExpand");
+  state->trailing_zero_display = GetStringOption(env, options, "trailingZeroDisplay",
+      {"auto", "stripIfInteger"}, "auto");
   state->use_grouping = GetBoolOptionDefault(env, options, "useGrouping", true);
   GetIntOption(env, options, "minimumIntegerDigits", &state->min_integer);
   GetIntOption(env, options, "minimumFractionDigits", &state->min_fraction);
@@ -962,6 +982,8 @@ napi_value NumberFormatResolvedOptions(napi_env env, napi_callback_info info) {
     put("notation", state->notation);
     if (state->notation == "compact") put("compactDisplay", state->compact_display);
     put("signDisplay", state->sign_display);
+    put("roundingMode", state->rounding_mode);
+    put("trailingZeroDisplay", state->trailing_zero_display);
     napi_value grouping = nullptr;
     napi_get_boolean(env, state->use_grouping, &grouping);
     napi_set_named_property(env, out, "useGrouping", grouping);
@@ -1662,6 +1684,89 @@ napi_value RelativeTimeFormatFormat(napi_env env, napi_callback_info info) {
                                     static_cast<int32_t>(out.size())));
 }
 
+napi_value RelativeTimeFormatFormatToParts(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) return nullptr;
+  void* data = nullptr;
+  if (napi_unwrap(env, this_arg, &data) != napi_ok || data == nullptr) {
+    return ThrowType(env, "Intl.RelativeTimeFormat.prototype.formatToParts called on incompatible receiver");
+  }
+  auto* s = static_cast<RelativeTimeFormatState*>(data);
+  double value = 0;
+  if (argc > 0 && argv[0] != nullptr) {
+    napi_value num = argv[0];
+    napi_valuetype t = napi_undefined;
+    napi_typeof(env, argv[0], &t);
+    if (t != napi_number) napi_coerce_to_number(env, argv[0], &num);
+    napi_get_value_double(env, num, &value);
+  }
+  std::string unit_str = ValueToString(env, argc > 1 ? argv[1] : nullptr, "");
+  URelativeDateTimeUnit unit;
+  if (!RelativeUnitFromString(unit_str, &unit)) {
+    return ThrowRange(env, "Invalid unit argument for Intl.RelativeTimeFormat.formatToParts()");
+  }
+  if (!unit_str.empty() && unit_str.back() == 's') unit_str.pop_back();  // singular for the part's `unit`
+
+  UErrorCode status = U_ZERO_ERROR;
+  UFormattedRelativeDateTime* result = ureldatefmt_openResult(&status);
+  if (s->numeric == "auto") {
+    ureldatefmt_formatToResult(s->fmt, value, unit, result, &status);
+  } else {
+    ureldatefmt_formatNumericToResult(s->fmt, value, unit, result, &status);
+  }
+  const UFormattedValue* fv = U_SUCCESS(status) ? ureldatefmt_resultAsValue(result, &status) : nullptr;
+  int32_t slen = 0;
+  const UChar* sptr = fv != nullptr ? ufmtval_getString(fv, &slen, &status) : nullptr;
+  if (U_FAILURE(status) || sptr == nullptr) {
+    ureldatefmt_closeResult(result);
+    return ThrowRange(env, std::string("RelativeTimeFormat.formatToParts failed: ") + u_errorName(status));
+  }
+  const std::u16string text(reinterpret_cast<const char16_t*>(sptr), static_cast<size_t>(slen));
+  const int32_t total = static_cast<int32_t>(text.size());
+
+  // Assign each code unit to the innermost NUMBER-category field (if any).
+  std::vector<int32_t> owner(static_cast<size_t>(total), -1);
+  std::vector<int32_t> width(static_cast<size_t>(total), total + 1);
+  UConstrainedFieldPosition* cfpos = ucfpos_open(&status);
+  if (U_SUCCESS(status)) {
+    ucfpos_constrainCategory(cfpos, UFIELD_CATEGORY_NUMBER, &status);
+    while (ufmtval_nextPosition(fv, cfpos, &status) && U_SUCCESS(status)) {
+      int32_t begin = 0, end = 0;
+      ucfpos_getIndexes(cfpos, &begin, &end, &status);
+      const int32_t id = ucfpos_getField(cfpos, &status);
+      const int32_t w = end - begin;
+      for (int32_t i = begin; i < end && i < total; i++) {
+        if (w < width[static_cast<size_t>(i)]) { width[static_cast<size_t>(i)] = w; owner[static_cast<size_t>(i)] = id; }
+      }
+    }
+  }
+  ucfpos_close(cfpos);
+  ureldatefmt_closeResult(result);
+
+  napi_value out = nullptr;
+  napi_create_array(env, &out);
+  uint32_t idx = 0;
+  int32_t i = 0;
+  napi_value unit_val = MakeString(env, unit_str);
+  while (i < total) {
+    int32_t j = i + 1;
+    while (j < total && owner[static_cast<size_t>(j)] == owner[static_cast<size_t>(i)]) j++;
+    const int32_t field = owner[static_cast<size_t>(i)];
+    napi_value part;
+    if (field < 0) {
+      part = MakePart(env, "literal", text, i, j);
+    } else {
+      part = MakePart(env, NumberFieldToPartType(field, text, i, j), text, i, j);
+      napi_set_named_property(env, part, "unit", unit_val);
+    }
+    napi_set_element(env, out, idx++, part);
+    i = j;
+  }
+  return out;
+}
+
 napi_value RelativeTimeFormatResolvedOptions(napi_env env, napi_callback_info info) {
   napi_value this_arg = nullptr;
   napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
@@ -1682,9 +1787,10 @@ napi_value RelativeTimeFormatResolvedOptions(napi_env env, napi_callback_info in
 bool InstallRelativeTimeFormat(napi_env env, napi_value intl, std::string* error_out) {
   napi_property_descriptor methods[] = {
       {"format", nullptr, RelativeTimeFormatFormat, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"formatToParts", nullptr, RelativeTimeFormatFormatToParts, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"resolvedOptions", nullptr, RelativeTimeFormatResolvedOptions, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
-  return InstallConstructor(env, intl, "RelativeTimeFormat", RelativeTimeFormatConstructor, methods, 2,
+  return InstallConstructor(env, intl, "RelativeTimeFormat", RelativeTimeFormatConstructor, methods, 3,
                             "Intl.RelativeTimeFormat", error_out);
 }
 
@@ -1773,8 +1879,27 @@ napi_value DisplayNamesOf(napi_env env, napi_callback_info info) {
     return MakeString(env, FromUChars(name, name_len));
   } else if (s->type == "calendar") {
     len = uldn_keyValueDisplayName(s->ldn, "calendar", code.c_str(), buf, 256, &status);
+  } else if (s->type == "dateTimeField") {
+    UDateTimePatternField field;
+    if (code == "era") field = UDATPG_ERA_FIELD;
+    else if (code == "year") field = UDATPG_YEAR_FIELD;
+    else if (code == "quarter") field = UDATPG_QUARTER_FIELD;
+    else if (code == "month") field = UDATPG_MONTH_FIELD;
+    else if (code == "weekOfYear") field = UDATPG_WEEK_OF_YEAR_FIELD;
+    else if (code == "weekday") field = UDATPG_WEEKDAY_FIELD;
+    else if (code == "day") field = UDATPG_DAY_FIELD;
+    else if (code == "dayPeriod") field = UDATPG_DAYPERIOD_FIELD;
+    else if (code == "hour") field = UDATPG_HOUR_FIELD;
+    else if (code == "minute") field = UDATPG_MINUTE_FIELD;
+    else if (code == "second") field = UDATPG_SECOND_FIELD;
+    else if (code == "timeZoneName") field = UDATPG_ZONE_FIELD;
+    else return s->fallback == "none" ? Undefined(env) : MakeString(env, code);
+    UDateTimePGDisplayWidth width = s->style == "short" ? UDATPG_ABBREVIATED
+        : (s->style == "narrow" ? UDATPG_NARROW : UDATPG_WIDE);
+    UDateTimePatternGenerator* dtpg = udatpg_open(s->locale.c_str(), &status);
+    if (U_SUCCESS(status)) len = udatpg_getFieldDisplayName(dtpg, field, width, buf, 256, &status);
+    if (dtpg != nullptr) udatpg_close(dtpg);
   } else {
-    // dateTimeField not yet supported: fall back to code.
     return s->fallback == "none" ? Undefined(env) : MakeString(env, code);
   }
   if (U_FAILURE(status) || len <= 0) {

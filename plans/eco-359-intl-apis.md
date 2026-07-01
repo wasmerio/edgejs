@@ -145,9 +145,15 @@ arrays. 14-check regression sweep + all 5 acceptance criteria pass on native.
   `toString()` keeps them.
 - Conformance test extended with all of the above; passes native + WASIX.
 
-**Still open (lowest priority, non-blocking):** DisplayNames `dateTimeField` type;
-RelativeTimeFormat/PluralRules `formatToParts`; PluralRules `selectRange`; NumberFormat `roundingMode`/
-`roundingPriority`/`trailingZeroDisplay`.
+**Lowest-priority items DONE (2026-07-01):** DisplayNames `dateTimeField` (udatpg_getFieldDisplayName);
+RelativeTimeFormat `formatToParts` (UFormattedRelativeDateTime + number-category field iteration, with
+`unit` on numeric parts); NumberFormat `roundingMode` (all 9 ECMA modes → rounding-mode-* skeleton) and
+`trailingZeroDisplay: stripIfInteger` (precision `/w`). Verified native + WASIX.
+
+**Deliberately skipped (genuinely higher effort, rare):** PluralRules `selectRange` — needs the whole
+`UFormattedNumberRange` / number-range-formatter API (`unumberrangeformatter.h`), not just a plain call.
+NumberFormat `roundingIncrement`/`roundingPriority` (decimal-increment skeleton computation). These are the
+only remaining ECMA-402 gaps; file a follow-up only if an app needs them.
 
 ### Phase 3 — conformance + app validation (2026-07-01)
 - **Conformance probe DONE:** `test/parallel/test-edge-intl-icu.js` — runs inside the package on both the
