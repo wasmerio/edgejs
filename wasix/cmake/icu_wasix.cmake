@@ -12,13 +12,13 @@ add_custom_command(
   OUTPUT "${EDGE_ICU_EMBED_C}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
   COMMAND
-    "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/wasix/cmake/embed_binary.py"
+    "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/cmake/embed_binary.py"
     --input "${EDGE_ICU_DATA_BZ2}"
     --output "${EDGE_ICU_EMBED_C}"
     --symbol "ubi_icudt78l_dat"
     --compression bz2
   DEPENDS
-    "${PROJECT_ROOT}/wasix/cmake/embed_binary.py"
+    "${PROJECT_ROOT}/cmake/embed_binary.py"
     "${EDGE_ICU_DATA_BZ2}"
   VERBATIM
 )

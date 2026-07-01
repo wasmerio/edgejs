@@ -45,6 +45,8 @@
 #include "edge_buffer.h"
 #include "edge_env_loop.h"
 #include "edge_handle_scope.h"
+#include "edge_icu_data.h"
+#include "edge_intl.h"
 #include "edge_intl_fallback.h"
 #include "edge_crypto.h"
 #include "edge_encoding.h"
@@ -2628,11 +2630,31 @@ int RunScriptWithGlobals(napi_env env,
     return 1;
   }
 
+  // Activate the embedded ICU common data before any locale-aware code runs, so
+  // ICU-backed Intl (and legacy charset conversion) sees real data instead of
+  // the empty stubdata image. Non-fatal: the hand-rolled Intl fallback still
+  // installs if this fails.
+  {
+    std::string icu_data_error;
+    if (!EdgeActivateIcuData(&icu_data_error)) {
+      fprintf(stderr, "[edge] warning: %s\n", icu_data_error.c_str());
+    }
+  }
+
   if (!EdgeInstallMinimalIntlFallback(env, error_out)) {
     if (error_out != nullptr && error_out->empty()) {
       *error_out = "Failed to install Intl.DateTimeFormat fallback";
     }
     return 1;
+  }
+
+  // Install the ICU-backed Intl constructors on top of the fallback. Non-fatal:
+  // a failure here leaves the minimal fallback in place rather than aborting boot.
+  {
+    std::string intl_error;
+    if (!EdgeInstallIntl(env, &intl_error)) {
+      fprintf(stderr, "[edge] warning: %s\n", intl_error.c_str());
+    }
   }
   if (should_abort_worker_bootstrap()) return 1;
 
