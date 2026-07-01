@@ -132,9 +132,22 @@ data for (language-level lookup via `uloc_getAvailable`), so junk tags are dropp
 pointer-invalidation bug (SSO u16string `.data()` dangling on vector realloc) in the ListFormat element
 arrays. 14-check regression sweep + all 5 acceptance criteria pass on native.
 
-**Still open (deeper polish, non-blocking):** DisplayNames currency/calendar/dateTimeField types;
-NumberFormat notation/signDisplay/compact/unit-name mapping; Locale calendar/numberingSystem/collation
-extension keywords; RelativeTimeFormat/PluralRules formatToParts/selectRange.
+**Deeper coverage DONE (2026-07-01):**
+- NumberFormat: `notation` (scientific/engineering/compact + `compactDisplay`), `signDisplay`
+  (auto/never/always/exceptZero/negative), `currencyDisplay` (symbol/narrowSymbol/code/name),
+  `currencySign` (accounting), `unit`/`unitDisplay` (CLDR unit ids like `kilometer-per-hour`),
+  `minimum/maximumSignificantDigits`, `minimumIntegerDigits`; all surfaced in resolvedOptions.
+  Verified: `1.2M`, `1.2 million`, `1.23456E5`, `+42`, `($5.00)`, `EUR 5.00`, `50 km/h`, `5 megabytes`,
+  `0005`.
+- DisplayNames: `currency` (ucurr_getName long/symbol) and `calendar` (uldn_keyValueDisplayName) types.
+- Locale: Unicode `-u-` extension getters — `calendar`, `numberingSystem`, `hourCycle`, `collation`,
+  `caseFirst`, `numeric` (bool); fixed `baseName` to exclude extensions (uloc_getBaseName) while
+  `toString()` keeps them.
+- Conformance test extended with all of the above; passes native + WASIX.
+
+**Still open (lowest priority, non-blocking):** DisplayNames `dateTimeField` type;
+RelativeTimeFormat/PluralRules `formatToParts`; PluralRules `selectRange`; NumberFormat `roundingMode`/
+`roundingPriority`/`trailingZeroDisplay`.
 
 ### Phase 3 — conformance + app validation (2026-07-01)
 - **Conformance probe DONE:** `test/parallel/test-edge-intl-icu.js` — runs inside the package on both the

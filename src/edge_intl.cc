@@ -13,6 +13,7 @@
 #include <unicode/ubrk.h>
 #include <unicode/ucal.h>
 #include <unicode/ucol.h>
+#include <unicode/ucurr.h>
 #include <unicode/udat.h>
 #include <unicode/udatpg.h>
 #include <unicode/ufieldpositer.h>
@@ -650,10 +651,19 @@ struct NumberFormatState {
   std::string locale;    // resolved ICU locale id
   std::string style;     // "decimal" | "currency" | "percent" | "unit"
   std::string currency;  // ISO 4217, when style == currency
+  std::string currency_display;  // "symbol" | "narrowSymbol" | "code" | "name"
+  std::string currency_sign;     // "standard" | "accounting"
   std::string unit;      // when style == unit
+  std::string unit_display;      // "short" | "narrow" | "long"
+  std::string notation;          // "standard" | "scientific" | "engineering" | "compact"
+  std::string compact_display;   // "short" | "long"
+  std::string sign_display;      // "auto" | "never" | "always" | "exceptZero" | "negative"
   bool use_grouping = true;
+  int32_t min_integer = -1;
   int32_t min_fraction = -1;  // -1 == unset (ICU default)
   int32_t max_fraction = -1;
+  int32_t min_significant = -1;
+  int32_t max_significant = -1;
   UNumberFormatter* fmt = nullptr;
 };
 
@@ -679,15 +689,30 @@ std::string BuildNumberSkeleton(const NumberFormatState& s) {
     if (!skel.empty()) skel += " ";
     skel += token;
   };
+  // Unit of measurement.
   if (s.style == "currency") {
     add("currency/" + s.currency);
+    if (s.currency_display == "narrowSymbol") add("unit-width-narrow");
+    else if (s.currency_display == "code") add("unit-width-iso-code");
+    else if (s.currency_display == "name") add("unit-width-full-name");
   } else if (s.style == "percent") {
     add("percent");
     add("scale/100");  // ECMA-402 percent multiplies the input by 100
   } else if (s.style == "unit" && !s.unit.empty()) {
     add("unit/" + s.unit);
+    if (s.unit_display == "long") add("unit-width-full-name");
+    else if (s.unit_display == "narrow") add("unit-width-narrow");
+    else add("unit-width-short");
   }
-  if (s.min_fraction >= 0 || s.max_fraction >= 0) {
+  // Precision: significant digits take precedence over fraction digits (ECMA-402).
+  if (s.min_significant >= 0 || s.max_significant >= 0) {
+    int32_t lo = s.min_significant < 0 ? 1 : s.min_significant;
+    int32_t hi = s.max_significant < 0 ? 21 : s.max_significant;
+    if (hi < lo) hi = lo;
+    std::string sig(static_cast<size_t>(lo), '@');
+    sig.append(static_cast<size_t>(hi - lo), '#');
+    add(sig);
+  } else if (s.min_fraction >= 0 || s.max_fraction >= 0) {
     int32_t lo = s.min_fraction < 0 ? 0 : s.min_fraction;
     int32_t hi = s.max_fraction < 0 ? (lo > 3 ? lo : 3) : s.max_fraction;
     if (hi < lo) hi = lo;
@@ -696,6 +721,18 @@ std::string BuildNumberSkeleton(const NumberFormatState& s) {
     frac.append(static_cast<size_t>(hi - lo), '#');
     add(frac);
   }
+  if (s.min_integer > 1) add("integer-width/+" + std::string(static_cast<size_t>(s.min_integer), '0'));
+  // Notation.
+  if (s.notation == "scientific") add("scientific");
+  else if (s.notation == "engineering") add("engineering");
+  else if (s.notation == "compact") add(s.compact_display == "long" ? "compact-long" : "compact-short");
+  // Sign display.
+  const bool acct = s.currency_sign == "accounting";
+  if (s.sign_display == "never") add("sign-never");
+  else if (s.sign_display == "always") add(acct ? "sign-accounting-always" : "sign-always");
+  else if (s.sign_display == "exceptZero") add(acct ? "sign-accounting-except-zero" : "sign-except-zero");
+  else if (s.sign_display == "negative") add(acct ? "sign-accounting-negative" : "sign-negative");
+  else if (acct) add("sign-accounting");
   if (!s.use_grouping) add("group-off");
   return skel;
 }
@@ -725,16 +762,28 @@ napi_value NumberFormatConstructor(napi_env env, napi_callback_info info) {
       delete state;
       return ThrowType(env, "Currency code is required with currency style");
     }
+    state->currency_display = GetStringOption(env, options, "currencyDisplay",
+        {"symbol", "narrowSymbol", "code", "name"}, "symbol");
+    state->currency_sign = GetStringOption(env, options, "currencySign", {"standard", "accounting"}, "standard");
   } else if (state->style == "unit") {
     state->unit = GetRawStringOption(env, options, "unit");
     if (state->unit.empty()) {
       delete state;
       return ThrowType(env, "Unit is required with unit style");
     }
+    state->unit_display = GetStringOption(env, options, "unitDisplay", {"short", "narrow", "long"}, "short");
   }
+  state->notation = GetStringOption(env, options, "notation",
+      {"standard", "scientific", "engineering", "compact"}, "standard");
+  state->compact_display = GetStringOption(env, options, "compactDisplay", {"short", "long"}, "short");
+  state->sign_display = GetStringOption(env, options, "signDisplay",
+      {"auto", "never", "always", "exceptZero", "negative"}, "auto");
   state->use_grouping = GetBoolOptionDefault(env, options, "useGrouping", true);
+  GetIntOption(env, options, "minimumIntegerDigits", &state->min_integer);
   GetIntOption(env, options, "minimumFractionDigits", &state->min_fraction);
   GetIntOption(env, options, "maximumFractionDigits", &state->max_fraction);
+  GetIntOption(env, options, "minimumSignificantDigits", &state->min_significant);
+  GetIntOption(env, options, "maximumSignificantDigits", &state->max_significant);
 
   const std::string skeleton = BuildNumberSkeleton(*state);
   const std::u16string uskel = ToUChars(skeleton);
@@ -898,12 +947,21 @@ napi_value NumberFormatResolvedOptions(napi_env env, napi_callback_info info) {
     napi_set_named_property(env, out, "locale", MakeString(env, IcuLocaleToBcp47(state->locale)));
     napi_set_named_property(env, out, "numberingSystem", MakeString(env, "latn"));
     napi_set_named_property(env, out, "style", MakeString(env, state->style));
+    auto put = [&](const char* k, const std::string& v) {
+      if (!v.empty()) napi_set_named_property(env, out, k, MakeString(env, v));
+    };
     if (!state->currency.empty()) {
-      napi_set_named_property(env, out, "currency", MakeString(env, state->currency));
+      put("currency", state->currency);
+      put("currencyDisplay", state->currency_display);
+      put("currencySign", state->currency_sign);
     }
     if (!state->unit.empty()) {
-      napi_set_named_property(env, out, "unit", MakeString(env, state->unit));
+      put("unit", state->unit);
+      put("unitDisplay", state->unit_display);
     }
+    put("notation", state->notation);
+    if (state->notation == "compact") put("compactDisplay", state->compact_display);
+    put("signDisplay", state->sign_display);
     napi_value grouping = nullptr;
     napi_get_boolean(env, state->use_grouping, &grouping);
     napi_set_named_property(env, out, "useGrouping", grouping);
@@ -1701,8 +1759,22 @@ napi_value DisplayNamesOf(napi_env env, napi_callback_info info) {
     len = uldn_scriptDisplayName(s->ldn, code.c_str(), buf, 256, &status);
   } else if (s->type == "language") {
     len = uldn_languageDisplayName(s->ldn, code.c_str(), buf, 256, &status);
+  } else if (s->type == "currency") {
+    // ucurr_getName wants the ISO code as UChars; "narrow"/"short" -> symbol.
+    const std::u16string ucode = ToUChars(code);
+    UBool is_choice = false;
+    int32_t name_len = 0;
+    const UChar* name = ucurr_getName(reinterpret_cast<const UChar*>(ucode.data()), s->locale.c_str(),
+                                      s->style == "long" ? UCURR_LONG_NAME : UCURR_SYMBOL_NAME,
+                                      &is_choice, &name_len, &status);
+    if (U_FAILURE(status) || name == nullptr || name_len <= 0) {
+      return s->fallback == "none" ? Undefined(env) : MakeString(env, code);
+    }
+    return MakeString(env, FromUChars(name, name_len));
+  } else if (s->type == "calendar") {
+    len = uldn_keyValueDisplayName(s->ldn, "calendar", code.c_str(), buf, 256, &status);
   } else {
-    // currency / calendar / dateTimeField not yet supported: fall back to code.
+    // dateTimeField not yet supported: fall back to code.
     return s->fallback == "none" ? Undefined(env) : MakeString(env, code);
   }
   if (U_FAILURE(status) || len <= 0) {
@@ -1776,6 +1848,41 @@ napi_value LocaleConstructor(napi_env env, napi_callback_info info) {
   return this_arg;
 }
 
+// Reads a Unicode ("-u-") extension keyword (e.g. "ca","nu","hc") off the ICU
+// locale, mapping the BCP-47 key/value through ICU's legacy<->unicode tables.
+std::string LocaleUnicodeExtension(const std::string& icu_locale, const char* bcp47_key) {
+  const char* legacy_key = uloc_toLegacyKey(bcp47_key);
+  if (legacy_key == nullptr) return "";
+  char val[64];
+  UErrorCode status = U_ZERO_ERROR;
+  int32_t len = uloc_getKeywordValue(icu_locale.c_str(), legacy_key, val, sizeof(val), &status);
+  if (U_FAILURE(status) || len <= 0) return "";
+  const char* unicode = uloc_toUnicodeLocaleType(bcp47_key, val);
+  return unicode != nullptr ? std::string(unicode) : std::string(val, static_cast<size_t>(len));
+}
+
+napi_value LocaleExtensionGetter(napi_env env, napi_callback_info info, const char* key) {
+  napi_value self = nullptr;
+  napi_get_cb_info(env, info, nullptr, nullptr, &self, nullptr);
+  std::string* loc = UnwrapLocale(env, self);
+  if (loc == nullptr) return Undefined(env);
+  const std::string value = LocaleUnicodeExtension(*loc, key);
+  return value.empty() ? Undefined(env) : MakeString(env, value);
+}
+napi_value LocaleGetCalendar(napi_env env, napi_callback_info info) { return LocaleExtensionGetter(env, info, "ca"); }
+napi_value LocaleGetNumberingSystem(napi_env env, napi_callback_info info) { return LocaleExtensionGetter(env, info, "nu"); }
+napi_value LocaleGetHourCycle(napi_env env, napi_callback_info info) { return LocaleExtensionGetter(env, info, "hc"); }
+napi_value LocaleGetCollation(napi_env env, napi_callback_info info) { return LocaleExtensionGetter(env, info, "co"); }
+napi_value LocaleGetCaseFirst(napi_env env, napi_callback_info info) { return LocaleExtensionGetter(env, info, "kf"); }
+napi_value LocaleGetNumeric(napi_env env, napi_callback_info info) {
+  napi_value self = nullptr;
+  napi_get_cb_info(env, info, nullptr, nullptr, &self, nullptr);
+  std::string* loc = UnwrapLocale(env, self);
+  napi_value out = nullptr;
+  napi_get_boolean(env, loc != nullptr && LocaleUnicodeExtension(*loc, "kn") == "true", &out);
+  return out;
+}
+
 napi_value LocaleGetLanguage(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
   napi_get_cb_info(env, info, nullptr, nullptr, &self, nullptr);
@@ -1798,10 +1905,20 @@ napi_value LocaleGetBaseName(napi_env env, napi_callback_info info) {
   napi_value self = nullptr;
   napi_get_cb_info(env, info, nullptr, nullptr, &self, nullptr);
   std::string* loc = UnwrapLocale(env, self);
-  return MakeString(env, loc ? IcuLocaleToBcp47(*loc) : "");
+  if (loc == nullptr) return MakeString(env, "");
+  // baseName excludes Unicode extensions: strip the ICU @keywords first.
+  char base[ULOC_FULLNAME_CAPACITY];
+  UErrorCode status = U_ZERO_ERROR;
+  int32_t len = uloc_getBaseName(loc->c_str(), base, sizeof(base), &status);
+  if (U_FAILURE(status) || len <= 0) return MakeString(env, IcuLocaleToBcp47(*loc));
+  return MakeString(env, IcuLocaleToBcp47(std::string(base, static_cast<size_t>(len))));
 }
 napi_value LocaleToString(napi_env env, napi_callback_info info) {
-  return LocaleGetBaseName(env, info);
+  // toString() returns the full tag, including any Unicode extensions.
+  napi_value self = nullptr;
+  napi_get_cb_info(env, info, nullptr, nullptr, &self, nullptr);
+  std::string* loc = UnwrapLocale(env, self);
+  return MakeString(env, loc != nullptr ? IcuLocaleToBcp47(*loc) : "");
 }
 
 napi_value NewLocaleFromTag(napi_env env, const std::string& bcp47) {
@@ -1847,6 +1964,12 @@ bool InstallLocale(napi_env env, napi_value intl, std::string* error_out) {
       {"script", nullptr, nullptr, LocaleGetScript, nullptr, nullptr, napi_default, nullptr},
       {"region", nullptr, nullptr, LocaleGetRegion, nullptr, nullptr, napi_default, nullptr},
       {"baseName", nullptr, nullptr, LocaleGetBaseName, nullptr, nullptr, napi_default, nullptr},
+      {"calendar", nullptr, nullptr, LocaleGetCalendar, nullptr, nullptr, napi_default, nullptr},
+      {"numberingSystem", nullptr, nullptr, LocaleGetNumberingSystem, nullptr, nullptr, napi_default, nullptr},
+      {"hourCycle", nullptr, nullptr, LocaleGetHourCycle, nullptr, nullptr, napi_default, nullptr},
+      {"collation", nullptr, nullptr, LocaleGetCollation, nullptr, nullptr, napi_default, nullptr},
+      {"caseFirst", nullptr, nullptr, LocaleGetCaseFirst, nullptr, nullptr, napi_default, nullptr},
+      {"numeric", nullptr, nullptr, LocaleGetNumeric, nullptr, nullptr, napi_default, nullptr},
       {"toString", nullptr, LocaleToString, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"maximize", nullptr, LocaleMaximize, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"minimize", nullptr, LocaleMinimize, nullptr, nullptr, nullptr, napi_default, nullptr},
