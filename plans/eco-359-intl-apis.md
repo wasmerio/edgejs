@@ -113,9 +113,31 @@ deleted at the end of Phase 2.
 NumberFormat: `formatToParts`, `currencyDisplay`/`notation`/`signDisplay`, unit-name mapping (ECMA-402
 `kilometer` → ICU `length-kilometer`) — deferred to the completeness pass.
 
-**Remaining constructors:** real ICU DateTimeFormat (+ retire fallback), PluralRules, Collator,
-RelativeTimeFormat, Locale, DisplayNames, Segmenter, `getCanonicalLocales`; plus `formatToParts` for
-List/Number/DateTime and tightening `supportedLocalesOf` to check real data availability.
+**Phase 2 COMPLETE (2026-07-01).** Full ECMA-402 surface implemented, ICU-backed, verified on
+`build-edge-quickjs-cli`; the hand-rolled fallback is deleted. All 9 constructors + `getCanonicalLocales`:
+- `ListFormat` (ulistfmt), `NumberFormat` (unumf), `DateTimeFormat` (udat+udatpg+ucal, incl. formatToParts
+  + real timeZone), `PluralRules` (uplrules), `Collator` (ucol), `RelativeTimeFormat` (ureldatefmt),
+  `DisplayNames` (uldn), `Locale` (uloc, accessors + maximize/minimize), `Segmenter` (ubrk, iterable
+  Segments + containing), `getCanonicalLocales`.
+- `Collator#compare` and `{Number,DateTime}Format#format` are bound to the instance at construction
+  (`BindOwnMethod`) so they work detached (`arr.sort(c.compare)`, `arr.map(nf.format)`).
+- Provider-safe: `InstallConstructor` skips any constructor already present, so the V8 provider's native
+  Intl is left untouched; on QuickJS the whole surface is installed.
+- **All 5 issue acceptance criteria pass** (verified via probe).
+
+**Phase 2 polish DONE (2026-07-01):** `formatToParts` now implemented for NumberFormat (innermost-field
+nesting handled: `-$1,234.50` → minusSign/currency/integer/group/integer/decimal/fraction) and ListFormat
+(element/literal), alongside DateTimeFormat. `supportedLocalesOf` now filters to locales ICU actually has
+data for (language-level lookup via `uloc_getAvailable`), so junk tags are dropped. Also fixed a latent
+pointer-invalidation bug (SSO u16string `.data()` dangling on vector realloc) in the ListFormat element
+arrays. 14-check regression sweep + all 5 acceptance criteria pass on native.
+
+**Still open (deeper polish, non-blocking):** DisplayNames currency/calendar/dateTimeField types;
+NumberFormat notation/signDisplay/compact/unit-name mapping; Locale calendar/numberingSystem/collation
+extension keywords; RelativeTimeFormat/PluralRules formatToParts/selectRange.
+
+**Not yet done (Phase 3):** WASIX build re-verification; a committed conformance probe inside the quickjs
+package; Ghost monkeypatch removal + boot; Etherpad Makefile un-skip + boot.
 _Original design notes:_
 - New `src/edge_intl.{cc,h}`; delete `edge_intl_fallback.*`; update `src/CMakeLists.txt:7` and the call site
   at `edge_runtime.cc:2631` (`EdgeInstallIntl`). Remove the `HasUsableDateTimeFormat` short-circuit (we now

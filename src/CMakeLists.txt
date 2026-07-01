@@ -6,7 +6,6 @@ set(EDGE_RUNTIME_CORE_SOURCES
   "${CMAKE_CURRENT_LIST_DIR}/edge_environment_runtime.cc"
   "${CMAKE_CURRENT_LIST_DIR}/edge_icu_data.cc"
   "${CMAKE_CURRENT_LIST_DIR}/edge_intl.cc"
-  "${CMAKE_CURRENT_LIST_DIR}/edge_intl_fallback.cc"
   "${CMAKE_CURRENT_LIST_DIR}/edge_runtime.cc"
   "${CMAKE_CURRENT_LIST_DIR}/edge_runtime_platform_v8.cc"
   "${CMAKE_CURRENT_LIST_DIR}/edge_node_compat.cc"

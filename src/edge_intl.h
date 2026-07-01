@@ -11,8 +11,8 @@
 // Intl object if present, otherwise creates one. Returns false and writes to
 // *error_out (when non-null) on a hard failure.
 //
-// This is the real ECMA-402 surface; it supersedes the hand-rolled
-// EdgeInstallMinimalIntlFallback as constructors are migrated over.
+// This is the real ECMA-402 surface; it replaced the hand-rolled en-US
+// Intl.DateTimeFormat stub that predated it.
 bool EdgeInstallIntl(napi_env env, std::string* error_out);
 
 #endif  // EDGE_INTL_H_
