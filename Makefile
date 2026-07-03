@@ -85,7 +85,16 @@ EDGE_NODE_TEST_SKIP_CI_20260518 := \
   parallel/test-stream-readable-async-iterators.js \
   parallel/test-zlib-type-error.js \
   pseudo-tty/console_colors.js
-EDGE_NODE_TEST_SKIP_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip $(EDGE_NODE_TEST_SKIP_CI_20260518)))
+# Additional intermittent CI failures quarantined 2026-07-03 (shared by both
+# lanes). test-tls-alert-handling SIGSEGVs on macOS during TLS alert teardown
+# (already skipped on QuickJS via QUICKJS_SKIP_TLS_TESTS; also flakes the V8
+# lane, so skip it here for both). test-http-pipeline-requests-connection-leak
+# is timing-sensitive like the already-quarantined http keepalive-timeout tests
+# and intermittently fails on Linux.
+EDGE_NODE_TEST_SKIP_CI_20260703 := \
+  parallel/test-tls-alert-handling.js \
+  parallel/test-http-pipeline-requests-connection-leak.js
+EDGE_NODE_TEST_SKIP_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip $(EDGE_NODE_TEST_SKIP_CI_20260518) $(EDGE_NODE_TEST_SKIP_CI_20260703)))
 
 # QuickJS currently cannot parse explicit resource management `using` syntax.
 QUICKJS_SKIP_USING_PARSER_TESTS := parallel/test-stream-duplex-destroy.js,parallel/test-stream-readable-dispose.js,parallel/test-stream-transform-destroy.js,parallel/test-stream-writable-destroy.js
@@ -93,8 +102,8 @@ QUICKJS_SKIP_USING_PARSER_TESTS := parallel/test-stream-duplex-destroy.js,parall
 # tests time out or fail in the QuickJS lane while V8 continues to cover them.
 QUICKJS_SKIP_WORKER_TESTS := parallel/test-diagnostics-channel-worker-threads.js,client-proxy/test-http-proxy-request-invalid-char-in-url.mjs,parallel/test-crypto-key-objects-messageport.js,parallel/test-crypto-prime.js,parallel/test-crypto-worker-thread.js,parallel/test-http2-reset-flood.js,parallel/test-webcrypto-cryptokey-workers.js
 # QuickJS currently regresses TLS close-notify handling under --expose-internals.
-# test-tls-alert-handling intermittently aborts on macOS during alert parsing teardown.
-QUICKJS_SKIP_TLS_TESTS := parallel/test-tls-close-notify.js,parallel/test-tls-alert-handling.js
+# (test-tls-alert-handling is quarantined for both lanes in the 2026-07-03 list.)
+QUICKJS_SKIP_TLS_TESTS := parallel/test-tls-close-notify.js
 QUICKJS_SKIP_TESTS ?= $(EDGE_NODE_TEST_SKIP_TESTS),$(QUICKJS_SKIP_USING_PARSER_TESTS),$(QUICKJS_SKIP_WORKER_TESTS),$(QUICKJS_SKIP_TLS_TESTS)
 
 # Expected WASIX environment limits from the 2026-06-23 triage run (1674 passed /
