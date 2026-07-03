@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-wasix-quickjs-intl test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -310,6 +310,35 @@ test-wasix-quickjs-only:
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(QUICKJS_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS) \
 	  -j $(TEST_JOBS)
+
+# Node's own Intl / ICU locale tests. Run directly by path (not via a harness
+# category) so we don't have to categorize them in the node-test submodule —
+# the vendored test clone stays pristine. Excludes parallel/test-intl-
+# v8BreakIterator (Intl absent in fresh vm realms) and parallel/test-icu-data-
+# dir (--icu-data-dir handling); both are tracked in ECO-383.
+QUICKJS_INTL_TESTS := \
+  parallel/test-intl \
+  parallel/test-icu-env \
+  parallel/test-icu-minimum-version \
+  parallel/test-icu-stringwidth \
+  parallel/test-icu-transcode
+
+test-quickjs-intl:
+	@set -e; for t in $(QUICKJS_INTL_TESTS); do \
+	  echo "[intl native] $$t"; \
+	  EDGE_BYTECODE_CACHE=0 $(QUICKJS_EDGE_BINARY) "$(CURDIR)/test/$$t.js"; \
+	done
+	@echo "[intl native] all locale tests passed"
+
+test-wasix-quickjs-intl:
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for test-wasix-quickjs-intl" >&2; exit 1; }
+	@set -e; for t in $(QUICKJS_INTL_TESTS); do \
+	  echo "[intl wasix] $$t"; \
+	  WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" \
+	    "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/test/$$t.js"; \
+	done
+	@echo "[intl wasix] all locale tests passed"
 
 test-bytecode-cache:
 	EDGE_BIN=$(EDGE_BINARY) ./scripts/test-bytecode-cache.sh

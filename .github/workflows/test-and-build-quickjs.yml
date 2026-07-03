@@ -99,6 +99,12 @@ jobs:
           set -euo pipefail
           make test-quickjs-only TEST_JOBS=1
 
+      - name: Test locale (Intl/ICU, QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-intl
+
       - name: Test framework apps (QuickJS native)
         shell: bash
         run: |
@@ -180,6 +186,12 @@ jobs:
         run: |
           set -euo pipefail
           make test-quickjs-only TEST_JOBS=1
+
+      - name: Test locale (Intl/ICU, QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-intl
 
       - name: Test framework apps (QuickJS native)
         shell: bash
@@ -273,6 +285,12 @@ jobs:
         run: |
           set -euo pipefail
           make test-wasix-quickjs-only TEST_JOBS=1
+
+      - name: Test locale (Intl/ICU, QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-quickjs-intl
 
       - name: Test framework apps (QuickJS WASIX)
         shell: bash
