@@ -2019,6 +2019,14 @@ napi_value EdgeLibuvStreamShutdown(EdgeStreamBase* base, napi_value req_obj) {
   if (rc != 0) {
     EdgeStreamBaseSetReqError(base->env, req_obj, rc);
     EdgeStreamReqMarkDone(base->env, req_obj);
+    // uv_shutdown failed synchronously, so OnShutdownDone will never run. Undo
+    // the active-request registration before freeing sr; otherwise the freed
+    // request stays in the Environment's active list and CancelActiveRequests()
+    // calls uv_cancel() on it during cleanup (use-after-free).
+    if (sr->active_request_token != nullptr) {
+      EdgeUnregisterActiveRequestToken(base->env, sr->active_request_token);
+      sr->active_request_token = nullptr;
+    }
     DeleteRefIfPresent(base->env, &sr->req_obj_ref);
     delete sr;
   }
