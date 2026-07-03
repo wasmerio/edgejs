@@ -714,13 +714,28 @@ std::string BuildNumberSkeleton(const NumberFormatState& s) {
     if (hi < lo) hi = lo;
     prec.assign(static_cast<size_t>(lo), '@');
     prec.append(static_cast<size_t>(hi - lo), '#');
-  } else if (s.min_fraction >= 0 || s.max_fraction >= 0) {
-    int32_t lo = s.min_fraction < 0 ? 0 : s.min_fraction;
-    int32_t hi = s.max_fraction < 0 ? (lo > 3 ? lo : 3) : s.max_fraction;
-    if (hi < lo) hi = lo;
-    prec = ".";
-    prec.append(static_cast<size_t>(lo), '0');
-    prec.append(static_cast<size_t>(hi - lo), '#');
+  } else {
+    // Fraction digits: explicit options, else ECMA-402 style defaults
+    // (SetNumberFormatDigitOptions). currency -> the currency's minor-unit
+    // digits (leave unset so ICU's currency skeleton applies them); percent ->
+    // 0..0; decimal/unit -> 0..3.
+    int32_t default_min = 0, default_max = 3;
+    if (s.style == "currency") { default_min = -1; default_max = -1; }
+    else if (s.style == "percent") { default_min = 0; default_max = 0; }
+    int32_t lo = s.min_fraction >= 0 ? s.min_fraction : default_min;
+    int32_t hi = s.max_fraction >= 0 ? s.max_fraction : default_max;
+    if (lo >= 0 || hi >= 0) {
+      if (lo < 0) lo = 0;
+      if (hi < 0) hi = (lo > 3 ? lo : 3);
+      if (hi < lo) hi = lo;
+      if (hi == 0) {
+        prec = "precision-integer";
+      } else {
+        prec = ".";
+        prec.append(static_cast<size_t>(lo), '0');
+        prec.append(static_cast<size_t>(hi - lo), '#');
+      }
+    }
   }
   if (!prec.empty()) {
     if (s.trailing_zero_display == "stripIfInteger") prec += "/w";  // strip fraction if whole
@@ -1213,6 +1228,16 @@ bool ReadUDate(napi_env env, size_t argc, napi_value arg, UDate* out) {
   return false;
 }
 
+// CLDR 42+ (ICU 72+) inserts a narrow no-break space (U+202F) before the
+// day-period (AM/PM) and in a few other date/time slots. Node patches its ICU
+// data back to a plain space for compatibility; match that so formatted output
+// (and the corresponding tests) line up with Node.
+void NormalizeNarrowSpaces(std::u16string* s) {
+  for (char16_t& c : *s) {
+    if (c == u'\u202f') c = u'\u0020';  // narrow no-break space -> plain space
+  }
+}
+
 napi_value DateTimeFormatFormat(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -1234,6 +1259,7 @@ napi_value DateTimeFormatFormat(napi_env env, napi_callback_info info) {
   if (U_FAILURE(status)) {
     return ThrowRange(env, std::string("DateTimeFormat.format failed: ") + u_errorName(status));
   }
+  NormalizeNarrowSpaces(&out);
   return MakeString(env, FromUChars(reinterpret_cast<const UChar*>(out.data()),
                                     static_cast<int32_t>(out.size())));
 }
@@ -1467,6 +1493,7 @@ bool InstallPluralRules(napi_env env, napi_value intl, std::string* error_out) {
 struct CollatorState {
   std::string locale;
   bool numeric = false;
+  bool ignore_punctuation = false;
   std::string sensitivity;
   UCollator* coll = nullptr;
 };
@@ -1492,6 +1519,7 @@ napi_value CollatorConstructor(napi_env env, napi_callback_info info) {
   s->locale = argc > 0 ? ResolveIcuLocale(env, argv[0]) : "en_US";
   napi_value options = argc > 1 ? argv[1] : nullptr;
   s->numeric = GetBoolOptionDefault(env, options, "numeric", false);
+  s->ignore_punctuation = GetBoolOptionDefault(env, options, "ignorePunctuation", false);
   s->sensitivity = GetStringOption(env, options, "sensitivity", {"base", "accent", "case", "variant"}, "");
 
   UErrorCode status = U_ZERO_ERROR;
@@ -1503,6 +1531,12 @@ napi_value CollatorConstructor(napi_env env, napi_callback_info info) {
   if (s->numeric) {
     UErrorCode a = U_ZERO_ERROR;
     ucol_setAttribute(s->coll, UCOL_NUMERIC_COLLATION, UCOL_ON, &a);
+  }
+  if (s->ignore_punctuation) {
+    // Shift punctuation/whitespace below the variable top so it is ignored at
+    // primary/secondary strength (ECMA-402 ignorePunctuation).
+    UErrorCode a = U_ZERO_ERROR;
+    ucol_setAttribute(s->coll, UCOL_ALTERNATE_HANDLING, UCOL_SHIFTED, &a);
   }
   if (s->sensitivity == "base") ucol_setStrength(s->coll, UCOL_PRIMARY);
   else if (s->sensitivity == "accent") ucol_setStrength(s->coll, UCOL_SECONDARY);
@@ -2366,6 +2400,172 @@ napi_value GetOrCreateIntl(napi_env env, napi_value global) {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// String.prototype.toLocaleLowerCase / toLocaleUpperCase (locale-aware)
+// ---------------------------------------------------------------------------
+// quickjs-ng maps toLocaleLowerCase/UpperCase straight to the non-locale
+// casing, so the locale argument is ignored (e.g. 'I'.toLocaleLowerCase('tr')
+// yields 'i' instead of the Turkish dotless 'ı'). Back them with ICU
+// u_strToLower/u_strToUpper. Only installed when the engine is not already
+// locale-aware (i.e. not on the V8 provider), leaving V8's native casing alone.
+
+bool ValueToUtf16(napi_env env, napi_value value, std::u16string* out) {
+  napi_value str = value;
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, value, &type) != napi_ok) return false;
+  if (type != napi_string && napi_coerce_to_string(env, value, &str) != napi_ok) return false;
+  size_t len = 0;
+  if (napi_get_value_string_utf16(env, str, nullptr, 0, &len) != napi_ok) return false;
+  out->resize(len);
+  size_t copied = 0;
+  if (napi_get_value_string_utf16(env, str, out->data(), len + 1, &copied) != napi_ok) return false;
+  out->resize(copied);
+  return true;
+}
+
+// Resolve the toLocaleCase `locales` argument (undefined | string | string[])
+// to a single ICU locale id. Undefined/empty -> "" (root/language-neutral).
+std::string ResolveCasingLocale(napi_env env, napi_value locales_arg) {
+  if (locales_arg == nullptr) return std::string();
+  napi_valuetype type = napi_undefined;
+  if (napi_typeof(env, locales_arg, &type) != napi_ok ||
+      type == napi_undefined || type == napi_null) {
+    return std::string();
+  }
+  bool is_array = false;
+  if (napi_is_array(env, locales_arg, &is_array) == napi_ok && is_array) {
+    uint32_t length = 0;
+    napi_get_array_length(env, locales_arg, &length);
+    if (length == 0) return std::string();
+    napi_value first = nullptr;
+    if (napi_get_element(env, locales_arg, 0, &first) != napi_ok) return std::string();
+    return ValueToString(env, first);
+  }
+  return ValueToString(env, locales_arg);
+}
+
+napi_value StringToLocaleCase(napi_env env, napi_callback_info info, bool to_upper) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_value this_arg = nullptr;
+  if (napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr) != napi_ok) {
+    return Undefined(env);
+  }
+  std::u16string input;
+  if (!ValueToUtf16(env, this_arg, &input)) {
+    return ThrowType(env, "String.prototype.toLocale*Case called on incompatible receiver");
+  }
+  const std::string locale = ResolveCasingLocale(env, argc >= 1 ? argv[0] : nullptr);
+
+  const UChar* src = reinterpret_cast<const UChar*>(input.data());
+  const int32_t src_len = static_cast<int32_t>(input.size());
+  UErrorCode status = U_ZERO_ERROR;
+  const int32_t needed = to_upper
+      ? u_strToUpper(nullptr, 0, src, src_len, locale.c_str(), &status)
+      : u_strToLower(nullptr, 0, src, src_len, locale.c_str(), &status);
+  if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR) {
+    return ThrowRange(env, std::string("toLocaleCase failed: ") + u_errorName(status));
+  }
+  std::u16string result(static_cast<size_t>(needed), u'\0');
+  status = U_ZERO_ERROR;
+  const int32_t written = to_upper
+      ? u_strToUpper(reinterpret_cast<UChar*>(result.data()), needed, src, src_len, locale.c_str(), &status)
+      : u_strToLower(reinterpret_cast<UChar*>(result.data()), needed, src, src_len, locale.c_str(), &status);
+  if (U_FAILURE(status)) {
+    return ThrowRange(env, std::string("toLocaleCase failed: ") + u_errorName(status));
+  }
+  result.resize(static_cast<size_t>(written));
+  napi_value out = nullptr;
+  napi_create_string_utf16(env, result.data(), result.size(), &out);
+  return out;
+}
+
+napi_value StringToLocaleLowerCase(napi_env env, napi_callback_info info) {
+  return StringToLocaleCase(env, info, false);
+}
+napi_value StringToLocaleUpperCase(napi_env env, napi_callback_info info) {
+  return StringToLocaleCase(env, info, true);
+}
+
+// Override String.prototype.toLocale{Lower,Upper}Case with the ICU-backed,
+// locale-aware versions. Gated to the QuickJS provider (whose engine ignores
+// the locale argument); on the V8 provider this is compiled out so V8's native
+// locale casing is left untouched.
+bool InstallLocaleCasing(napi_env env) {
+#ifdef EDGE_NAPI_QUICKJS
+  napi_value global = nullptr;
+  if (napi_get_global(env, &global) != napi_ok || global == nullptr) return false;
+  napi_value string_ctor = GetNamed(env, global, "String");
+  if (string_ctor == nullptr) return false;
+  napi_value proto = GetNamed(env, string_ctor, "prototype");
+  if (proto == nullptr) return false;
+  DefineMethod(env, proto, "toLocaleLowerCase", StringToLocaleLowerCase);
+  DefineMethod(env, proto, "toLocaleUpperCase", StringToLocaleUpperCase);
+#else
+  (void)env;
+#endif
+  return true;
+}
+
+// Route Date.prototype.toLocale{,Date,Time}String through Intl.DateTimeFormat
+// (quickjs-only). The engine's own versions ignore Intl and format differently
+// (e.g. zero-padded '01/01/1970' vs the numeric '1/1/1970' Node produces).
+// Replicates ECMA-402 ToDateTimeOptions defaulting so bare/timeZone-only option
+// bags default every component to numeric. On V8 this is compiled out.
+bool InstallDateLocaleMethods(napi_env env) {
+#ifdef EDGE_NAPI_QUICKJS
+  static const char* kSource = R"JS((function(){
+  'use strict';
+  var DTF = Intl.DateTimeFormat;
+  var dateComps = ['weekday','year','month','day'];
+  var timeComps = ['dayPeriod','hour','minute','second','fractionalSecondDigits'];
+  function toDateTimeOptions(options, required, defaults) {
+    options = (options === undefined) ? {} : Object(options);
+    var opts = Object.assign({}, options);
+    var needDefaults = true;
+    if (required === 'date' || required === 'any')
+      for (var i = 0; i < dateComps.length; i++)
+        if (opts[dateComps[i]] !== undefined) needDefaults = false;
+    if (required === 'time' || required === 'any')
+      for (var j = 0; j < timeComps.length; j++)
+        if (opts[timeComps[j]] !== undefined) needDefaults = false;
+    if (opts.dateStyle !== undefined || opts.timeStyle !== undefined) needDefaults = false;
+    if (needDefaults && (defaults === 'date' || defaults === 'all')) {
+      opts.year = 'numeric'; opts.month = 'numeric'; opts.day = 'numeric';
+    }
+    if (needDefaults && (defaults === 'time' || defaults === 'all')) {
+      opts.hour = 'numeric'; opts.minute = 'numeric'; opts.second = 'numeric';
+    }
+    return opts;
+  }
+  function def(name, required, defaults) {
+    Object.defineProperty(Date.prototype, name, {
+      value: function(locales, options) {
+        var t = this.getTime();
+        if (t !== t) return 'Invalid Date';
+        return new DTF(locales, toDateTimeOptions(options, required, defaults)).format(this);
+      },
+      writable: true, enumerable: false, configurable: true,
+    });
+  }
+  def('toLocaleString', 'any', 'all');
+  def('toLocaleDateString', 'date', 'date');
+  def('toLocaleTimeString', 'time', 'time');
+})();)JS";
+  napi_value source = nullptr;
+  if (napi_create_string_utf8(env, kSource, NAPI_AUTO_LENGTH, &source) != napi_ok) return false;
+  napi_value result = nullptr;
+  if (napi_run_script(env, source, &result) != napi_ok) {
+    napi_value ex = nullptr;
+    napi_get_and_clear_last_exception(env, &ex);
+    return false;
+  }
+#else
+  (void)env;
+#endif
+  return true;
+}
+
 bool EdgeInstallIntl(napi_env env, std::string* error_out) {
   if (env == nullptr) return false;
   napi_value global = nullptr;
@@ -2389,6 +2589,11 @@ bool EdgeInstallIntl(napi_env env, std::string* error_out) {
   if (!InstallLocale(env, intl, error_out)) return false;
   if (!InstallSegmenter(env, intl, error_out)) return false;
   if (!InstallGetCanonicalLocales(env, intl)) return false;
+
+  // Locale-aware String casing (uses the same ICU backend). Non-fatal.
+  InstallLocaleCasing(env);
+  // Date.prototype.toLocale* delegating to Intl.DateTimeFormat. Non-fatal.
+  InstallDateLocaleMethods(env);
 
   return true;
 }
