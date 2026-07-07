@@ -153,16 +153,9 @@ WASIX_SKIP_UNIX_SOCKET_TESTS := \
 # moved to the unix-socket group and test-crypto-secure-heap to the crypto
 # group (misfiled here; their failures are unrelated to cluster/fork).
 WASIX_SKIP_CLUSTER_FORK_TESTS :=
-# test-http-chunk-problem (spawns cat) and test-http-full-response (execs ab
-# through a shell) run external binaries in the guest; the first such exec
-# cold-downloads and compiles wasmer/bash + wasmer/coreutils, which exceeds
-# the per-test timeout on CI runners with an empty wasmer cache (both pass
-# or self-skip locally with a warm cache).
 WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
   parallel/test-stream-pipeline-process.js \
   parallel/test-domain-abort-on-uncaught.js \
-  parallel/test-http-chunk-problem.js \
-  parallel/test-http-full-response.js \
   sequential/test-stream2-stderr-sync.js
 WASIX_SKIP_OS_TESTS := \
   parallel/test-os-homedir-no-envvar.js \
@@ -253,9 +246,15 @@ WASIX_SLOW_WEBCRYPTO_TESTS := \
   parallel/test-webcrypto-webidl.js \
   parallel/test-webcrypto-wrap-unwrap.js
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
+# test-http-chunk-problem (spawns cat) and test-http-full-response (execs ab
+# through a shell) run external guest binaries; the first such exec
+# cold-downloads and compiles wasmer/bash + wasmer/coreutils on runners with
+# an empty wasmer cache, so they need the scaled timeout rather than a skip.
 WASIX_SLOW_TESTS := \
   parallel/test-crypto-oneshot-hash-xof.js \
   parallel/test-fastutf8stream-flush-sync.js \
+  parallel/test-http-chunk-problem.js \
+  parallel/test-http-full-response.js \
   parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-stringbytes-external.js \
   parallel/test-url-parse-invalid-input.js \
