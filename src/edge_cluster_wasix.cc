@@ -10,18 +10,22 @@
 
 namespace {
 
-// Invoked with (cluster, net, sendHelper, UV_TCP_REUSEPORT). Kept as an
-// embedded script instead of a lib/ module because the Node lib/ tree stays
-// byte-identical to upstream; the behavior is edge/WASIX-specific.
+// Invoked with (cluster, net, dgram, sendHelper, UV_TCP_REUSEPORT,
+// UV_UDP_REUSEPORT). Kept as an embedded script instead of a lib/ module
+// because the Node lib/ tree stays byte-identical to upstream; the behavior
+// is edge/WASIX-specific.
 //
-// TCP port listens bypass the queryServer round trip entirely: the worker
-// binds its own SO_REUSEPORT listener and reports the 'listening' act for
-// the primary's bookkeeping (worker state, cluster 'listening' event). UDP,
-// fd, and pipe listens keep the upstream path. Known limitation vs the
+// TCP and UDP port listens bypass the queryServer round trip entirely: the
+// worker binds its own SO_REUSEPORT socket and reports the 'listening' act
+// for the primary's bookkeeping (worker state, cluster 'listening' event).
+// fd and pipe listens keep the upstream path. Known deviations vs the
 // upstream flow: obj._getServerData/_setServerData is not round-tripped
-// through the primary, so e.g. TLS session ticket keys are per-worker.
+// through the primary (e.g. TLS session ticket keys are per-worker), and
+// UDP datagrams are distributed by the kernel's reuseport source hash
+// (flows pin to a worker) instead of shared-socket delivery.
 constexpr const char kInstallScript[] = R"JS(
-(function installWasixClusterReusePort(cluster, net, sendHelper, UV_TCP_REUSEPORT) {
+(function installWasixClusterReusePort(cluster, net, dgram, sendHelper,
+                                       UV_TCP_REUSEPORT, UV_UDP_REUSEPORT) {
   'use strict';
 
   if (!cluster.isWorker || typeof cluster._getServer !== 'function')
@@ -32,20 +36,32 @@ constexpr const char kInstallScript[] = R"JS(
   let disconnectHookInstalled = false;
 
   cluster._getServer = function(obj, options, cb) {
-    const isTcpPortListen =
-      (options.addressType === 4 || options.addressType === 6) &&
-      typeof options.port === 'number' && options.port >= 0 &&
+    const isTcp = options.addressType === 4 || options.addressType === 6;
+    const isUdp = options.addressType === 'udp4' ||
+                  options.addressType === 'udp6';
+    // dgram passes the raw bind() arguments through: port can be null,
+    // undefined, or even the bind callback function (socket.bind(cb));
+    // per the bind([port][, address][, callback]) signature all of those
+    // mean an ephemeral-port listen, not an fd/pipe listen.
+    const port = (isUdp && typeof options.port !== 'number') ? 0 : options.port;
+    const isPortListen =
+      typeof port === 'number' && port >= 0 &&
       (options.fd == null || options.fd < 0);
 
-    if (!isTcpPortListen)
+    if ((!isTcp && !isUdp) || !isPortListen)
       return originalGetServer.call(this, obj, options, cb);
 
-    const flags = (options.flags | UV_TCP_REUSEPORT) >>> 0;
-    const rval = net._createServerHandle(options.address, options.port,
-                                         options.addressType, options.fd,
-                                         flags);
-    if (typeof rval === 'number')
-      return cb(rval, null);
+    const rval = isTcp ?
+      net._createServerHandle(options.address, port,
+                              options.addressType, options.fd,
+                              (options.flags | UV_TCP_REUSEPORT) >>> 0) :
+      dgram._createSocketHandle(options.address, port,
+                                options.addressType, options.fd,
+                                (options.flags | UV_UDP_REUSEPORT) >>> 0);
+    if (typeof rval === 'number') {
+      process.nextTick(cb, rval, null);
+      return;
+    }
 
     ownHandles.add(rval);
     const originalClose = rval.close;
@@ -78,7 +94,10 @@ constexpr const char kInstallScript[] = R"JS(
       }, null);
     });
 
-    cb(0, rval);
+    // Upstream _getServer callbacks always arrive asynchronously (an IPC
+    // round trip); keep that contract so callers' close-during-bind windows
+    // behave the same.
+    process.nextTick(cb, 0, rval);
   };
 })
 )JS";
@@ -100,9 +119,11 @@ void EdgeMaybeInstallWasixClusterReusePort(napi_env env) {
 
   napi_value cluster = nullptr;
   napi_value net = nullptr;
+  napi_value dgram = nullptr;
   napi_value utils = nullptr;
   if (!EdgeRequireBuiltin(env, "cluster", &cluster) || cluster == nullptr ||
       !EdgeRequireBuiltin(env, "net", &net) || net == nullptr ||
+      !EdgeRequireBuiltin(env, "internal/dgram", &dgram) || dgram == nullptr ||
       !EdgeRequireBuiltin(env, "internal/cluster/utils", &utils) || utils == nullptr) {
     ClearPendingException(env);
     return;
@@ -123,17 +144,20 @@ void EdgeMaybeInstallWasixClusterReusePort(napi_env env) {
     return;
   }
 
-  napi_value reuseport_flag = nullptr;
+  napi_value tcp_reuseport_flag = nullptr;
+  napi_value udp_reuseport_flag = nullptr;
   napi_value global = nullptr;
-  if (napi_create_uint32(env, static_cast<uint32_t>(UV_TCP_REUSEPORT), &reuseport_flag) != napi_ok ||
+  if (napi_create_uint32(env, static_cast<uint32_t>(UV_TCP_REUSEPORT), &tcp_reuseport_flag) != napi_ok ||
+      napi_create_uint32(env, static_cast<uint32_t>(UV_UDP_REUSEPORT), &udp_reuseport_flag) != napi_ok ||
       napi_get_global(env, &global) != napi_ok) {
     ClearPendingException(env);
     return;
   }
 
-  napi_value argv[] = {cluster, net, send_helper, reuseport_flag};
+  napi_value argv[] = {cluster, net, dgram, send_helper,
+                       tcp_reuseport_flag, udp_reuseport_flag};
   napi_value result = nullptr;
-  if (napi_call_function(env, global, install_fn, 4, argv, &result) != napi_ok) {
+  if (napi_call_function(env, global, install_fn, 6, argv, &result) != napi_ok) {
     ClearPendingException(env);
   }
 }

@@ -147,23 +147,12 @@ WASIX_SKIP_UNIX_SOCKET_TESTS := \
   parallel/test-tls-wrap-econnreset-pipe.js \
   parallel/test-http-client-response-domain.js \
   parallel/test-http-client-with-create-connection.js
-# Slimmed 2026-07-07 after fork IPC (libuv-wasix plain read) and the cluster
-# reuseport strategy landed: 11 of the original 17 pass and were removed.
-# What remains is UDP cluster listens, which still go through shared-handle
-# passing (the reuseport strategy currently covers TCP only).
-# test-http-client-with-create-connection moved to the unix-socket group and
-# test-crypto-secure-heap to the crypto group (misfiled here; their failures
-# are unrelated to cluster/fork).
-# The known_issues negative test is skipped because its error-swallowing
-# path (exit 0 on any non-success worker message) engages now that fork IPC
-# delivers messages, making the must-fail test "pass" without the upstream
-# known issue being observable under WASIX (UDP cluster binds fail earlier).
-WASIX_SKIP_CLUSTER_FORK_TESTS := \
-  parallel/test-dgram-cluster-close-during-bind.js \
-  parallel/test-dgram-cluster-close-in-listening.js \
-  parallel/test-dgram-unref-in-cluster.js \
-  sequential/test-dgram-bind-shared-ports.js \
-  known_issues/test-dgram-bind-shared-ports-after-port-0.js
+# Emptied 2026-07-07: with fork IPC (libuv-wasix plain read) and the cluster
+# reuseport scheduling strategy (TCP and UDP) in place, every cluster/fork
+# test in the wasix lanes passes. test-http-client-with-create-connection
+# moved to the unix-socket group and test-crypto-secure-heap to the crypto
+# group (misfiled here; their failures are unrelated to cluster/fork).
+WASIX_SKIP_CLUSTER_FORK_TESTS :=
 WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
   parallel/test-stream-pipeline-process.js \
   parallel/test-domain-abort-on-uncaught.js \
