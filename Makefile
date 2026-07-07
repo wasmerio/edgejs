@@ -153,14 +153,16 @@ WASIX_SKIP_UNIX_SOCKET_TESTS := \
 # moved to the unix-socket group and test-crypto-secure-heap to the crypto
 # group (misfiled here; their failures are unrelated to cluster/fork).
 WASIX_SKIP_CLUSTER_FORK_TESTS :=
-# test-http-chunk-problem spawns an external coreutils binary (cksum) in the
-# guest; the first exec cold-downloads and compiles wasmer/coreutils, which
-# exceeds the per-test timeout on CI runners with an empty wasmer cache (it
-# passes locally with a warm cache).
+# test-http-chunk-problem (spawns cat) and test-http-full-response (execs ab
+# through a shell) run external binaries in the guest; the first such exec
+# cold-downloads and compiles wasmer/bash + wasmer/coreutils, which exceeds
+# the per-test timeout on CI runners with an empty wasmer cache (both pass
+# or self-skip locally with a warm cache).
 WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
   parallel/test-stream-pipeline-process.js \
   parallel/test-domain-abort-on-uncaught.js \
   parallel/test-http-chunk-problem.js \
+  parallel/test-http-full-response.js \
   sequential/test-stream2-stderr-sync.js
 WASIX_SKIP_OS_TESTS := \
   parallel/test-os-homedir-no-envvar.js \
