@@ -121,25 +121,14 @@ WASIX_SKIP_UNIX_SOCKET_TESTS := \
   parallel/test-tls-connect-pipe.js \
   parallel/test-tls-net-connect-prefer-path.js \
   parallel/test-tls-wrap-econnreset-pipe.js \
-  parallel/test-http-client-response-domain.js
-WASIX_SKIP_CLUSTER_FORK_TESTS := \
-  parallel/test-dgram-bind-socket-close-before-cluster-reply.js \
-  parallel/test-dgram-cluster-close-during-bind.js \
-  parallel/test-dgram-cluster-close-in-listening.js \
-  parallel/test-dgram-unref-in-cluster.js \
-  parallel/test-http-server-drop-connections-in-cluster.js \
-  parallel/test-tls-ticket-cluster.js \
-  parallel/test-diagnostics-channel-process.js \
-  parallel/test-http-chunk-problem.js \
-  parallel/test-http-client-with-create-connection.js \
-  parallel/test-http-full-response.js \
-  parallel/test-http-server-stale-close.js \
-  parallel/test-dgram-deprecation-error.js \
-  parallel/test-https-agent-unref-socket.js \
-  parallel/test-crypto-secure-heap.js \
-  parallel/test-domain-top-level-error-handler-throw.js \
-  parallel/test-domain-uncaught-exception.js \
-  sequential/test-dgram-bind-shared-ports.js
+  parallel/test-http-client-response-domain.js \
+  parallel/test-http-client-with-create-connection.js
+# Emptied 2026-07-07: with fork IPC (libuv-wasix plain read) and the cluster
+# reuseport scheduling strategy (TCP and UDP) in place, every cluster/fork
+# test in the wasix lanes passes. test-http-client-with-create-connection
+# moved to the unix-socket group and test-crypto-secure-heap to the crypto
+# group (misfiled here; their failures are unrelated to cluster/fork).
+WASIX_SKIP_CLUSTER_FORK_TESTS :=
 WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
   parallel/test-stream-pipeline-process.js \
   parallel/test-domain-abort-on-uncaught.js \
@@ -161,7 +150,8 @@ WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS := \
   parallel/test-crypto-argon2.js \
   parallel/test-crypto-no-algorithm.js \
   parallel/test-webcrypto-derivebits-argon2.js \
-  parallel/test-crypto-pqc-keygen-slh-dsa.js
+  parallel/test-crypto-pqc-keygen-slh-dsa.js \
+  parallel/test-crypto-secure-heap.js
 WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
   parallel/test-tls-enable-keylog-cli.js \
   parallel/test-tls-env-bad-extra-ca.js \
@@ -232,10 +222,16 @@ WASIX_SLOW_WEBCRYPTO_TESTS := \
   parallel/test-webcrypto-webidl.js \
   parallel/test-webcrypto-wrap-unwrap.js
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
+# test-http-chunk-problem (spawns cat) and test-http-full-response (execs ab
+# through a shell) run external guest binaries; the first such exec
+# cold-downloads and compiles wasmer/bash + wasmer/coreutils on runners with
+# an empty wasmer cache, so they need the scaled timeout rather than a skip.
 WASIX_SLOW_TESTS := \
   parallel/test-buffer-constants.js \
   parallel/test-crypto-oneshot-hash-xof.js \
   parallel/test-fastutf8stream-flush-sync.js \
+  parallel/test-http-chunk-problem.js \
+  parallel/test-http-full-response.js \
   parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-stringbytes-external.js \
   parallel/test-url-parse-invalid-input.js \
@@ -490,14 +486,29 @@ framework-test: $(EDGE_BINARY)
 # ICU-backed Intl surface (ECO-359) supplies Intl.ListFormat, native-function
 # toString matches V8, and the example pre-bundles its client entrypoints at
 # build time so no esbuild runs at runtime. (GC use-after-frees fixed in #101.)
+# js-hedgedoc is skipped on the native edge stage only. It ships the optional
+# ws accelerators bufferutil/utf-8-validate, whose prebuilds are legacy
+# NAPI_MODULE-style: they call the unexported napi_module_register from a
+# static constructor during dlopen, killing the process with an uncatchable
+# `undefined symbol: napi_module_register` (exit 127) before any JS runs.
+# WASIX has no dynamic linking, so the same app passes there. Re-enable by
+# either dropping those two optional dependencies from the example (ws falls
+# back to its pure-JS implementations) or by landing an early, catchable
+# process.dlopen failure on native.
 framework-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
 		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
-		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone,js-hedgedoc' \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
+		FRAMEWORK_TEST_HTTP_TIMEOUT_MS="$${FRAMEWORK_TEST_HTTP_TIMEOUT_MS:-30000}" \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
+# js-uptime-kuma is skipped on the WASIX edge stage only. It depends on
+# playwright-core, whose registry throws `Unsupported platform: <platform>` at
+# require time for anything that is not linux/darwin/win32, and
+# process.platform is 'wasi' under WASIX. Native (platform 'linux') is
+# unaffected. Re-enable if process.platform ever reports 'linux' under WASIX.
 framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
@@ -507,8 +518,9 @@ framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
 		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
-		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone,js-uptime-kuma' \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
+		FRAMEWORK_TEST_HTTP_TIMEOUT_MS="$${FRAMEWORK_TEST_HTTP_TIMEOUT_MS:-120000}" \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 framework-test-reset:

@@ -161,6 +161,19 @@ jobs:
           set -euo pipefail
           make standalone-build-test-quickjs-native
 
+      - name: Upload harness logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-logs-quickjs-linux
+          path: |
+            .framework-test*/logs
+            .standalone-build-test*/logs
+          # The state dirs are dotdirs, which upload-artifact excludes by default.
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Generate dist
         shell: bash
         run: |
@@ -296,6 +309,19 @@ jobs:
           set -euo pipefail
           make standalone-build-test-quickjs-native
 
+      - name: Upload harness logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-logs-quickjs-macos
+          path: |
+            .framework-test*/logs
+            .standalone-build-test*/logs
+          # The state dirs are dotdirs, which upload-artifact excludes by default.
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Generate dist
         shell: bash
         run: |
@@ -418,6 +444,30 @@ jobs:
         run: |
           set -euo pipefail
           make standalone-build-test-quickjs-wasix
+
+      # The exact wasm binary is needed to reproduce CI-only runtime failures
+      # locally (the CI wasixcc toolchain/sysroot differs from dev setups).
+      - name: Upload WASIX wasm on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-edgejs-wasm
+          path: build-quickjs-wasix/edgejs.wasm
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload harness logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-logs-quickjs-wasix
+          path: |
+            .framework-test*/logs
+            .standalone-build-test*/logs
+          # The state dirs are dotdirs, which upload-artifact excludes by default.
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Generate dist
         shell: bash

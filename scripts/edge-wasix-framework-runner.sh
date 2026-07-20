@@ -69,6 +69,19 @@ for env_name in PORT HOST HOSTNAME STATIC_ROOT NODE_ENV; do
   fi
 done
 
+# The harness lists app-specific env var names (for example database
+# connection settings from a routes.json `database` block) in
+# FRAMEWORK_TEST_EXTRA_ENV; forward each one into the guest.
+if [[ -n "${FRAMEWORK_TEST_EXTRA_ENV:-}" ]]; then
+  IFS=',' read -r -a extra_env_names <<<"${FRAMEWORK_TEST_EXTRA_ENV}"
+  for env_name in "${extra_env_names[@]}"; do
+    [[ -n "${env_name}" ]] || continue
+    if [[ -n "${!env_name:-}" ]]; then
+      wasmer_env_args+=(--env "${env_name}=${!env_name}")
+    fi
+  done
+fi
+
 rewrite_guest_path_arg() {
   local arg="$1"
   case "${arg}" in

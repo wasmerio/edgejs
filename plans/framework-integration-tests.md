@@ -421,6 +421,49 @@ Supported route fields:
 | `stages` | Optional allowlist: `node`, `comparison`, `safe` |
 | `skipOnStatic` | Skip when the runtime serves static export output |
 
+Supported top-level fields (besides `version` and `routes`):
+
+| Field | Purpose |
+| --- | --- |
+| `serverReadyTimeoutMs` | Override the readiness timeout (default 45000). For apps that run long boot-time migrations (e.g. Uptime Kuma). |
+| `database` | Provision an ephemeral database before the server starts (below). |
+
+### Database provisioning (`database` block)
+
+Backend apps that need a real database declare it in `routes.json`:
+
+```json
+{
+  "version": 1,
+  "database": {
+    "kind": "postgres",
+    "setup": ["node_modules/.bin/sequelize db:migrate"],
+    "env": {
+      "DATABASE_URL": "{dbUrl}",
+      "APP_PORT": "{port}"
+    }
+  },
+  "routes": []
+}
+```
+
+- `kind` — `postgres` (embedded-postgres binaries) or `mysql`
+  (mysql-memory-server; uses a matching system mysqld when available). No
+  Docker: framework tests also run on macOS CI runners and locally.
+- `env` — injected into the app server environment. Placeholders:
+  `{dbUrl}`, `{dbHost}`, `{dbPort}`, `{dbUser}`, `{dbPassword}`, `{dbName}`,
+  and `{port}` (the app port, expanded at spawn time). The WASIX runner
+  forwards these names into the guest via `FRAMEWORK_TEST_EXTRA_ENV`.
+- `setup` — optional shell commands (migrations/seeds) run after the
+  database is up and before the server starts, always on host Node (the
+  harness temporarily points `node_modules/.bin/node` at host Node, since
+  package `.bin` launchers prefer that shim over `PATH`).
+
+The database is provisioned per app per stage (fresh state each run) and
+torn down afterwards, including on failure and SIGINT/SIGTERM. Provisioning
+lives in `scripts/lib/framework-test-db.js`; binaries install on demand into
+`.framework-test/db-tools`.
+
 Stage categories map to harness stage keys:
 
 - `node` → Node.js baseline
@@ -444,7 +487,10 @@ This allows route matrices to use framework-friendly paths such as `/about` and 
 
 1. Resolve the production runtime for the stage.
 2. Load and filter `routes.json` for the stage/runtime mode.
-3. Poll server readiness against the first configured route.
+3. Poll server readiness against the first configured route **until it
+   answers with one of its expected statuses** (merely accepting connections
+   is not enough — apps like Uptime Kuma serve a temporary migration page
+   that 404s API routes while boot-time migrations run).
 4. Request and validate every remaining route before stopping the server.
 5. Report pass/fail per app with a route count summary (for example, `3/3 routes`).
 

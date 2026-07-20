@@ -50,6 +50,7 @@
 #include "edge_crypto.h"
 #include "edge_encoding.h"
 #include "edge_http_parser.h"
+#include "edge_cluster_wasix.h"
 #include "edge_module_loader.h"
 #include "edge_os.h"
 #include "edge_option_helpers.h"
@@ -3024,6 +3025,11 @@ int RunScriptWithGlobals(napi_env env,
     delete_global_named("__filename");
     delete_global_named("__dirname");
   }
+
+  // Under WASIX, cluster workers get the reuseport scheduling strategy
+  // installed before the main builtin runs pre-execution (which consumes
+  // NODE_UNIQUE_ID). No-op elsewhere.
+  EdgeMaybeInstallWasixClusterReusePort(env);
 
   napi_value result = nullptr;
   if (selected_main_builtin_id != nullptr && selected_main_builtin_id[0] != '\0') {

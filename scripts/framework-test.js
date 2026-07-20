@@ -15,6 +15,7 @@ const harness = require('./lib/framework-test-shared').create({
   toolName: 'framework-test',
   stateDirName: '.framework-test',
 });
+const databaseHarness = require('./lib/framework-test-db');
 
 const ROOT_DIR = harness.ROOT_DIR;
 const EXAMPLES_DIR = harness.EXAMPLES_DIR;
@@ -67,7 +68,12 @@ const NEXT_JS_CONFIG_FILES = [
 ];
 const NEXT_TS_CONFIG_FILE = 'next.config.ts';
 const SERVER_READY_TIMEOUT_MS = 45 * 1000;
-const HTTP_REQUEST_TIMEOUT_MS = 5 * 1000;
+// Kept in sync with framework-test-shared.js: overridable because the QuickJS
+// stages legitimately exceed the default on slow CI runners (js-umami's login
+// route takes >5s on a 4-core GitHub runner under WASIX).
+const HTTP_REQUEST_TIMEOUT_MS = Number(process.env.FRAMEWORK_TEST_HTTP_TIMEOUT_MS || '') > 0
+  ? Number(process.env.FRAMEWORK_TEST_HTTP_TIMEOUT_MS)
+  : 5 * 1000;
 const PROCESS_SHUTDOWN_TIMEOUT_MS = 5 * 1000;
 const HTTP_POLL_INTERVAL_MS = 500;
 const MAX_HTTP_REDIRECTS = 5;
@@ -594,34 +600,60 @@ async function testProject(project, stage, index, total, preparation) {
   let server = null;
   let activeRuntime = runtime;
   let usedProductionFallback = false;
-  let readinessPath = routeReadinessPath(project, stage, activeRuntime);
+  let readinessProbe = routeReadinessProbe(project, stage, activeRuntime);
+  const databaseConfig = databaseHarness.readProjectDatabaseConfig(project, routesJsonPath(project));
+  let database = null;
   try {
-    server = await startProjectServer(project, runtime, portCandidates, stage, readinessPath);
-  } catch (error) {
-    const fallbackRuntime = await maybePrepareProductionFallback(project, stage, runtime, shouldBuild, reuseExistingBuild, error);
-    if (!fallbackRuntime) {
-      throw error;
+    if (databaseConfig) {
+      log(`provisioning ${databaseConfig.kind} database for ${project.name} on ${stage.label}`);
+      database = await databaseHarness.startProjectDatabase({
+        config: databaseConfig,
+        project,
+        stage,
+        stateDir: STATE_DIR,
+        pnpmStoreDir: PNPM_STORE_DIR,
+        log,
+        logWarn,
+      });
+      log(`${databaseConfig.kind} ready for ${project.name} at 127.0.0.1:${database.port}`);
+      if (databaseConfig.setup.length > 0) {
+        await runDatabaseSetup(project, stage, databaseConfig.setup, database.env);
+      }
     }
-    activeRuntime = fallbackRuntime;
-    usedProductionFallback = true;
-    readinessPath = routeReadinessPath(project, stage, activeRuntime);
-    server = await startProjectServer(project, fallbackRuntime, portCandidates, stage, readinessPath);
-  }
-  try {
-    const routeResults = await validateRouteMatrix(project, activeRuntime, server.port, routes);
-    return {
-      buildLogPath: shouldBuild && !reuseExistingBuild ? buildLogPath(project, stage) : null,
-      candidate: server.candidate,
-      port: server.port,
-      project,
-      response: server.response,
-      routeResults,
-      runtime: activeRuntime,
-      serverLogPath: server.logPath,
-      usedProductionFallback,
-    };
+    const extraEnv = database ? database.env : null;
+
+    try {
+      server = await startProjectServer(project, runtime, portCandidates, stage, readinessProbe, extraEnv);
+    } catch (error) {
+      const fallbackRuntime = await maybePrepareProductionFallback(project, stage, runtime, shouldBuild, reuseExistingBuild, error);
+      if (!fallbackRuntime) {
+        throw error;
+      }
+      activeRuntime = fallbackRuntime;
+      usedProductionFallback = true;
+      readinessProbe = routeReadinessProbe(project, stage, activeRuntime);
+      server = await startProjectServer(project, fallbackRuntime, portCandidates, stage, readinessProbe, extraEnv);
+    }
+    try {
+      const routeResults = await validateRouteMatrix(project, activeRuntime, server.port, routes);
+      return {
+        buildLogPath: shouldBuild && !reuseExistingBuild ? buildLogPath(project, stage) : null,
+        candidate: server.candidate,
+        port: server.port,
+        project,
+        response: server.response,
+        routeResults,
+        runtime: activeRuntime,
+        serverLogPath: server.logPath,
+        usedProductionFallback,
+      };
+    } finally {
+      await stopProcess(server.handle);
+    }
   } finally {
-    await stopProcess(server.handle);
+    if (database) {
+      await database.stop();
+    }
   }
 }
 
@@ -1151,10 +1183,42 @@ async function runProjectBuild(project, stage) {
   });
 }
 
-async function startProjectServer(project, runtime, portCandidates, stage, readinessPath) {
-  const readyPath = normalizeRoutePath(readinessPath);
+// Database setup commands (migrations, seeds) always run on the host
+// toolchain, mirroring how builds work. Package .bin launchers prefer the
+// sibling node_modules/.bin/node over PATH, and on Edge stages that is the
+// injected Edge runner — so point it at host Node for the duration of the
+// setup and restore the stage runner afterwards.
+async function runDatabaseSetup(project, stage, commands, extraEnv) {
+  const logPath = path.join(LOG_DIR, `${project.name}.${stage.key}.db-setup.log`);
+  removeFileOrSymlink(logPath);
+
+  injectRunner(project, [HOST_NODE_RUNNER.targetPath]);
+  try {
+    for (let index = 0; index < commands.length; index += 1) {
+      const command = commands[index];
+      log(`running database setup for ${project.name}: ${command}`);
+      await runProjectCommand({
+        append: index > 0,
+        commandDisplay: command,
+        description: `database setup for ${project.name} on ${stage.label}: ${command}`,
+        detached: false,
+        env: makeProjectEnv(undefined, extraEnv),
+        errorMessage: `database setup failed for ${project.name} on ${stage.label}: ${command}`,
+        extraArgs: [],
+        logPath,
+        project,
+        shellCommand: command,
+      });
+    }
+  } finally {
+    injectRunner(project, stage.runnerCommandParts);
+  }
+}
+
+async function startProjectServer(project, runtime, portCandidates, stage, readinessProbe, extraEnv) {
+  const readyPath = normalizeRoutePath(readinessProbe.path);
   if (runtime.mode === 'static-export') {
-    return startStaticExportServer(project, runtime, portCandidates, stage, readyPath);
+    return startStaticExportServer(project, runtime, portCandidates, stage, readinessProbe);
   }
 
   const logPath = serverLogPath(project, stage);
@@ -1175,14 +1239,14 @@ async function startProjectServer(project, runtime, portCandidates, stage, readi
         description: `runtime ${runtime.name} for ${project.name} on ${DEFAULT_HOST}:${port} using ${candidate.description}`,
         commandDisplay: buildRuntimeShellCommand(project, runtime, candidate.extraArgs),
         detached: true,
-        env: makeProjectEnv(port),
+        env: makeProjectEnv(port, extraEnv),
         logPath,
         project,
         shellCommand: buildRuntimeShellCommand(project, runtime, candidate.extraArgs),
       });
 
       try {
-        const response = await waitForHttpResponse(handle, buildRouteUrl(port, readyPath));
+        const response = await waitForHttpResponse(handle, buildRouteUrl(port, readyPath), readinessProbe);
         return {
           candidate,
           handle,
@@ -1210,7 +1274,7 @@ async function startProjectServer(project, runtime, portCandidates, stage, readi
   });
 }
 
-async function startStaticExportServer(project, runtime, portCandidates, stage, readinessPath) {
+async function startStaticExportServer(project, runtime, portCandidates, stage, readinessProbe) {
   if (!fs.existsSync(runtime.outputDir)) {
     fail(`expected static output directory for ${project.name}: ${runtime.outputDir}`);
   }
@@ -1237,7 +1301,7 @@ async function startStaticExportServer(project, runtime, portCandidates, stage, 
     });
 
     try {
-      const response = await waitForHttpResponse(handle, buildRouteUrl(port, readinessPath || '/'));
+      const response = await waitForHttpResponse(handle, buildRouteUrl(port, readinessProbe.path || '/'), readinessProbe);
       return {
         candidate: {
           description: 'static export fallback',
@@ -1438,7 +1502,7 @@ function toProjectRelativePath(projectDir, targetPath) {
   return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
 }
 
-function makeProjectEnv(port) {
+function makeProjectEnv(port, extraEnv) {
   const env = {
     ...process.env,
     BROWSER: 'none',
@@ -1448,6 +1512,14 @@ function makeProjectEnv(port) {
 
   if (typeof port === 'number') {
     env.PORT = String(port);
+  }
+
+  if (extraEnv) {
+    for (const [name, value] of Object.entries(extraEnv)) {
+      env[name] = typeof port === 'number'
+        ? String(value).split('{port}').join(String(port))
+        : String(value);
+    }
   }
 
   return env;
@@ -1576,9 +1648,16 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
-async function waitForHttpResponse(handle, url) {
-  const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
+async function waitForHttpResponse(handle, url, probe) {
+  const expectedStatus = probe && Array.isArray(probe.status) && probe.status.length > 0
+    ? probe.status
+    : null;
+  const timeoutMs = probe && typeof probe.timeoutMs === 'number' && probe.timeoutMs > 0
+    ? probe.timeoutMs
+    : SERVER_READY_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   let lastError = null;
+  let lastUnexpectedStatus = null;
 
   while (Date.now() < deadline) {
     if (handle.exited) {
@@ -1590,10 +1669,14 @@ async function waitForHttpResponse(handle, url) {
 
     const response = await requestHttp(url);
     if (response.ok) {
-      return response;
+      if (!expectedStatus || expectedStatus.includes(response.statusCode)) {
+        return response;
+      }
+      lastUnexpectedStatus = response.statusCode;
+    } else {
+      lastError = response.error;
     }
 
-    lastError = response.error;
     await delay(HTTP_POLL_INTERVAL_MS);
   }
 
@@ -1604,7 +1687,10 @@ async function waitForHttpResponse(handle, url) {
     });
   }
 
-  fail(`timed out waiting for ${url}${lastError ? `: ${lastError.message}` : ''}`, {
+  const statusDetail = lastUnexpectedStatus !== null
+    ? `: last response HTTP ${lastUnexpectedStatus}, expected ${expectedStatus.join('/')}`
+    : (lastError ? `: ${lastError.message}` : '');
+  fail(`timed out waiting for ${url}${statusDetail}`, {
     detail: summarizeLogFailure(handle.logPath, lastError),
     logPath: handle.logPath,
   });
@@ -1759,12 +1845,25 @@ function routesJsonPath(project) {
   return path.join(project.dir, ROUTES_JSON_BASENAME);
 }
 
-function routeReadinessPath(project, stage, runtime) {
+// Readiness polls the first route until it answers with one of its expected
+// statuses — merely accepting connections is not enough (apps like Uptime
+// Kuma serve a temporary migration page that 404s API routes while their
+// boot-time migrations run). Slow-migrating apps can raise the top-level
+// routes.json `serverReadyTimeoutMs`.
+function routeReadinessProbe(project, stage, runtime) {
   const routes = loadRouteMatrix(project, stage, runtime);
+  const configPath = routesJsonPath(project);
+  const config = fs.existsSync(configPath)
+    ? readRouteMatrixConfig(configPath)
+    : DEFAULT_ROUTE_MATRIX;
+  const timeoutMs = typeof config.serverReadyTimeoutMs === 'number' && config.serverReadyTimeoutMs > 0
+    ? config.serverReadyTimeoutMs
+    : SERVER_READY_TIMEOUT_MS;
+
   if (routes.length === 0) {
-    return '/';
+    return { path: '/', status: null, timeoutMs };
   }
-  return routes[0].path;
+  return { path: routes[0].path, status: routes[0].expect.status.slice(), timeoutMs };
 }
 
 function loadRouteMatrix(project, stage, runtime) {
@@ -2290,11 +2389,32 @@ function removeGeneratedFrameworkArtifacts(project) {
       continue;
     }
 
+    // Vendored apps may commit prebuilt final artifacts (a release tarball's
+    // public/build, a prebuilt client dist). Those are part of the example,
+    // not stale build output — never delete tracked paths.
+    if (isTrackedExamplePath(project, relativePath)) {
+      log(`keeping ${targetPath} (tracked in the examples repo)`);
+      continue;
+    }
+
     log(`removing ${targetPath}`);
     fs.rmSync(targetPath, { recursive: true, force: true });
   }
 
   maybeRemoveUntrackedPublicDir(project);
+}
+
+function isTrackedExamplePath(project, relativePath) {
+  const tracked = spawnSync('git', ['-C', EXAMPLES_DIR, 'ls-files', '--', `${project.name}/${relativePath}`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+
+  if (tracked.error || tracked.status !== 0) {
+    return false;
+  }
+
+  return tracked.stdout.trim() !== '';
 }
 
 function maybeRemoveUntrackedPublicDir(project) {
@@ -2303,16 +2423,7 @@ function maybeRemoveUntrackedPublicDir(project) {
     return;
   }
 
-  const tracked = spawnSync('git', ['-C', EXAMPLES_DIR, 'ls-files', '--', `${project.name}/public`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-
-  if (tracked.error || tracked.status !== 0) {
-    return;
-  }
-
-  if (tracked.stdout.trim() !== '') {
+  if (isTrackedExamplePath(project, 'public')) {
     return;
   }
 
@@ -2410,7 +2521,7 @@ function printStageSummary(result) {
   if (result.failed.length > 0) {
     logError(`${result.stage.label} failed (${result.failed.length}): ${result.failed.map((entry) => entry.project.name).join(', ')}`);
     for (const failure of result.failed) {
-      process.stderr.write(`${colorize('  FAIL', 'red', ['bold'])} ${failure.project.name}: ${failure.detail}${failure.logPath ? ` [log: ${failure.logPath}]` : ''}${os.EOL}`);
+      process.stderr.write(`${colorize('  FAIL', 'red', ['bold'])} ${failure.project.name}: ${failure.message && failure.message !== failure.detail ? `${failure.message} (${failure.detail})` : failure.detail}${failure.logPath ? ` [log: ${failure.logPath}]` : ''}${os.EOL}`);
     }
   } else {
     logSuccess(`${result.stage.label} failed (0): none`);
@@ -2453,7 +2564,7 @@ function printMatrixSummary(stageResults, allProjects) {
 
     logError(`regressions (${regressions.length}) where ${previousResult.stage.label} passed but ${currentResult.stage.label} failed`);
     for (const regression of regressions) {
-      process.stderr.write(`${colorize('  FAIL', 'red', ['bold'])} ${regression.project.name}: ${regression.detail}${regression.logPath ? ` [log: ${regression.logPath}]` : ''}${os.EOL}`);
+      process.stderr.write(`${colorize('  FAIL', 'red', ['bold'])} ${regression.project.name}: ${regression.message && regression.message !== regression.detail ? `${regression.message} (${regression.detail})` : regression.detail}${regression.logPath ? ` [log: ${regression.logPath}]` : ''}${os.EOL}`);
     }
   }
 }
