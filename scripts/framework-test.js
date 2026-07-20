@@ -594,9 +594,9 @@ async function testProject(project, stage, index, total, preparation) {
   let server = null;
   let activeRuntime = runtime;
   let usedProductionFallback = false;
-  let readinessPath = routeReadinessPath(project, stage, activeRuntime);
+  let readiness = routeReadinessTarget(project, stage, activeRuntime);
   try {
-    server = await startProjectServer(project, runtime, portCandidates, stage, readinessPath);
+    server = await startProjectServer(project, runtime, portCandidates, stage, readiness);
   } catch (error) {
     const fallbackRuntime = await maybePrepareProductionFallback(project, stage, runtime, shouldBuild, reuseExistingBuild, error);
     if (!fallbackRuntime) {
@@ -604,8 +604,8 @@ async function testProject(project, stage, index, total, preparation) {
     }
     activeRuntime = fallbackRuntime;
     usedProductionFallback = true;
-    readinessPath = routeReadinessPath(project, stage, activeRuntime);
-    server = await startProjectServer(project, fallbackRuntime, portCandidates, stage, readinessPath);
+    readiness = routeReadinessTarget(project, stage, activeRuntime);
+    server = await startProjectServer(project, fallbackRuntime, portCandidates, stage, readiness);
   }
   try {
     const routeResults = await validateRouteMatrix(project, activeRuntime, server.port, routes);
@@ -1151,10 +1151,11 @@ async function runProjectBuild(project, stage) {
   });
 }
 
-async function startProjectServer(project, runtime, portCandidates, stage, readinessPath) {
-  const readyPath = normalizeRoutePath(readinessPath);
+async function startProjectServer(project, runtime, portCandidates, stage, readiness) {
+  const readyPath = normalizeRoutePath(readiness.path);
+  const readyStatus = readiness.status;
   if (runtime.mode === 'static-export') {
-    return startStaticExportServer(project, runtime, portCandidates, stage, readyPath);
+    return startStaticExportServer(project, runtime, portCandidates, stage, { path: readyPath, status: readyStatus });
   }
 
   const logPath = serverLogPath(project, stage);
@@ -1182,7 +1183,7 @@ async function startProjectServer(project, runtime, portCandidates, stage, readi
       });
 
       try {
-        const response = await waitForHttpResponse(handle, buildRouteUrl(port, readyPath));
+        const response = await waitForHttpResponse(handle, buildRouteUrl(port, readyPath), readyStatus);
         return {
           candidate,
           handle,
@@ -1210,7 +1211,7 @@ async function startProjectServer(project, runtime, portCandidates, stage, readi
   });
 }
 
-async function startStaticExportServer(project, runtime, portCandidates, stage, readinessPath) {
+async function startStaticExportServer(project, runtime, portCandidates, stage, readiness) {
   if (!fs.existsSync(runtime.outputDir)) {
     fail(`expected static output directory for ${project.name}: ${runtime.outputDir}`);
   }
@@ -1237,7 +1238,7 @@ async function startStaticExportServer(project, runtime, portCandidates, stage, 
     });
 
     try {
-      const response = await waitForHttpResponse(handle, buildRouteUrl(port, readinessPath || '/'));
+      const response = await waitForHttpResponse(handle, buildRouteUrl(port, readiness.path || '/'), readiness.status);
       return {
         candidate: {
           description: 'static export fallback',
@@ -1576,9 +1577,16 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
-async function waitForHttpResponse(handle, url) {
+// expectStatus, when provided, keeps the readiness poll going until the server
+// answers with a status the readiness route actually expects. A completed
+// response is not proof of readiness: frameworks that bind the port before
+// their route table is wired (Total.js, notably) answer 404 for a beat, and
+// treating that as ready makes the very next request race the same 404.
+async function waitForHttpResponse(handle, url, expectStatus) {
   const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
+  const wanted = Array.isArray(expectStatus) && expectStatus.length > 0 ? expectStatus : null;
   let lastError = null;
+  let lastStatus = null;
 
   while (Date.now() < deadline) {
     if (handle.exited) {
@@ -1590,16 +1598,30 @@ async function waitForHttpResponse(handle, url) {
 
     const response = await requestHttp(url);
     if (response.ok) {
-      return response;
+      if (!wanted || wanted.includes(response.statusCode)) {
+        return response;
+      }
+      lastStatus = response.statusCode;
+    } else {
+      lastError = response.error;
     }
 
-    lastError = response.error;
     await delay(HTTP_POLL_INTERVAL_MS);
   }
 
   if (handle.exited) {
     fail(formatProcessFailure(handle), {
       detail: summarizeLogFailure(handle.logPath),
+      logPath: handle.logPath,
+    });
+  }
+
+  // Deliberately not phrased as "timed out waiting": the server is up and
+  // answering, so retrying on another port cannot help. See
+  // shouldRetryWithAnotherPort().
+  if (lastStatus != null) {
+    fail(`${url} never returned an expected status (last: ${lastStatus}, expected ${wanted.join(' or ')})`, {
+      detail: summarizeLogFailure(handle.logPath, lastError),
       logPath: handle.logPath,
     });
   }
@@ -1759,12 +1781,14 @@ function routesJsonPath(project) {
   return path.join(project.dir, ROUTES_JSON_BASENAME);
 }
 
-function routeReadinessPath(project, stage, runtime) {
+// The readiness probe reuses the first configured route, so it can also reuse
+// that route's expected statuses to decide when the server is really up.
+function routeReadinessTarget(project, stage, runtime) {
   const routes = loadRouteMatrix(project, stage, runtime);
   if (routes.length === 0) {
-    return '/';
+    return { path: '/', status: null };
   }
-  return routes[0].path;
+  return { path: routes[0].path, status: routes[0].expect.status };
 }
 
 function loadRouteMatrix(project, stage, runtime) {

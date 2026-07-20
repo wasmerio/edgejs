@@ -829,12 +829,14 @@ function create(options) {
       .filter((route) => routeAppliesToStage(route, stage, runtime));
   }
 
-  function routeReadinessPath(project, stage, runtime, routesFile) {
+  // The readiness probe reuses the first configured route, so it can also reuse
+  // that route's expected statuses to decide when the server is really up.
+  function routeReadinessTarget(project, stage, runtime, routesFile) {
     const routes = loadRouteMatrix(project, stage, runtime, routesFile);
     if (routes.length === 0) {
-      return '/';
+      return { path: '/', status: null };
     }
-    return routes[0].path;
+    return { path: routes[0].path, status: routes[0].expect.status };
   }
 
   function summarizeBodySnippet(body) {
@@ -1128,9 +1130,16 @@ function create(options) {
     return handle;
   }
 
-  async function waitForHttpResponse(handle, url) {
+  // expectStatus, when provided, keeps the readiness poll going until the server
+  // answers with a status the readiness route actually expects. A completed
+  // response is not proof of readiness: frameworks that bind the port before
+  // their route table is wired (Total.js, notably) answer 404 for a beat, and
+  // treating that as ready makes the very next request race the same 404.
+  async function waitForHttpResponse(handle, url, expectStatus) {
     const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
+    const wanted = Array.isArray(expectStatus) && expectStatus.length > 0 ? expectStatus : null;
     let lastError = null;
+    let lastStatus = null;
 
     while (Date.now() < deadline) {
       if (handle.exited) {
@@ -1142,16 +1151,29 @@ function create(options) {
 
       const response = await requestHttp(url);
       if (response.ok) {
-        return response;
+        if (!wanted || wanted.includes(response.statusCode)) {
+          return response;
+        }
+        lastStatus = response.statusCode;
+      } else {
+        lastError = response.error;
       }
 
-      lastError = response.error;
       await delay(HTTP_POLL_INTERVAL_MS);
     }
 
     if (handle.exited) {
       fail(formatProcessFailure(handle), {
         detail: summarizeLogFailure(handle.logPath),
+        logPath: handle.logPath,
+      });
+    }
+
+    // Deliberately not phrased as "timed out waiting": the server is up and
+    // answering, so retrying on another port cannot help.
+    if (lastStatus != null) {
+      fail(`${url} never returned an expected status (last: ${lastStatus}, expected ${wanted.join(' or ')})`, {
+        detail: summarizeLogFailure(handle.logPath, lastError),
         logPath: handle.logPath,
       });
     }
@@ -1412,7 +1434,7 @@ function create(options) {
     requestHttp,
     resolveHostNodeRunner,
     resolveRunnerTarget,
-    routeReadinessPath,
+    routeReadinessTarget,
     runRunnerStage,
     runSyncOrFail,
     shellQuote,

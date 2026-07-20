@@ -39,7 +39,7 @@ const {
   readJsonFile,
   resolveHostNodeRunner,
   resolveRunnerTarget,
-  routeReadinessPath,
+  routeReadinessTarget,
   runRunnerStage,
   shellQuote,
   spawnLoggedProcess,
@@ -301,7 +301,6 @@ async function testProject(project, stage, index, total, preparation) {
     fail(`standalone entry missing for ${project.name}: ${entryAbsolutePath}`);
   }
 
-  const readinessPath = routeReadinessPath(project, stage, runtime, routesFile);
   const server = await startStandaloneEntry(project, stage, portCandidates, runtime);
   try {
     const routes = loadRouteMatrix(project, stage, runtime, routesFile);
@@ -411,8 +410,8 @@ async function startStandaloneEntry(project, stage, portCandidates, runtime) {
     });
 
     try {
-      const readinessPath = routeReadinessPath(project, stage, runtime, project.standalone.routes);
-      const response = await waitForHttpResponse(handle, buildRouteUrl(port, readinessPath));
+      const readiness = routeReadinessTarget(project, stage, runtime, project.standalone.routes);
+      const response = await waitForHttpResponse(handle, buildRouteUrl(port, readiness.path), readiness.status);
       return {
         handle,
         logPath,
