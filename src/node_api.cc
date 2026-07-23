@@ -374,6 +374,10 @@ void UvAfterWork(uv_work_t* req, int status) {
 void napi_v8_run_async_cleanup_hooks(napi_env env) {
   if (!CheckEnv(env)) return;
 
+  // Teardown path with no ambient scope; hooks may mint values.
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) return;
+
   if (auto* environment = GetAttachedEnvironment(env); environment != nullptr) {
     environment->RunAsyncCleanupHooks();
     return;
@@ -428,6 +432,9 @@ napi_status NAPI_CDECL node_api_post_finalizer(node_api_basic_env env,
                                                void* finalize_hint) {
   napi_env napiEnv = const_cast<napi_env>(env);
   if (!CheckEnv(napiEnv) || finalize_cb == nullptr) return napi_invalid_arg;
+  // Finalizers may mint values and can run with no ambient scope.
+  edge::HandleScope handle_scope(napiEnv);
+  if (!handle_scope.is_open()) return handle_scope.status();
   finalize_cb(napiEnv, finalize_data, finalize_hint);
   return napi_ok;
 }
@@ -708,18 +715,32 @@ napi_status NAPI_CDECL napi_make_callback(napi_env env,
   if (!CheckEnv(env) || recv == nullptr || func == nullptr || (argc > 0 && argv == nullptr)) {
     return napi_invalid_arg;
   }
-  if (async_context == nullptr) {
-    return EdgeCallCallbackWithDomain(
-        env, recv, func, argc, const_cast<napi_value*>(argv), result);
+  // Addons invoke this from native contexts with no ambient handle scope; own
+  // the dispatch's values here (Node wraps this in InternalCallbackScope).
+  // Escapable because the callback result goes back through `result`.
+  edge::EscapableHandleScope handle_scope(env);
+  if (!handle_scope.is_open()) {
+    return handle_scope.status();
   }
+  napi_status call_status;
+  if (async_context == nullptr) {
+    call_status = EdgeCallCallbackWithDomain(
+        env, recv, func, argc, const_cast<napi_value*>(argv), result);
+  } else {
+    const napi_status scope_status = EnterAsyncContextScope(env, async_context);
+    if (scope_status != napi_ok) return scope_status;
 
-  const napi_status scope_status = EnterAsyncContextScope(env, async_context);
-  if (scope_status != napi_ok) return scope_status;
-
-  napi_status call_status =
-      EdgeCallCallbackWithDomain(env, recv, func, argc, const_cast<napi_value*>(argv), result);
-  const bool failed = (call_status != napi_ok) || HasPendingException(env);
-  ExitAsyncContextScope(env, async_context, failed);
+    call_status =
+        EdgeCallCallbackWithDomain(env, recv, func, argc, const_cast<napi_value*>(argv), result);
+    const bool failed = (call_status != napi_ok) || HasPendingException(env);
+    ExitAsyncContextScope(env, async_context, failed);
+  }
+  if (result != nullptr && *result != nullptr) {
+    *result = handle_scope.Escape(*result);
+    if (*result == nullptr && call_status == napi_ok) {
+      call_status = napi_generic_failure;
+    }
+  }
   return call_status;
 }
 

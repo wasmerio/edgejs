@@ -1,5 +1,6 @@
 #include "internal_binding/binding_initializers.h"
 #include "internal_binding/watchdog.h"
+#include "edge_handle_scope.h"
 
 #include <algorithm>
 #include <atomic>
@@ -111,6 +112,14 @@ std::string FormatCallSiteLine(napi_env env, napi_value callsite) {
 
 void PrintTraceSigintStack(napi_env env) {
   std::fputs("KEYBOARD_INTERRUPT: Script execution was interrupted by `SIGINT`\n", stderr);
+
+  // The unofficial_napi_request_interrupt fallback dispatches this with no
+  // ambient scope (the Environment::RequestInterrupt path is already scoped).
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) {
+    std::fflush(stderr);
+    return;
+  }
 
   napi_value callsites = nullptr;
   if (unofficial_napi_get_call_sites(env, 10, &callsites) != napi_ok || callsites == nullptr) {

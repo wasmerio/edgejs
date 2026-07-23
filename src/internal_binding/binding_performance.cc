@@ -1,5 +1,6 @@
 #include "internal_binding/binding_initializers.h"
 #include "internal_binding/binding_performance.h"
+#include "edge_handle_scope.h"
 
 #include <chrono>
 #include <cstdint>
@@ -317,6 +318,10 @@ void PerformanceEmitEntry(napi_env env,
                           napi_value details) {
   auto* state = GetPerformanceState(env);
   if (state == nullptr || state->observer_callback_ref == nullptr) return;
+  // Exported helper invoked from other bindings' dispatch paths; own the
+  // values it mints rather than relying on every caller's scope.
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) return;
   napi_value callback = nullptr;
   if (napi_get_reference_value(env, state->observer_callback_ref, &callback) != napi_ok ||
       callback == nullptr) {

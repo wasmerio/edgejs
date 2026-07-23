@@ -29,6 +29,7 @@
 #include "edge_udp_wrap.h"
 #include "edge_url.h"
 #include "edge_environment.h"
+#include "edge_handle_scope.h"
 #include "edge_loader_bindings.h"
 #include "edge_util.h"
 #include "edge_worker_env.h"
@@ -150,6 +151,12 @@ static void DestroyContextifyScriptInstance(napi_env env,
                                             bool detach_wrapper) {
   if (instance == nullptr) return;
   if (env == nullptr && instance->state != nullptr) env = instance->state->env;
+
+  // Runs from a napi_wrap finalizer; own the values minted below instead of
+  // relying on a runtime-provided finalizer scope. Cleanup continues even if
+  // the scope fails to open (env teardown) — the ref deletions below must run.
+  std::optional<edge::HandleScope> handle_scope;
+  if (env != nullptr) handle_scope.emplace(env);
 
   if (env != nullptr && instance->wrapper_ref != nullptr) {
     napi_value wrapper = nullptr;

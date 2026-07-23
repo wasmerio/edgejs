@@ -928,6 +928,9 @@ void Environment::EmitProcessWarning(const std::string& message,
                                      const char* type,
                                      const char* code) const {
   if (env_ == nullptr || message.empty() || !can_call_into_js()) return;
+  // Called from native fd tracking with no ambient scope.
+  edge::HandleScope handle_scope(env_);
+  if (!handle_scope.is_open()) return;
   napi_value global = nullptr;
   napi_value process = nullptr;
   napi_value emit_warning = nullptr;

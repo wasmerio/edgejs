@@ -2,6 +2,7 @@
 #include <string>
 
 #include "unofficial_napi.h"
+#include "edge_handle_scope.h"
 
 namespace {
 
@@ -88,6 +89,14 @@ napi_value UnofficialNapiTestingUntilGc(napi_env env, napi_callback_info info) {
   }
 
   while (true) {
+    // Per-iteration scope: the poll loop otherwise accumulates handles in the
+    // enclosing callback scope for as long as the condition stays false.
+    edge::HandleScope iteration_scope(env);
+    if (!iteration_scope.is_open()) {
+      napi_reject_deferred(env, deferred,
+                           MakeError(env, "Unable to open handle scope"));
+      return promise;
+    }
     napi_value result = nullptr;
     napi_status call_status = napi_call_function(env, global, argv[1], 0, nullptr, &result);
     if (call_status != napi_ok) {

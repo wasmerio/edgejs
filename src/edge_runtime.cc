@@ -1339,6 +1339,13 @@ int HandleExtractedException(napi_env env,
 }
 
 int HandlePendingExceptionAfterLoopStep(napi_env env, std::string* error_out) {
+  // Mints exception/stringification values; callers are not guaranteed to hold
+  // a scope. Results leave as std::string, so a plain scope suffices.
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) {
+    if (error_out != nullptr) *error_out = "Failed to open handle scope";
+    return 1;
+  }
   PendingExceptionInfo pending = {};
   if (!TakePendingExceptionInfo(env, &pending) || !pending.has_exception) {
     return -1;
@@ -1612,7 +1619,11 @@ int WaitForTopLevelPromiseToSettle(napi_env env, napi_value value, std::string* 
   if (!IsPromisePending(env, value)) return -1;
 
   uv_loop_t* loop = EdgeGetEnvLoop(env);
-  while (IsPromisePending(env, value)) {
+  while (true) {
+    // Per-turn scope: each wait iteration mints promise-inspection values that
+    // must not accumulate in the caller's scope for the life of the wait.
+    edge::HandleScope turn_scope(env);
+    if (!turn_scope.is_open() || !IsPromisePending(env, value)) break;
     if (loop != nullptr) {
       (void)uv_run(loop, UV_RUN_NOWAIT);
     }
@@ -1814,6 +1825,13 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
 
   int idle_drain_turns = 0;
   while (true) {
+    // Per-turn scope: values minted by the loop turn itself (handle summaries,
+    // exception formatting, lifecycle events) must not outlive the iteration.
+    edge::HandleScope turn_scope(env);
+    if (!turn_scope.is_open()) {
+      if (error_out != nullptr) *error_out = "Failed to open loop handle scope";
+      return 1;
+    }
     if (IsProcessExiting(env)) {
       break;
     }
@@ -3195,16 +3213,13 @@ void EdgePrepareProcessExit(napi_env env, int exit_code) {
   }
 }
 
-napi_status EdgeMakeCallbackWithFlags(napi_env env,
-                                     napi_value recv,
-                                     napi_value callback,
-                                     size_t argc,
-                                     napi_value* argv,
-                                     napi_value* result,
-                                     int flags) {
-  if (env == nullptr || recv == nullptr || callback == nullptr) {
-    return napi_invalid_arg;
-  }
+static napi_status EdgeMakeCallbackWithFlagsImpl(napi_env env,
+                                                 napi_value recv,
+                                                 napi_value callback,
+                                                 size_t argc,
+                                                 napi_value* argv,
+                                                 napi_value* result,
+                                                 int flags) {
   thread_local int detached_callback_scope_depth = 0;
   edge::Environment* environment = EdgeEnvironmentGet(env);
   if (environment != nullptr) {
@@ -3261,6 +3276,35 @@ napi_status EdgeMakeCallbackWithFlags(napi_env env,
     environment->DecrementAsyncCallbackScopeDepth();
   } else {
     detached_callback_scope_depth--;
+  }
+  return status;
+}
+
+// The InternalCallbackScope equivalent: every native->JS callback dispatch owns
+// a handle scope so values minted during the callback (and its checkpoint) are
+// reclaimed when the dispatch completes. Escapable because the callback result
+// is returned to the caller through `result`.
+napi_status EdgeMakeCallbackWithFlags(napi_env env,
+                                     napi_value recv,
+                                     napi_value callback,
+                                     size_t argc,
+                                     napi_value* argv,
+                                     napi_value* result,
+                                     int flags) {
+  if (env == nullptr || recv == nullptr || callback == nullptr) {
+    return napi_invalid_arg;
+  }
+  edge::EscapableHandleScope scope(env);
+  if (!scope.is_open()) {
+    return scope.status();
+  }
+  napi_status status =
+      EdgeMakeCallbackWithFlagsImpl(env, recv, callback, argc, argv, result, flags);
+  if (result != nullptr && *result != nullptr) {
+    *result = scope.Escape(*result);
+    if (*result == nullptr && status == napi_ok) {
+      status = napi_generic_failure;
+    }
   }
   return status;
 }
@@ -3369,6 +3413,11 @@ napi_status EdgeRunCallbackScopeCheckpoint(napi_env env) {
 bool EdgeHandlePendingExceptionNow(napi_env env, bool* handled_out) {
   if (handled_out != nullptr) *handled_out = false;
   if (env == nullptr) return false;
+
+  // Reachable with no ambient scope (e.g. timers-host checkpoint failure path)
+  // and mints exception values; all results leave as bool/std::string.
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) return false;
 
   if (IsEnvironmentExitRequested(env) ||
       (!EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env))) {

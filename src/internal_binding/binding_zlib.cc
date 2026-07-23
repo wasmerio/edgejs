@@ -1,4 +1,5 @@
 #include "internal_binding/binding_initializers.h"
+#include "edge_handle_scope.h"
 
 #include <algorithm>
 #include <array>
@@ -1237,6 +1238,11 @@ void ExecuteCompressionWork(napi_env /*env*/, void* data) {
 void CompleteCompressionWork(napi_env env, napi_status status, void* data) {
   auto* handle = static_cast<CompressionHandle*>(data);
   if (handle == nullptr) return;
+
+  // Threadpool completion dispatched outside any JS callback; own the values
+  // minted below (error strings, write results, callback dispatch).
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) return;
 
   napi_async_work work = handle->async_work;
   handle->async_work = nullptr;

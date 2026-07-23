@@ -252,6 +252,14 @@ void OnWorkerReportInterrupt(napi_env env, void* data) {
     return;
   }
 
+  // The unofficial_napi_request_interrupt fallback dispatches this with no
+  // ambient scope (the Environment::RequestInterrupt path is already scoped).
+  edge::HandleScope handle_scope(env);
+  if (!handle_scope.is_open()) {
+    CompleteWorkerReportTask(task, {});
+    return;
+  }
+
   std::string json;
   napi_value report_binding = EdgeGetReportBinding(env);
   napi_value get_report = GetNamed(env, report_binding, "getReport");

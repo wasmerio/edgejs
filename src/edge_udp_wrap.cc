@@ -710,6 +710,9 @@ class UdpWrap final : public EdgeUdpWrapBase, public EdgeUdpListener {
   uv_udp_t handle{};
   int32_t provider_type = kEdgeProviderUdpWrap;
   int64_t async_id = -1;
+  // Raw scratch handles, valid ONLY within one synchronous Send() activation
+  // (set/cleared around the call; promoted to napi_ref in CreateSendWrap).
+  // If Send ever becomes asynchronous these must become napi_ref.
   napi_value current_send_req_obj = nullptr;
   napi_value current_send_chunks_obj = nullptr;
   bool current_send_has_callback = false;
