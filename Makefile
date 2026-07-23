@@ -96,19 +96,14 @@ V8_WASIX_SKIP_TESTS := \
   parallel/test-fastutf8stream-write.js \
   parallel/test-file.js \
   parallel/test-http2-debug.js \
-  parallel/test-http2-generic-streams-sendfile.js \
   parallel/test-http2-goaway-opaquedata.js \
   parallel/test-http2-onping.js \
   parallel/test-http2-ping.js \
   parallel/test-http2-reset-flood.js \
-  parallel/test-http2-respond-file-compat.js \
   parallel/test-http2-respond-file-fd.js \
-  parallel/test-http2-respond-file-fd-range.js \
   parallel/test-http2-respond-file-filehandle.js \
   parallel/test-http2-respond-file.js \
   parallel/test-http2-respond-file-push.js \
-  parallel/test-http2-respond-file-range.js \
-  parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-http-autoselectfamily.js \
   parallel/test-https-autoselectfamily.js \
   parallel/test-stream2-base64-single-char-read-end.js \
@@ -138,11 +133,11 @@ V8_WASIX_SKIP_TESTS := \
   parallel/test-zlib-truncated.js \
   parallel/test-zlib-unzip-one-byte-chunks.js \
   parallel/test-zlib-write-after-end.js \
-  parallel/test-zlib-zstd.js \
   pseudo-tty/console-dumb-tty.js \
   pseudo-tty/no_dropped_stdio.js \
   pseudo-tty/no_interleaved_stdio.js \
   pseudo-tty/stdin-setrawmode.js \
+  parallel/test-zlib-zstd.js \
   pseudo-tty/test-readable-tty-keepalive.js \
   pseudo-tty/test-tty-color-support.js \
   pseudo-tty/test-tty-color-support-warning-2.js \
