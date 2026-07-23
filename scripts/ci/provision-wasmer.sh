@@ -183,10 +183,16 @@ provision_wasix_source() {
       mkdir -p "$llvm_dir"
       curl --retry 3 --proto '=https' --tlsv1.2 -sSfL "$LLVM_URL_LINUX_AMD64" | tar xJ -C "$llvm_dir"
     fi
-    # V8/NAPI-V8 are host-side features the quickjs jobs don't exercise;
-    # wasm-c-api (the wasm_c_api_v0 bridge) is always included by the Makefile.
+    # wasm-c-api (the wasm_c_api_v0 bridge) is always included by the
+    # Makefile. NAPI-V8 (the `wasmer run --experimental-napi` runtime the
+    # v8-wasix lane needs) is opt-in via EDGE_WASMER_NAPI=1; the quickjs jobs
+    # don't exercise it and skip the extra V8 build time.
+    local napi_enabled=0
+    if [[ "${EDGE_WASMER_NAPI:-0}" == "1" ]]; then
+      napi_enabled=1
+    fi
     (cd "$SRC_DIR" && PATH="$llvm_dir/bin:$PATH" \
-      ENABLE_LLVM=1 ENABLE_V8=0 ENABLE_NAPI_V8=0 make build-wasmer)
+      ENABLE_LLVM=1 ENABLE_V8=0 ENABLE_NAPI_V8=$napi_enabled make build-wasmer)
     mkdir -p "$bin_dir"
     cp "$SRC_DIR/target/release/wasmer" "$bin_dir/wasmer"
   fi
@@ -270,10 +276,15 @@ cmd_resolve() {
   github_output "mode=$mode"
   echo "provision-wasmer: mode=$mode"
   if [[ "$mode" == source ]]; then
-    local sha
+    local sha variant=""
     sha="$(resolve_sha)"
     github_env "WASMER_RESOLVED_SHA=$sha"
-    github_output "cache_key=wasmer-provision-v1-${role}-$(uname -s)-$(uname -m)-${sha}"
+    # A napi-enabled CLI is a different artifact than the plain one; keep the
+    # cache entries separate.
+    if [[ "${EDGE_WASMER_NAPI:-0}" == "1" ]]; then
+      variant="-napi"
+    fi
+    github_output "cache_key=wasmer-provision-v1-${role}${variant}-$(uname -s)-$(uname -m)-${sha}"
     echo "provision-wasmer: ${WASMER_SOURCE_REPO}@${WASMER_SOURCE_REF} -> $sha"
   fi
 }

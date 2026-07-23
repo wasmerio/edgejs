@@ -230,8 +230,28 @@ function normalizeStandaloneSkipStages(skipStages) {
   return normalized;
 }
 
-function getStandaloneStageSkipReason(standalone, stage) {
-  if (!standalone.skipStages || stage.key === 'node') {
+// Same contract as framework-test.js: a comma-separated project list skipped
+// on the non-node (edge runtime) stages only. The -run make target already
+// forwards the variable; this makes it effective for standalone runs too.
+const EDGE_STAGE_SKIP_PROJECTS = (() => {
+  const raw = process.env.FRAMEWORK_TEST_EDGE_SKIP;
+  if (!raw || !raw.trim()) {
+    return new Set();
+  }
+  return new Set(raw.split(',').map((entry) => entry.trim()).filter(Boolean));
+})();
+
+function getStandaloneStageSkipReason(project, stage) {
+  const standalone = project.standalone;
+  if (stage.key === 'node') {
+    return null;
+  }
+
+  if (EDGE_STAGE_SKIP_PROJECTS.has(project.name)) {
+    return 'listed in FRAMEWORK_TEST_EDGE_SKIP';
+  }
+
+  if (!standalone.skipStages) {
     return null;
   }
 
@@ -273,7 +293,7 @@ async function testProject(project, stage, index, total, preparation) {
     throw error;
   }
 
-  const stageSkipReason = getStandaloneStageSkipReason(project.standalone, stage);
+  const stageSkipReason = getStandaloneStageSkipReason(project, stage);
   if (stageSkipReason) {
     const error = new Error(stageSkipReason);
     error.skip = true;

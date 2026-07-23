@@ -90,6 +90,47 @@ jobs:
           set -euo pipefail
           make test-only TEST_JOBS=4
 
+      - name: Test locale (Intl/ICU, V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-intl
+
+      - name: Test language (explicit resource management, V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-lang
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      # FRAMEWORK_TEST_SKIP_SAFE matches the quickjs lanes: the safe-mode
+      # stage needs a wasmer CLI, which these jobs do not provision.
+      - name: Test framework apps (V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRAMEWORK_TEST_SKIP_SAFE=1 \
+            FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+            make framework-test
+
+      - name: Test standalone builds (V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRAMEWORK_TEST_SKIP_SAFE=1 make standalone-build-test
+
       - name: Generate dist
         shell: bash
         run: |
@@ -148,6 +189,47 @@ jobs:
           set -euo pipefail
           make test-only TEST_JOBS=4
 
+      - name: Test locale (Intl/ICU, V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-intl
+
+      - name: Test language (explicit resource management, V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-lang
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      # FRAMEWORK_TEST_SKIP_SAFE matches the quickjs lanes: the safe-mode
+      # stage needs a wasmer CLI, which these jobs do not provision.
+      - name: Test framework apps (V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRAMEWORK_TEST_SKIP_SAFE=1 \
+            FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+            make framework-test
+
+      - name: Test standalone builds (V8 native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRAMEWORK_TEST_SKIP_SAFE=1 make standalone-build-test
+
       - name: Generate dist
         shell: bash
         run: |
@@ -200,6 +282,83 @@ jobs:
         run: |
           set -euo pipefail
           make build-wasix
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      # See the quickjs-linux job for how Wasmer provisioning modes work. The
+      # V8 WASIX lane runs the edgejs wasm through the wasmer CLI's
+      # experimental N-API runtime, so the CLI must be built with the napi-v8
+      # feature (EDGE_WASMER_NAPI=1) in addition to LLVM.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          EDGE_WASMER_NAPI: "1"
+        run: ./scripts/ci/provision-wasmer.sh resolve wasix
+
+      - name: Restore Wasmer source build cache
+        id: wasmer-cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+          EDGE_WASMER_NAPI: "1"
+        run: ./scripts/ci/provision-wasmer.sh wasix
+
+      - name: Save Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source' && steps.wasmer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Test edge (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-v8-only TEST_JOBS=1
+
+      - name: Test locale (Intl/ICU, V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-v8-intl
+
+      - name: Test framework apps (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-v8-wasix
+
+      - name: Test standalone builds (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-v8-wasix
 
       - name: Generate dist
         shell: bash

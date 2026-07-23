@@ -44,6 +44,14 @@ if [[ -n "${WASMER_STACK_SIZE:-}" ]]; then
   wasmer_stack_args+=(--stack-size "${WASMER_STACK_SIZE}")
 fi
 
+# Extra `wasmer run` flags for the target lane (e.g. --experimental-napi for
+# the V8 imports package). Word-split intentionally.
+wasmer_extra_args=()
+if [[ -n "${WASMER_EXTRA_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  wasmer_extra_args+=(${WASMER_EXTRA_ARGS})
+fi
+
 app_root="$(pwd -P)"
 while [[ ! -d "${app_root}/node_modules" && "${app_root}" != "/" ]]; do
   app_root="$(dirname "${app_root}")"
@@ -108,6 +116,7 @@ if [[ "${WASIX_EDGEJS_TRACE:-0}" == "1" ]]; then
   {
     printf '%q ' "${wasmer_bin}" run \
       --llvm \
+      "${wasmer_extra_args[@]+"${wasmer_extra_args[@]}"}" \
       "${wasmer_stack_args[@]+"${wasmer_stack_args[@]}"}" \
       --net \
       "${wasmer_env_args[@]}" \
@@ -121,6 +130,7 @@ fi
 
 exec "${wasmer_bin}" run \
   --llvm \
+  "${wasmer_extra_args[@]+"${wasmer_extra_args[@]}"}" \
   "${wasmer_stack_args[@]+"${wasmer_stack_args[@]}"}" \
   --net \
   "${wasmer_env_args[@]}" \

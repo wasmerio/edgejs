@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-quickjs-lang test-wasix-quickjs-intl test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-quickjs-lang test-wasix-quickjs-intl test-intl test-lang test-wasix-v8-only test-wasix-v8-intl framework-test-v8-wasix standalone-build-test-v8-wasix test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -36,6 +36,137 @@ WASMER_BIN ?= wasmer
 WASIX_PACKAGE_DIR ?= $(CURDIR)
 WASIX_SSL_CERTS_DIR ?= ssl-certs
 WASIX_QUICKJS_NODE_TEST_RUNNER ?= $(CURDIR)/scripts/edge-wasix-node-runner.sh
+# Known-broken under the V8 imports WASIX lane, catalogued 2026-07-23 when the
+# lane was revived after the napi_wrap/js_source bridge fixes (see ECO-416 for
+# the burn-down). Clusters: pseudo-tty (no PTY under wasmer run), zlib +
+# string-decoder + webcrypto data/completion bugs, TLS session resumption,
+# http2 fd/sendfile responses (host segfault), dgram pingpong. All reproduce
+# on the pre-scope-rework bridge as well (not regressions).
+V8_WASIX_SKIP_TESTS := \
+  client-proxy/test-http-proxy-request-invalid-char-in-url.mjs \
+  client-proxy/test-http-request-proxy-post.mjs \
+  parallel/test-buffer-alloc.js \
+  parallel/test-buffer-ascii.js \
+  parallel/test-buffer-badhex.js \
+  parallel/test-buffer-concat.js \
+  parallel/test-buffer-constants.js \
+  parallel/test-buffer-generic-methods.js \
+  parallel/test-buffer-inspect.js \
+  parallel/test-buffer-swap.js \
+  parallel/test-c-ares.js \
+  parallel/test-crypto-key-objects-messageport.js \
+  parallel/test-crypto-pqc-sign-verify-ml-dsa.js \
+  parallel/test-crypto-prime.js \
+  parallel/test-crypto-randomfillsync-regression.js \
+  parallel/test-crypto-worker-thread.js \
+  parallel/test-dgram-connect-send-callback-multi-buffer.js \
+  parallel/test-dgram-connect-send-default-host.js \
+  parallel/test-dgram-connect-send-empty-array.js \
+  parallel/test-dgram-connect-send-empty-packet.js \
+  parallel/test-dgram-connect-send-multi-buffer-copy.js \
+  parallel/test-dgram-connect-send-multi-string-array.js \
+  parallel/test-dgram-implicit-bind.js \
+  parallel/test-dgram-send-callback-multi-buffer-empty-address.js \
+  parallel/test-dgram-send-callback-multi-buffer.js \
+  parallel/test-dgram-send-default-host.js \
+  parallel/test-dgram-send-empty-array.js \
+  parallel/test-dgram-send-empty-packet.js \
+  parallel/test-dgram-send-multi-buffer-copy.js \
+  parallel/test-dgram-send-multi-string-array.js \
+  parallel/test-dgram-udp4.js \
+  parallel/test-diagnostics-channel-tracing-channel-promise-unhandled.js \
+  parallel/test-diagnostics-channel-worker-threads.js \
+  parallel/test-dns-cancel-reverse-lookup.js \
+  parallel/test-dns.js \
+  parallel/test-dns-multi-channel.js \
+  parallel/test-dns-resolveany-bad-ancount.js \
+  parallel/test-dns-resolveany.js \
+  parallel/test-dns-resolver-max-timeout.js \
+  parallel/test-domain-promise.js \
+  parallel/test-event-capture-rejections.js \
+  parallel/test-fastutf8stream-destroy.js \
+  parallel/test-fastutf8stream-end.js \
+  parallel/test-fastutf8stream-flush.js \
+  parallel/test-fastutf8stream-flush-sync.js \
+  parallel/test-fastutf8stream-fsync.js \
+  parallel/test-fastutf8stream-periodicflush.js \
+  parallel/test-fastutf8stream-reopen.js \
+  parallel/test-fastutf8stream-retry.js \
+  parallel/test-fastutf8stream-sync.js \
+  parallel/test-fastutf8stream-write.js \
+  parallel/test-file.js \
+  parallel/test-http2-debug.js \
+  parallel/test-http2-generic-streams-sendfile.js \
+  parallel/test-http2-goaway-opaquedata.js \
+  parallel/test-http2-onping.js \
+  parallel/test-http2-ping.js \
+  parallel/test-http2-reset-flood.js \
+  parallel/test-http2-respond-file-compat.js \
+  parallel/test-http2-respond-file-fd.js \
+  parallel/test-http2-respond-file-fd-range.js \
+  parallel/test-http2-respond-file-filehandle.js \
+  parallel/test-http2-respond-file.js \
+  parallel/test-http2-respond-file-push.js \
+  parallel/test-http2-respond-file-range.js \
+  parallel/test-http2-respond-file-with-pipe.js \
+  parallel/test-http-autoselectfamily.js \
+  parallel/test-https-autoselectfamily.js \
+  parallel/test-stream2-base64-single-char-read-end.js \
+  parallel/test-stream-readable-setEncoding-existing-buffers.js \
+  parallel/test-string-decoder-end.js \
+  parallel/test-string-decoder-fuzz.js \
+  parallel/test-string-decoder.js \
+  parallel/test-tls-handshake-exception.js \
+  parallel/test-tls-onread-static-buffer.js \
+  parallel/test-tls-ticket-12.js \
+  parallel/test-tls-ticket.js \
+  parallel/test-webcrypto-cryptokey-workers.js \
+  parallel/test-webcrypto-derivebits-hkdf.js \
+  parallel/test-webcrypto-export-import-ml-dsa.js \
+  parallel/test-webcrypto-random.js \
+  parallel/test-x509-escaping.js \
+  parallel/test-crypto-random.js \
+  parallel/test-zlib-brotli.js \
+  parallel/test-zlib-convenience-methods.js \
+  parallel/test-zlib-empty-buffer.js \
+  parallel/test-zlib-from-concatenated-gzip.js \
+  parallel/test-zlib-from-gzip-with-trailing-garbage.js \
+  parallel/test-zlib-maxOutputLength.js \
+  parallel/test-zlib-no-stream.js \
+  parallel/test-zlib-premature-end.js \
+  parallel/test-zlib-sync-no-event.js \
+  parallel/test-zlib-truncated.js \
+  parallel/test-zlib-unzip-one-byte-chunks.js \
+  parallel/test-zlib-write-after-end.js \
+  parallel/test-zlib-zstd.js \
+  pseudo-tty/console-dumb-tty.js \
+  pseudo-tty/no_dropped_stdio.js \
+  pseudo-tty/no_interleaved_stdio.js \
+  pseudo-tty/stdin-setrawmode.js \
+  pseudo-tty/test-readable-tty-keepalive.js \
+  pseudo-tty/test-tty-color-support.js \
+  pseudo-tty/test-tty-color-support-warning-2.js \
+  pseudo-tty/test-tty-color-support-warning.js \
+  pseudo-tty/test-tty-isatty.js \
+  pseudo-tty/test-tty-stdin-call-end.js \
+  pseudo-tty/test-tty-stdin-end.js \
+  pseudo-tty/test-tty-stdout-end.js \
+  pseudo-tty/test-tty-stdout-resize.js \
+  pseudo-tty/test-tty-stream-constructors.js \
+  sequential/test-dgram-pingpong.js \
+  sequential/test-http2-large-file.js \
+  sequential/test-http2-timeout-large-write-file.js
+
+# V8 (imports provider) WASIX lane: run the root wasmer.toml package
+# (build-wasix/edgejs.wasm) through the wasmer CLI's experimental N-API
+# runtime. WASMER_BIN must be built with the napi-v8 and llvm features.
+WASIX_V8_LANE_ENV := \
+	WASMER_BIN="$(WASMER_BIN)" \
+	EDGEJS_ROOT="$(CURDIR)" \
+	WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
+	WASIX_EDGEJS_WORKSPACE_DIRS="test,lib,deps,assets,build-wasix" \
+	WASIX_EDGEJS_GUEST_EXEC_PATH="/workspace/build-wasix/edgejs.wasm" \
+	WASMER_EXTRA_ARGS="--experimental-napi"
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -391,6 +522,41 @@ test-wasix-quickjs-intl:
 	done
 	@echo "[intl wasix] all locale tests passed"
 
+# V8-native equivalents of the QuickJS locale/language lanes (same test
+# lists; QUICKJS_ prefixes are historical).
+test-intl: $(EDGE_BINARY)
+	@set -e; for t in $(QUICKJS_INTL_TESTS); do \
+	  echo "[intl v8 native] $$t"; \
+	  EDGE_BYTECODE_CACHE=0 $(EDGE_BINARY) "$(CURDIR)/test/$$t.js"; \
+	done
+	@echo "[intl v8 native] all locale tests passed"
+
+test-lang: $(EDGE_BINARY)
+	@set -e; for t in $(QUICKJS_LANG_TESTS); do \
+	  echo "[lang v8 native] $$t"; \
+	  EDGE_BYTECODE_CACHE=0 $(EDGE_BINARY) "$(CURDIR)/tests/js/$$t.js"; \
+	done
+	@echo "[lang v8 native] all language tests passed"
+
+$(WASIX_EDGEJS_WASM):
+	./wasix/build-wasix.sh
+
+test-wasix-v8-only: $(WASIX_EDGEJS_WASM)
+	WASIX_SLOW_TESTS="$(subst $(SPACE),$(COMMA),$(strip $(WASIX_SLOW_TESTS)))" \
+	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_SLOW_TEST_TIMEOUT_SCALE)" \
+	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) $(WASIX_V8_LANE_ENV) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
+	  --skip-tests=$(EDGE_NODE_TEST_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS),$(subst $(SPACE),$(COMMA),$(strip $(V8_WASIX_SKIP_TESTS))) \
+	  -j $(TEST_JOBS)
+
+test-wasix-v8-intl: $(WASIX_EDGEJS_WASM)
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for test-wasix-v8-intl" >&2; exit 1; }
+	@set -e; for t in $(QUICKJS_INTL_TESTS); do \
+	  echo "[intl v8 wasix] $$t"; \
+	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/test/$$t.js"; \
+	done
+	@echo "[intl v8 wasix] all locale tests passed"
+
 test-bytecode-cache:
 	EDGE_BIN=$(EDGE_BINARY) ./scripts/test-bytecode-cache.sh
 
@@ -509,6 +675,24 @@ framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
+# js-etherpad (framework) and js-next-ssr/js-next-standalone (standalone) are
+# skipped on the V8 WASIX lane: unclean-exit and binary-garbage-as-JSON
+# failures from the same lane-inherent bridge bugs tracked in ECO-416.
+framework-test-v8-wasix: $(WASIX_EDGEJS_WASM)
+	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for framework-test-v8-wasix" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS V8 WASIX' \
+		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-etherpad' \
+		WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
+		WASMER_EXTRA_ARGS="--experimental-napi" \
+		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
+
 framework-test-reset:
 	@if [ -x "$(EDGE_BINARY)" ]; then \
 		"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" reset $(FRAMEWORK_TEST_SELECTOR); \
@@ -531,6 +715,23 @@ standalone-build-test-run:
 		FRAMEWORK_TEST_EDGE_SKIP="$(FRAMEWORK_TEST_EDGE_SKIP)" \
 		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
 		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
+standalone-build-test: $(EDGE_BINARY)
+	@"$(EDGE_BINARY)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+
+standalone-build-test-v8-wasix: $(WASIX_EDGEJS_WASM)
+	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for standalone-build-test-v8-wasix" >&2; \
+		exit 1; \
+	}
+	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
+		FRAMEWORK_TEST_SKIP_SAFE=1 \
+		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS V8 WASIX' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-next-ssr,js-next-standalone' \
+		WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
+		WASMER_EXTRA_ARGS="--experimental-napi" \
+		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 	@SYMLINK_TARGET="$(abspath $(QUICKJS_EDGE_BINARY))" \
