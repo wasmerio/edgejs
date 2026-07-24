@@ -36,28 +36,20 @@ WASMER_BIN ?= wasmer
 WASIX_PACKAGE_DIR ?= $(CURDIR)
 WASIX_SSL_CERTS_DIR ?= ssl-certs
 WASIX_QUICKJS_NODE_TEST_RUNNER ?= $(CURDIR)/scripts/edge-wasix-node-runner.sh
-# Known-broken under the V8 imports WASIX lane, catalogued 2026-07-23 when the
-# lane was revived after the napi_wrap/js_source bridge fixes (see ECO-416 for
-# the burn-down). Clusters: pseudo-tty (no PTY under wasmer run), zlib +
-# string-decoder + webcrypto data/completion bugs, TLS session resumption,
-# http2 fd/sendfile responses (host segfault), dgram pingpong. All reproduce
-# on the pre-scope-rework bridge as well (not regressions).
+# Known-broken under the V8 imports WASIX lane (see ECO-416 for the
+# burn-down). Re-catalogued 2026-07-24 after the GuestHeap work landed (host-
+# side allocator over guest linear memory + V8 backing stores routed into it),
+# which fixed the zlib/string-decoder/http2-respond-file/buffer/tls-ticket/
+# webcrypto/fastutf8stream data-integrity clusters. Remaining clusters:
+# pseudo-tty (no PTY under wasmer run), dgram/dns/c-ares sockets,
+# worker/messageport crypto, http2 ping/goaway/debug, misc.
 V8_WASIX_SKIP_TESTS := \
   client-proxy/test-http-proxy-request-invalid-char-in-url.mjs \
-  client-proxy/test-http-request-proxy-post.mjs \
-  parallel/test-buffer-alloc.js \
   parallel/test-buffer-ascii.js \
-  parallel/test-buffer-badhex.js \
-  parallel/test-buffer-concat.js \
   parallel/test-buffer-constants.js \
-  parallel/test-buffer-generic-methods.js \
-  parallel/test-buffer-inspect.js \
-  parallel/test-buffer-swap.js \
   parallel/test-c-ares.js \
   parallel/test-crypto-key-objects-messageport.js \
-  parallel/test-crypto-pqc-sign-verify-ml-dsa.js \
   parallel/test-crypto-prime.js \
-  parallel/test-crypto-randomfillsync-regression.js \
   parallel/test-crypto-worker-thread.js \
   parallel/test-dgram-connect-send-callback-multi-buffer.js \
   parallel/test-dgram-connect-send-default-host.js \
@@ -77,80 +69,40 @@ V8_WASIX_SKIP_TESTS := \
   parallel/test-diagnostics-channel-tracing-channel-promise-unhandled.js \
   parallel/test-diagnostics-channel-worker-threads.js \
   parallel/test-dns-cancel-reverse-lookup.js \
-  parallel/test-dns.js \
   parallel/test-dns-multi-channel.js \
   parallel/test-dns-resolveany-bad-ancount.js \
   parallel/test-dns-resolveany.js \
   parallel/test-dns-resolver-max-timeout.js \
+  parallel/test-dns.js \
   parallel/test-domain-promise.js \
   parallel/test-event-capture-rejections.js \
-  parallel/test-fastutf8stream-destroy.js \
-  parallel/test-fastutf8stream-end.js \
-  parallel/test-fastutf8stream-flush.js \
-  parallel/test-fastutf8stream-flush-sync.js \
-  parallel/test-fastutf8stream-fsync.js \
-  parallel/test-fastutf8stream-periodicflush.js \
-  parallel/test-fastutf8stream-reopen.js \
-  parallel/test-fastutf8stream-retry.js \
-  parallel/test-fastutf8stream-sync.js \
-  parallel/test-fastutf8stream-write.js \
   parallel/test-file.js \
+  parallel/test-http-autoselectfamily.js \
   parallel/test-http2-debug.js \
   parallel/test-http2-goaway-opaquedata.js \
   parallel/test-http2-onping.js \
   parallel/test-http2-ping.js \
   parallel/test-http2-reset-flood.js \
-  parallel/test-http2-respond-file-fd.js \
-  parallel/test-http2-respond-file-filehandle.js \
-  parallel/test-http2-respond-file.js \
-  parallel/test-http2-respond-file-push.js \
-  parallel/test-http-autoselectfamily.js \
   parallel/test-https-autoselectfamily.js \
-  parallel/test-stream2-base64-single-char-read-end.js \
-  parallel/test-stream-readable-setEncoding-existing-buffers.js \
-  parallel/test-string-decoder-end.js \
   parallel/test-string-decoder-fuzz.js \
-  parallel/test-string-decoder.js \
   parallel/test-tls-handshake-exception.js \
-  parallel/test-tls-onread-static-buffer.js \
-  parallel/test-tls-ticket-12.js \
-  parallel/test-tls-ticket.js \
   parallel/test-webcrypto-cryptokey-workers.js \
-  parallel/test-webcrypto-derivebits-hkdf.js \
-  parallel/test-webcrypto-export-import-ml-dsa.js \
-  parallel/test-webcrypto-random.js \
   parallel/test-x509-escaping.js \
-  parallel/test-crypto-random.js \
-  parallel/test-zlib-brotli.js \
-  parallel/test-zlib-convenience-methods.js \
-  parallel/test-zlib-empty-buffer.js \
-  parallel/test-zlib-from-concatenated-gzip.js \
-  parallel/test-zlib-from-gzip-with-trailing-garbage.js \
-  parallel/test-zlib-maxOutputLength.js \
-  parallel/test-zlib-no-stream.js \
-  parallel/test-zlib-premature-end.js \
-  parallel/test-zlib-sync-no-event.js \
-  parallel/test-zlib-truncated.js \
-  parallel/test-zlib-unzip-one-byte-chunks.js \
-  parallel/test-zlib-write-after-end.js \
   pseudo-tty/console-dumb-tty.js \
   pseudo-tty/no_dropped_stdio.js \
   pseudo-tty/no_interleaved_stdio.js \
   pseudo-tty/stdin-setrawmode.js \
-  parallel/test-zlib-zstd.js \
   pseudo-tty/test-readable-tty-keepalive.js \
-  pseudo-tty/test-tty-color-support.js \
   pseudo-tty/test-tty-color-support-warning-2.js \
   pseudo-tty/test-tty-color-support-warning.js \
+  pseudo-tty/test-tty-color-support.js \
   pseudo-tty/test-tty-isatty.js \
   pseudo-tty/test-tty-stdin-call-end.js \
   pseudo-tty/test-tty-stdin-end.js \
   pseudo-tty/test-tty-stdout-end.js \
   pseudo-tty/test-tty-stdout-resize.js \
   pseudo-tty/test-tty-stream-constructors.js \
-  sequential/test-dgram-pingpong.js \
-  sequential/test-http2-large-file.js \
-  sequential/test-http2-timeout-large-write-file.js
+  sequential/test-dgram-pingpong.js
 
 # V8 (imports provider) WASIX lane: run the root wasmer.toml package
 # (build-wasix/edgejs.wasm) through the wasmer CLI's experimental N-API
