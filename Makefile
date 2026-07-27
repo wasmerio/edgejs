@@ -45,64 +45,29 @@ WASIX_QUICKJS_NODE_TEST_RUNNER ?= $(CURDIR)/scripts/edge-wasix-node-runner.sh
 # worker/messageport crypto, http2 ping/goaway/debug, misc.
 V8_WASIX_SKIP_TESTS := \
   client-proxy/test-http-proxy-request-invalid-char-in-url.mjs \
-  parallel/test-buffer-ascii.js \
-  parallel/test-buffer-constants.js \
   parallel/test-c-ares.js \
   parallel/test-crypto-key-objects-messageport.js \
   parallel/test-crypto-prime.js \
   parallel/test-crypto-worker-thread.js \
-  parallel/test-dgram-connect-send-callback-multi-buffer.js \
-  parallel/test-dgram-connect-send-default-host.js \
-  parallel/test-dgram-connect-send-empty-array.js \
-  parallel/test-dgram-connect-send-empty-packet.js \
-  parallel/test-dgram-connect-send-multi-buffer-copy.js \
-  parallel/test-dgram-connect-send-multi-string-array.js \
-  parallel/test-dgram-implicit-bind.js \
-  parallel/test-dgram-send-callback-multi-buffer-empty-address.js \
-  parallel/test-dgram-send-callback-multi-buffer.js \
-  parallel/test-dgram-send-default-host.js \
-  parallel/test-dgram-send-empty-array.js \
-  parallel/test-dgram-send-empty-packet.js \
-  parallel/test-dgram-send-multi-buffer-copy.js \
-  parallel/test-dgram-send-multi-string-array.js \
-  parallel/test-dgram-udp4.js \
-  parallel/test-diagnostics-channel-tracing-channel-promise-unhandled.js \
   parallel/test-diagnostics-channel-worker-threads.js \
-  parallel/test-dns-cancel-reverse-lookup.js \
-  parallel/test-dns-multi-channel.js \
-  parallel/test-dns-resolveany-bad-ancount.js \
-  parallel/test-dns-resolveany.js \
-  parallel/test-dns-resolver-max-timeout.js \
-  parallel/test-dns.js \
-  parallel/test-domain-promise.js \
-  parallel/test-event-capture-rejections.js \
   parallel/test-file.js \
-  parallel/test-http-autoselectfamily.js \
-  parallel/test-http2-debug.js \
-  parallel/test-http2-goaway-opaquedata.js \
-  parallel/test-http2-onping.js \
-  parallel/test-http2-ping.js \
   parallel/test-http2-reset-flood.js \
-  parallel/test-https-autoselectfamily.js \
-  parallel/test-string-decoder-fuzz.js \
   parallel/test-tls-handshake-exception.js \
   parallel/test-webcrypto-cryptokey-workers.js \
-  parallel/test-x509-escaping.js \
   pseudo-tty/console-dumb-tty.js \
   pseudo-tty/no_dropped_stdio.js \
   pseudo-tty/no_interleaved_stdio.js \
   pseudo-tty/stdin-setrawmode.js \
   pseudo-tty/test-readable-tty-keepalive.js \
+  pseudo-tty/test-tty-color-support.js \
   pseudo-tty/test-tty-color-support-warning-2.js \
   pseudo-tty/test-tty-color-support-warning.js \
-  pseudo-tty/test-tty-color-support.js \
   pseudo-tty/test-tty-isatty.js \
   pseudo-tty/test-tty-stdin-call-end.js \
   pseudo-tty/test-tty-stdin-end.js \
   pseudo-tty/test-tty-stdout-end.js \
   pseudo-tty/test-tty-stdout-resize.js \
-  pseudo-tty/test-tty-stream-constructors.js \
-  sequential/test-dgram-pingpong.js
+  pseudo-tty/test-tty-stream-constructors.js
 
 # V8 (imports provider) WASIX lane: run the root wasmer.toml package
 # (build-wasix/edgejs.wasm) through the wasmer CLI's experimental N-API
@@ -309,7 +274,6 @@ WASIX_SLOW_WEBCRYPTO_TESTS := \
   parallel/test-webcrypto-wrap-unwrap.js
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
 WASIX_SLOW_TESTS := \
-  parallel/test-buffer-constants.js \
   parallel/test-crypto-oneshot-hash-xof.js \
   parallel/test-fastutf8stream-flush-sync.js \
   parallel/test-http2-respond-file-with-pipe.js \

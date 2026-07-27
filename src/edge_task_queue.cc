@@ -91,9 +91,13 @@ static napi_value TaskQueueSetPromiseRejectCallback(napi_env env, napi_callback_
   napi_value argv[1] = {nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) return nullptr;
 
-#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
+  // Install V8's promise-reject callback on every provider. On the embedded
+  // providers (bundled-v8 / quickjs) this links directly; on the imports
+  // provider it resolves to the N-API bridge import, which tells the host to
+  // wire PromiseRejectCallback and dispatch rejections back into the guest.
+  // Without this the imports lane never emits 'unhandledRejection' (and the
+  // captureRejections / promise-unhandled diagnostics never fire).
   (void)unofficial_napi_set_promise_reject_callback(env, argv[0]);
-#endif
 
   auto& st = GetTaskQueueState(env);
   DeleteRefIfAny(env, &st.promise_reject_callback_ref);

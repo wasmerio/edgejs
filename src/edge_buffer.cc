@@ -32,11 +32,18 @@ constexpr double kEdgeUnsafeArrayBufferAllocCap = 2147483647.0;
 #if defined(EDGE_NAPI_QUICKJS)
 constexpr size_t kEdgeStringMaxLength = 0x3fffffff;
 constexpr const char* kEdgeStringMaxLengthHex = "0x3fffffff";
-#else
+#elif defined(EDGE_EMBEDDED_NAPI_PROVIDER)
+// Embedded V8: strings live in-process; size by the actual pointer width.
 constexpr size_t kEdgeStringMaxLength =
     sizeof(void*) == 4 ? static_cast<size_t>(0x18ffffe8) : static_cast<size_t>(0x1fffffe8);
 constexpr const char* kEdgeStringMaxLengthHex =
     sizeof(void*) == 4 ? "0x18ffffe8" : "0x1fffffe8";
+#else
+// Imports provider: strings are created in the host's 64-bit V8, so the limit
+// is V8 String::kMaxLength (0x1fffffe8 with pointer compression), independent
+// of the wasm32 guest's pointer width.
+constexpr size_t kEdgeStringMaxLength = static_cast<size_t>(0x1fffffe8);
+constexpr const char* kEdgeStringMaxLengthHex = "0x1fffffe8";
 #endif
 
 std::string GetUtf8String(napi_env env, napi_value value);
