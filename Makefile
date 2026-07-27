@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-quickjs-lang test-wasix-quickjs-intl test-intl test-lang test-wasix-v8-only test-wasix-v8-intl framework-test-v8-wasix standalone-build-test-v8-wasix test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-quickjs-lang test-wasix-quickjs-intl test-intl test-lang test-wasix-v8-only test-wasix-v8-intl test-wasix-v8-lang framework-test-v8-wasix standalone-build-test-v8-wasix test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -111,7 +111,7 @@ WASIX_V8_LANE_ENV := \
 	WASMER_BIN="$(WASMER_BIN)" \
 	EDGEJS_ROOT="$(CURDIR)" \
 	WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
-	WASIX_EDGEJS_WORKSPACE_DIRS="test,lib,deps,assets,build-wasix" \
+	WASIX_EDGEJS_WORKSPACE_DIRS="test,tests,lib,deps,assets,build-wasix" \
 	WASIX_EDGEJS_GUEST_EXEC_PATH="/workspace/build-wasix/edgejs.wasm" \
 	WASMER_EXTRA_ARGS="--experimental-napi"
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -503,6 +503,23 @@ test-wasix-v8-intl: $(WASIX_EDGEJS_WASM)
 	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/test/$$t.js"; \
 	done
 	@echo "[intl v8 wasix] all locale tests passed"
+
+# edgejs-owned tests (tests/js) that exercise behavior specific to the
+# V8-imports WASIX bridge — e.g. guest N-API finalizer dispatch, which only
+# exists when JS runs in host V8 and the node runtime runs in the guest. These
+# are self-contained (assert + non-zero exit) and run directly through the
+# WASIX runner, not the node-test harness.
+WASIX_V8_LANG_TESTS := \
+  guest-finalizer-memory
+
+test-wasix-v8-lang: $(WASIX_EDGEJS_WASM)
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for test-wasix-v8-lang" >&2; exit 1; }
+	@set -e; for t in $(WASIX_V8_LANG_TESTS); do \
+	  echo "[lang v8 wasix] $$t"; \
+	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
+	done
+	@echo "[lang v8 wasix] all language tests passed"
 
 test-bytecode-cache:
 	EDGE_BIN=$(EDGE_BINARY) ./scripts/test-bytecode-cache.sh
