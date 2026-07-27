@@ -50,21 +50,7 @@ V8_WASIX_SKIP_TESTS := \
   parallel/test-crypto-worker-thread.js \
   parallel/test-diagnostics-channel-worker-threads.js \
   parallel/test-http2-reset-flood.js \
-  parallel/test-webcrypto-cryptokey-workers.js \
-  pseudo-tty/console-dumb-tty.js \
-  pseudo-tty/no_dropped_stdio.js \
-  pseudo-tty/no_interleaved_stdio.js \
-  pseudo-tty/stdin-setrawmode.js \
-  pseudo-tty/test-readable-tty-keepalive.js \
-  pseudo-tty/test-tty-color-support.js \
-  pseudo-tty/test-tty-color-support-warning-2.js \
-  pseudo-tty/test-tty-color-support-warning.js \
-  pseudo-tty/test-tty-isatty.js \
-  pseudo-tty/test-tty-stdin-call-end.js \
-  pseudo-tty/test-tty-stdin-end.js \
-  pseudo-tty/test-tty-stdout-end.js \
-  pseudo-tty/test-tty-stdout-resize.js \
-  pseudo-tty/test-tty-stream-constructors.js
+  parallel/test-webcrypto-cryptokey-workers.js
 
 # V8 (imports provider) WASIX lane: run the root wasmer.toml package
 # (build-wasix/edgejs.wasm) through the wasmer CLI's experimental N-API
@@ -75,7 +61,7 @@ WASIX_V8_LANE_ENV := \
 	WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
 	WASIX_EDGEJS_WORKSPACE_DIRS="test,tests,lib,deps,assets,build-wasix" \
 	WASIX_EDGEJS_GUEST_EXEC_PATH="/workspace/build-wasix/edgejs.wasm" \
-	WASMER_EXTRA_ARGS="--experimental-napi"
+	WASMER_EXTRA_ARGS="--quiet --experimental-napi"
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
