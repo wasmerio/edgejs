@@ -586,9 +586,12 @@ framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
-# js-etherpad (framework) and js-next-ssr/js-next-standalone (standalone) are
-# skipped on the V8 WASIX lane: unclean-exit and binary-garbage-as-JSON
-# failures from the same lane-inherent bridge bugs tracked in ECO-416.
+# All edge apps now run on the V8 WASIX lane (full parity with QuickJS): GuestHeap
+# removed the copy-layer corruption ("binary-garbage-as-JSON") and the N-API import
+# layers now re-raise guest WASI process exits (ECO-416), fixing js-etherpad's
+# unclean-exit and js-next-ssr/js-next-standalone. Only the docusaurus static sites
+# stay skipped here -- they fail to build on the Node.js reference itself (build
+# tooling), which QuickJS also skips via FRAMEWORK_TEST_NODE_SKIP.
 framework-test-v8-wasix: $(WASIX_EDGEJS_WASM)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
@@ -599,9 +602,8 @@ framework-test-v8-wasix: $(WASIX_EDGEJS_WASM)
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS V8 WASIX' \
 		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
-		FRAMEWORK_TEST_EDGE_SKIP='js-etherpad' \
 		WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
-		WASMER_EXTRA_ARGS="--experimental-napi" \
+		WASMER_EXTRA_ARGS="--quiet --experimental-napi" \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 framework-test-reset:
@@ -639,9 +641,8 @@ standalone-build-test-v8-wasix: $(WASIX_EDGEJS_WASM)
 	@SYMLINK_TARGET="$(abspath $(WASIX_FRAMEWORK_RUNNER))" \
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS V8 WASIX' \
-		FRAMEWORK_TEST_EDGE_SKIP='js-next-ssr,js-next-standalone' \
 		WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)" \
-		WASMER_EXTRA_ARGS="--experimental-napi" \
+		WASMER_EXTRA_ARGS="--quiet --experimental-napi" \
 		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
 standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)

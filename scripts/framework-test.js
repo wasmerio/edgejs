@@ -1445,6 +1445,13 @@ function makeProjectEnv(port) {
     BROWSER: 'none',
     CI: '1',
     HOST: DEFAULT_HOST,
+    // Pin HOSTNAME to the loopback host. Servers that bind process.env.HOSTNAME
+    // (e.g. the Next.js standalone server: `server.listen(port, HOSTNAME)`)
+    // would otherwise inherit the ambient machine hostname, which does not
+    // resolve inside the WASIX guest (its mounted /etc/hosts only knows
+    // localhost) -> the bind's DNS lookup hangs and the harness times out on
+    // 127.0.0.1. Mirrors HOST above and standalone.json's entry.env.
+    HOSTNAME: DEFAULT_HOST,
   };
 
   if (typeof port === 'number') {
