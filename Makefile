@@ -45,12 +45,10 @@ WASIX_QUICKJS_NODE_TEST_RUNNER ?= $(CURDIR)/scripts/edge-wasix-node-runner.sh
 # worker/messageport crypto, http2 ping/goaway/debug, misc.
 V8_WASIX_SKIP_TESTS := \
   client-proxy/test-http-proxy-request-invalid-char-in-url.mjs \
-  parallel/test-c-ares.js \
   parallel/test-crypto-key-objects-messageport.js \
   parallel/test-crypto-prime.js \
   parallel/test-crypto-worker-thread.js \
   parallel/test-diagnostics-channel-worker-threads.js \
-  parallel/test-file.js \
   parallel/test-http2-reset-flood.js \
   parallel/test-tls-handshake-exception.js \
   parallel/test-webcrypto-cryptokey-workers.js \
