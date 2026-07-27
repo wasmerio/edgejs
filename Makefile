@@ -50,7 +50,6 @@ V8_WASIX_SKIP_TESTS := \
   parallel/test-crypto-worker-thread.js \
   parallel/test-diagnostics-channel-worker-threads.js \
   parallel/test-http2-reset-flood.js \
-  parallel/test-tls-handshake-exception.js \
   parallel/test-webcrypto-cryptokey-workers.js \
   pseudo-tty/console-dumb-tty.js \
   pseudo-tty/no_dropped_stdio.js \
