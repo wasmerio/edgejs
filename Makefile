@@ -327,7 +327,7 @@ build-native-quickjs:
 	$(MAKE) -C napi build-native-quickjs
 
 build:
-	$(BUILD_ENV) cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) -DEDGE_DEFAULT_WASMER_PACKAGE=$(EDGE_WASMER_PACKAGE) -DEDGE_BUILD_NAPI_TESTS=OFF $(NAPI_V8_CMAKE_ARGS) $(EXTRA_CMAKE_ARGS) $(CMAKE_ARGS)
+	$(BUILD_ENV) cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) -DEDGE_DEFAULT_WASMER_PACKAGE=$(EDGE_WASMER_PACKAGE) -DEDGE_BUILD_NAPI_TESTS=OFF -DEDGE_GTEST_DISCOVERY_MODE=PRE_TEST $(NAPI_V8_CMAKE_ARGS) $(EXTRA_CMAKE_ARGS) $(CMAKE_ARGS)
 	$(BUILD_ENV) cmake --build $(BUILD_DIR) -j$(JOBS)
 
 build-edge: build
@@ -629,8 +629,13 @@ standalone-build-test-run:
 		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
 		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
 
+# standalone-build-test.js defaults its runner to build-edge-quickjs-cli/edge (a
+# QuickJS binary). The native V8 job only builds build-edge/edge, so pin the runner
+# to it explicitly — mirroring standalone-build-test-quickjs-native — otherwise the
+# default resolves to a binary this lane never builds and the step fails.
 standalone-build-test: $(EDGE_BINARY)
-	@"$(EDGE_BINARY)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
+	@SYMLINK_TARGET="$(abspath $(EDGE_BINARY))" \
+		"$(EDGE_BINARY)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
 
 standalone-build-test-v8-wasix: $(WASIX_EDGEJS_WASM)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"

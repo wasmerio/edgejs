@@ -1139,15 +1139,34 @@ async function runProjectBuild(project, stage) {
   const logPath = buildLogPath(project, buildStage);
   removeFileOrSymlink(logPath);
 
-  return runProjectCommand({
-    description: `build for ${project.name}`,
-    detached: false,
-    env: makeProjectEnv(),
-    errorMessage: `build failed for ${project.name} on ${buildStage.label}`,
-    extraArgs: [],
-    logPath,
-    project,
-    scriptName: 'build',
+  const errorMessage = `build failed for ${project.name} on ${buildStage.label}`;
+  const maxAttempts = 3;
+  let result = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    result = await runProjectCommand({
+      description: `build for ${project.name}`,
+      detached: false,
+      env: makeProjectEnv(),
+      errorMessage,
+      extraArgs: [],
+      logPath,
+      append: attempt > 1,
+      allowFailure: true,
+      project,
+      scriptName: 'build',
+    });
+    if (result.ok) {
+      return result;
+    }
+    if (attempt === maxAttempts || !buildLikelyCrashed(logPath)) {
+      break;
+    }
+    logWarn(`build for ${project.name} crashed (not a deterministic failure); retrying (attempt ${attempt + 1}/${maxAttempts})`);
+  }
+
+  fail(errorMessage, {
+    detail: summarizeLogFailure(result.logPath),
+    logPath: result.logPath,
   });
 }
 
@@ -1464,13 +1483,37 @@ function makeProjectEnv(port) {
 async function runProjectCommand(options) {
   const handle = spawnLoggedProcess(options);
   const result = await handle.exitPromise;
-  if (!result.ok) {
+  if (!result.ok && !options.allowFailure) {
     fail(options.errorMessage, {
       detail: summarizeLogFailure(result.logPath),
       logPath: result.logPath,
     });
   }
   return result;
+}
+
+// A build that dies from a native crash (rather than a deterministic non-zero exit)
+// is an intermittent toolchain fault, not a real build error — e.g. `gatsby build`
+// segfaults in the lmdb native addon on CI runners. pnpm wraps the crashing child so
+// we see its non-zero ELIFECYCLE exit, not the signal directly; detect the crash from
+// the log instead. Ordinary build failures (broken code, missing deps) never match
+// these patterns and are therefore never retried.
+function buildLikelyCrashed(logPath) {
+  if (!logPath || !fs.existsSync(logPath)) {
+    return false;
+  }
+  const text = fs.readFileSync(logPath, 'utf8');
+  const crashPatterns = [
+    /segmentation fault/i,
+    /\bSIGSEGV\b/,
+    /\bSIGABRT\b/,
+    /\bSIGBUS\b/,
+    /core dumped/i,
+    /command failed with signal/i,
+    /exited with[^\n]*\bsignal\b/i,
+    /worker exited unexpectedly/i,
+  ];
+  return crashPatterns.some((pattern) => pattern.test(text));
 }
 
 function spawnLoggedProcess(options) {

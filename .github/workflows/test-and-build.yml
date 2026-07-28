@@ -216,12 +216,18 @@ jobs:
 
       # FRAMEWORK_TEST_SKIP_SAFE matches the quickjs lanes: the safe-mode
       # stage needs a wasmer CLI, which these jobs do not provision.
+      # Exclude js-gatsby-* on macOS only: `gatsby build` hangs on GitHub macOS
+      # runners (a gatsby-worker/sharp issue), and the harness has no build-step
+      # timeout, so it hangs the whole job — a retry cannot clear a hang. This is
+      # the build step, not EdgeJS running the app. Linux builds gatsby fine and
+      # retries the intermittent lmdb segfault instead. Mirrors quickjs-macos.
       - name: Test framework apps (V8 native)
         shell: bash
         run: |
           set -euo pipefail
           FRAMEWORK_TEST_SKIP_SAFE=1 \
             FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+            FRAMEWORK_TEST_EXCLUDE='js-gatsby-staticsite,js-gatsby-staticsite2' \
             make framework-test
 
       - name: Test standalone builds (V8 native)

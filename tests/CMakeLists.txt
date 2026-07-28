@@ -2,6 +2,13 @@ include(GoogleTest)
 
 set(NAPI_V8_GTEST_ROOT "${PROJECT_ROOT}/deps/googletest")
 set(EDGE_GTEST_PER_TEST_TIMEOUT_SECONDS 60)
+# POST_BUILD (CMake's default) runs each freshly-built test binary at build time to
+# enumerate its cases. On CI macOS runners that discovery intermittently emits empty
+# JSON, which ParseTestList.cmake rejects and the whole build fails. PRE_TEST defers
+# discovery to ctest time; the release build (`make build`) sets it so the build never
+# runs the test binaries. Local `cmake` keeps POST_BUILD (dedupe below applies then).
+set(EDGE_GTEST_DISCOVERY_MODE "POST_BUILD" CACHE STRING
+    "gtest_discover_tests DISCOVERY_MODE (POST_BUILD runs binaries at build time; PRE_TEST defers to ctest).")
 set(EDGE_CTEST_RESOURCE_LOCK_BUCKETS "24" CACHE STRING
     "Max concurrent edge gtest cases when ctest parallelism is unbounded (0 disables).")
 set(EDGE_CTEST_RESOURCE_LOCK_PREFIX "edge_gtest_slot" CACHE STRING
@@ -57,6 +64,7 @@ if(TARGET napi_v8 AND NAPI_V8_LIBRARY)
     set(_gtest_tests_manifest "${CMAKE_CURRENT_BINARY_DIR}/${target_name}[1]_tests.cmake")
     gtest_discover_tests(
       ${target_name}
+      DISCOVERY_MODE ${EDGE_GTEST_DISCOVERY_MODE}
       DISCOVERY_TIMEOUT 30
       TEST_PREFIX "edge.${target_name}."
       PROPERTIES
