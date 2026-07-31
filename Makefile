@@ -457,7 +457,8 @@ test-wasix-v8-intl: $(WASIX_EDGEJS_WASM)
 # are self-contained (assert + non-zero exit) and run directly through the
 # WASIX runner, not the node-test harness.
 WASIX_V8_LANG_TESTS := \
-  guest-finalizer-memory
+  guest-finalizer-memory \
+  finalization-registry-fires
 
 test-wasix-v8-lang: $(WASIX_EDGEJS_WASM)
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
