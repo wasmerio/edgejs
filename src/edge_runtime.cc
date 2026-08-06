@@ -1690,14 +1690,15 @@ int RunEventLoopUntilQuiescent(napi_env env, std::string* error_out) {
         [](uv_handle_t* h, void* arg) {
           if (h == nullptr || arg == nullptr) return;
           auto* st = static_cast<TimeoutCleanupState*>(arg);
-          if (uv_handle_get_type(h) == UV_PROCESS) {
+          const uv_handle_type type = uv_handle_get_type(h);
+          if (type == UV_PROCESS) {
             auto* p = reinterpret_cast<uv_process_t*>(h);
             if (p->pid > 0) {
               (void)uv_process_kill(p, SIGKILL);
             }
             st->killed_processes += 1;
           }
-          if (!uv_is_closing(h)) {
+          if (EdgeIsCloseableHandle(h) && !uv_is_closing(h)) {
             uv_close(h, [](uv_handle_t* /*handle*/) {});
             st->closed_handles += 1;
           }

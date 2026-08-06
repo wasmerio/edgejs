@@ -13,4 +13,4 @@ case "${WASIXCC_COMPILER_POST_FLAGS_CXX:-}" in
     ;;
 esac
 
-exec wasixcc++ "$@"
+exec wasixcc++ -mno-wide-arithmetic "$@"

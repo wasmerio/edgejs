@@ -218,6 +218,7 @@ function(edge_apply_runtime_compile_surface target_name)
       edge_ncrypto
       edge_brotli
       edge_nghttp2
+      edge_uvwasi
       edge_zstd
       uv_a
       c-ares::cares
@@ -274,6 +275,9 @@ add_library(edge_bindings OBJECT EXCLUDE_FROM_ALL
   ${EDGE_NATIVE_BINDING_SOURCES}
 )
 edge_apply_runtime_compile_surface(edge_bindings)
+if(EDGE_QUICKJS_WEBASSEMBLY_ENABLED)
+  target_compile_definitions(edge_bindings PRIVATE EDGE_QUICKJS_WEBASSEMBLY=1)
+endif()
 
 add_library(edge_crypto OBJECT EXCLUDE_FROM_ALL
   ${EDGE_CRYPTO_SOURCES}

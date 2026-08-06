@@ -6,6 +6,7 @@
 #include <new>
 #include <utility>
 
+#include "edge_env_loop.h"
 #include "edge_runtime_platform.h"
 #include "edge_handle_scope.h"
 #include "edge_timers_host.h"
@@ -103,7 +104,7 @@ void CloseEnvLoopHandles(uv_loop_t* loop) {
   uv_walk(
       loop,
       [](uv_handle_t* handle, void*) {
-        if (handle == nullptr || uv_is_closing(handle) != 0) return;
+        if (!EdgeIsCloseableHandle(handle) || uv_is_closing(handle) != 0) return;
         uv_close(handle, nullptr);
       },
       nullptr);

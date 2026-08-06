@@ -2,4 +2,4 @@
 
 . "$(dirname "$0")/wasixcc-env.sh" wasixcc
 
-exec wasixcc "$@"
+exec wasixcc -mno-wide-arithmetic "$@"

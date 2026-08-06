@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -391,6 +392,9 @@ void StopWorkersForEnv(napi_env env) {
     if (worker == nullptr) continue;
     worker->parent_env_closing.store(true, std::memory_order_release);
     RequestWorkerStop(worker);
+#if defined(__wasi__)
+    (void)pthread_kill(worker->thread, SIGKILL);
+#endif
     CleanupWorkerForParentEnvShutdown(worker);
   }
 }
@@ -1045,6 +1049,22 @@ void OnWorkerParentCompletionTask(napi_env /*env*/, void* data) {
   FinishWorkerOnParentThread(static_cast<Worker*>(data));
 }
 
+void NotifyTerminatedWorkerOnParentThread(napi_env /*env*/, void* data) {
+  auto* wrap = static_cast<Worker*>(data);
+  if (wrap == nullptr || wrap->env == nullptr) return;
+  if (wrap->parent_env_closing.load(std::memory_order_acquire)) return;
+  const bool was_refed = wrap->has_ref.exchange(false, std::memory_order_acq_rel);
+  if (was_refed) {
+    (void)EdgeRuntimePlatformReleaseRef(wrap->env);
+  }
+  wrap->resource_alive.store(false, std::memory_order_release);
+  if (wrap->active_handle_token != nullptr) {
+    EdgeUnregisterActiveHandle(wrap->env, wrap->active_handle_token);
+    wrap->active_handle_token = nullptr;
+  }
+  CallWorkerOnExit(wrap);
+}
+
 void QueueWorkerParentCompletion(Worker* wrap) {
   if (wrap == nullptr ||
       wrap->env == nullptr ||
@@ -1515,7 +1535,21 @@ napi_value WorkerImplStopThread(napi_env env, napi_callback_info info) {
   Worker* wrap = UnwrapWorker(env, this_arg);
   if (wrap == nullptr || !wrap->started.load(std::memory_order_acquire)) return Undefined(env);
   UnrefWorkerMessagePort(wrap);
+#if defined(__wasi__)
+  // WASIX interrupts a blocked guest pthread to implement termination. The
+  // parent still needs the ordinary Worker completion path and a clean status.
+  wrap->requested_exit_code = 0;
+#endif
   RequestWorkerStop(wrap);
+#if defined(__wasi__)
+  // Interrupt a worker blocked in a WASIX futex so it can leave the guest
+  // pthread instead of keeping the WASIX process alive indefinitely.
+  (void)pthread_kill(wrap->thread, SIGKILL);
+  wrap->exit_code = wrap->requested_exit_code;
+  wrap->custom_err.clear();
+  wrap->custom_err_reason.clear();
+  NotifyTerminatedWorkerOnParentThread(env, wrap);
+#endif
   return Undefined(env);
 }
 
@@ -1704,21 +1738,21 @@ napi_value WorkerImplTakeHeapSnapshot(napi_env env, napi_callback_info info) {
 
 napi_value CreateWorkerCtor(napi_env env) {
   static constexpr napi_property_descriptor kProps[] = {
-      {"startThread", nullptr, WorkerImplStartThread, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"stopThread", nullptr, WorkerImplStopThread, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"hasRef", nullptr, WorkerImplHasRef, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"ref", nullptr, WorkerImplRef, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"unref", nullptr, WorkerImplUnref, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"getResourceLimits", nullptr, WorkerImplGetResourceLimits, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"loopStartTime", nullptr, WorkerImplLoopStartTime, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"loopIdleTime", nullptr, WorkerImplLoopIdleTime, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"takeHeapSnapshot", nullptr, WorkerImplTakeHeapSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"getHeapStatistics", nullptr, WorkerImplGetHeapStatistics, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"cpuUsage", nullptr, WorkerImplCpuUsage, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"startCpuProfile", nullptr, WorkerImplStartCpuProfile, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"stopCpuProfile", nullptr, WorkerImplStopCpuProfile, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"startHeapProfile", nullptr, WorkerImplStartHeapProfile, nullptr, nullptr, nullptr, napi_default, nullptr},
-      {"stopHeapProfile", nullptr, WorkerImplStopHeapProfile, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"startThread", nullptr, WorkerImplStartThread, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"stopThread", nullptr, WorkerImplStopThread, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"hasRef", nullptr, WorkerImplHasRef, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"ref", nullptr, WorkerImplRef, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"unref", nullptr, WorkerImplUnref, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"getResourceLimits", nullptr, WorkerImplGetResourceLimits, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"loopStartTime", nullptr, WorkerImplLoopStartTime, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"loopIdleTime", nullptr, WorkerImplLoopIdleTime, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"takeHeapSnapshot", nullptr, WorkerImplTakeHeapSnapshot, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"getHeapStatistics", nullptr, WorkerImplGetHeapStatistics, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"cpuUsage", nullptr, WorkerImplCpuUsage, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"startCpuProfile", nullptr, WorkerImplStartCpuProfile, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"stopCpuProfile", nullptr, WorkerImplStopCpuProfile, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"startHeapProfile", nullptr, WorkerImplStartHeapProfile, nullptr, nullptr, nullptr, napi_default_method, nullptr},
+      {"stopHeapProfile", nullptr, WorkerImplStopHeapProfile, nullptr, nullptr, nullptr, napi_default_method, nullptr},
   };
   napi_value ctor = nullptr;
   if (napi_define_class(env,

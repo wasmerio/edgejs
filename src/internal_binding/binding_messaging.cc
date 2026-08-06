@@ -28,6 +28,7 @@
 #include "edge_handle_wrap.h"
 #include "edge_runtime.h"
 #include "edge_worker_env.h"
+#include "webassembly/edge_wasm.h"
 
 namespace internal_binding {
 
@@ -1070,6 +1071,12 @@ napi_value PrepareTransferableDataForStructuredClone(napi_env env,
   if (IsCryptoKeyObjectValue(env, value)) {
     return CreateCryptoKeyObjectCloneMarker(env, value);
   }
+#if defined(EDGE_NAPI_QUICKJS) && defined(EDGE_QUICKJS_WEBASSEMBLY)
+  if (napi_value marker = EdgePrepareQuickJsWebAssemblyClone(env, value);
+      marker != nullptr) {
+    return marker;
+  }
+#endif
   if (!IsObjectLike(env, value)) return value;
 
   bool is_array = false;
@@ -1211,6 +1218,12 @@ napi_value RestoreTransferableDataAfterStructuredClone(napi_env env, napi_value 
     if (restored_data == nullptr) return nullptr;
     return DeserializeJSTransferableCloneMarker(env, restored_data, deserialize_info);
   }
+
+#if defined(EDGE_NAPI_QUICKJS) && defined(EDGE_QUICKJS_WEBASSEMBLY)
+  if (EdgeIsQuickJsWebAssemblyCloneMarker(env, value)) {
+    return EdgeRestoreQuickJsWebAssemblyClone(env, value);
+  }
+#endif
 
   napi_value blob_data = nullptr;
   if (IsBlobHandleCloneMarker(env, value, &blob_data)) {

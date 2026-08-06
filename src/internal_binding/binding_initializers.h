@@ -33,6 +33,7 @@ napi_value InitSymbols(napi_env env);
 napi_value InitUndici(napi_env env);
 napi_value InitUtil(napi_env env);
 napi_value InitV8(napi_env env);
+napi_value InitWasi(napi_env env);
 napi_value InitWasmWebApi(napi_env env);
 napi_value InitWatchdog(napi_env env);
 napi_value InitWorker(napi_env env);
