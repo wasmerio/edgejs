@@ -111,7 +111,12 @@ fetch_source() {
   # wasmer-wild at lib/wild/libwild). --recursive covers lib/wild's nested
   # submodule. The test-suite submodules are not needed.
   git -C "$SRC_DIR" -c protocol.version=2 submodule update --init --depth 1 lib/napi
-  git -C "$SRC_DIR" -c protocol.version=2 submodule update --init --recursive --depth 1 lib/wild
+  # wasmerio/wasmer#6848 ("port to vanilla Wild") dropped the lib/wild submodule,
+  # so it only exists on refs from before that. Asking for it unconditionally
+  # fails the checkout outright on anything newer.
+  if [ -n "$(git -C "$SRC_DIR" ls-tree HEAD lib/wild 2>/dev/null)" ]; then
+    git -C "$SRC_DIR" -c protocol.version=2 submodule update --init --recursive --depth 1 lib/wild
+  fi
 }
 
 # Setup mirrored from wasmer's own Builds workflow (.github/workflows/build.yml
