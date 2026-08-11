@@ -146,6 +146,17 @@ WASIX_SKIP_UNIX_SOCKET_TESTS := \
   parallel/test-tls-net-connect-prefer-path.js \
   parallel/test-tls-wrap-econnreset-pipe.js \
   parallel/test-http-client-response-domain.js
+# The known_issues/ entry is a later addition (2026-08-11). Cluster shares a
+# dgram socket by sending the bound descriptor to the worker over IPC, and
+# primary.js always picks SharedHandle for udp4/udp6 regardless of scheduling
+# policy. WASI has no msghdr/SCM_RIGHTS, so that descriptor can never be
+# delivered and the worker's bind callback never fires -- the run times out
+# rather than failing, which a [negative] test needs it to do. Its non-negative
+# sibling sequential/test-dgram-bind-shared-ports.js is skipped just above for
+# the same reason; this one only escaped because the list carried no
+# known_issues/ paths. See wasix-org/libuv#14, which makes the underlying send
+# fail with ENOSYS instead of stalling silently -- necessary for diagnosing
+# this, but not sufficient to make the test pass.
 WASIX_SKIP_CLUSTER_FORK_TESTS := \
   parallel/test-dgram-bind-socket-close-before-cluster-reply.js \
   parallel/test-dgram-cluster-close-during-bind.js \
@@ -163,7 +174,8 @@ WASIX_SKIP_CLUSTER_FORK_TESTS := \
   parallel/test-crypto-secure-heap.js \
   parallel/test-domain-top-level-error-handler-throw.js \
   parallel/test-domain-uncaught-exception.js \
-  sequential/test-dgram-bind-shared-ports.js
+  sequential/test-dgram-bind-shared-ports.js \
+  known_issues/test-dgram-bind-shared-ports-after-port-0.js
 WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
   parallel/test-stream-pipeline-process.js \
   parallel/test-domain-abort-on-uncaught.js \
