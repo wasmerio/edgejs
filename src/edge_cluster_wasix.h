@@ -19,4 +19,22 @@
 // byte-identical to upstream.
 void EdgeMaybeInstallWasixClusterReusePort(napi_env env);
 
+// Installs the primary-side half of the strategy: a broker that arbitrates the
+// ephemeral port behind a port-0 listen. No-op on native targets, outside the
+// primary, and after the first call.
+//
+// A port-0 listen means "any port", but a cluster only stays one server if
+// every worker lands on the *same* one. Upstream gets that for free by binding
+// once in the primary and sharing the descriptor; without SCM_RIGHTS the
+// workers must instead be told which number to bind, which is what the broker
+// answers. Only a port number crosses the channel, never a descriptor.
+//
+// Call this when a cluster.fork() spawn is observed rather than at startup:
+// that is the first point where the process is known to be a cluster primary,
+// and `cluster` is already loaded by then, so it costs nothing. Requiring
+// `cluster` eagerly would add ~21 ms to the startup of every process.
+// createWorkerProcess() runs before cluster.emit('fork'), so a broker
+// installed during the spawn still observes the worker that triggered it.
+void EdgeMaybeInstallWasixClusterPrimary(napi_env env);
+
 #endif  // EDGE_CLUSTER_WASIX_H_

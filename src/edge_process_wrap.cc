@@ -22,6 +22,7 @@
 #include "edge_handle_scope.h"
 #include "edge_handle_wrap.h"
 #include "edge_runtime.h"
+#include "edge_cluster_wasix.h"
 #include "edge_stream_base.h"
 
 namespace {
@@ -552,6 +553,17 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
     RelocateWasixIpcStdio(&stdio, ipc_index);
     if (!env_storage.empty()) {
       UpdateEnvPairInt(&env_storage, &envp, "NODE_CHANNEL_FD", kWasixIpcFd);
+    }
+  }
+  // cluster.fork() is the only spawn that sets NODE_UNIQUE_ID, so this is the
+  // first point at which the process is known to be a cluster primary. Install
+  // the port broker now: `cluster` is already loaded (it is what called us), so
+  // this is a cache hit, whereas requiring it at startup would cost every
+  // process ~21 ms. The installer is idempotent.
+  for (const std::string& pair : env_storage) {
+    if (pair.rfind("NODE_UNIQUE_ID=", 0) == 0) {
+      EdgeMaybeInstallWasixClusterPrimary(env);
+      break;
     }
   }
 #endif
