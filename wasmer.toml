@@ -20,3 +20,9 @@ runner = "https://webc.org/runner/wasi"
 [command.annotations.wasi]
 atom = "edgejs"
 # env = ["EDGEJS_LIB_DIR=/node-lib"]
+
+# child_process.exec()/execSync() run their command through `/bin/sh -c`, so
+# without a shell in the package every exec() call fails to spawn. The QuickJS
+# package has carried this since it was created; this one was missing it.
+[dependencies]
+"wasmer/bash" = "1.0.25"
