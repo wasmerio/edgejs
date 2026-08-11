@@ -145,37 +145,14 @@ WASIX_SKIP_UNIX_SOCKET_TESTS := \
   parallel/test-tls-connect-pipe.js \
   parallel/test-tls-net-connect-prefer-path.js \
   parallel/test-tls-wrap-econnreset-pipe.js \
-  parallel/test-http-client-response-domain.js
-# The known_issues/ entry is a later addition (2026-08-11). Cluster shares a
-# dgram socket by sending the bound descriptor to the worker over IPC, and
-# primary.js always picks SharedHandle for udp4/udp6 regardless of scheduling
-# policy. WASI has no msghdr/SCM_RIGHTS, so that descriptor can never be
-# delivered and the worker's bind callback never fires -- the run times out
-# rather than failing, which a [negative] test needs it to do. Its non-negative
-# sibling sequential/test-dgram-bind-shared-ports.js is skipped just above for
-# the same reason; this one only escaped because the list carried no
-# known_issues/ paths. See wasix-org/libuv#14, which makes the underlying send
-# fail with ENOSYS instead of stalling silently -- necessary for diagnosing
-# this, but not sufficient to make the test pass.
-WASIX_SKIP_CLUSTER_FORK_TESTS := \
-  parallel/test-dgram-bind-socket-close-before-cluster-reply.js \
-  parallel/test-dgram-cluster-close-during-bind.js \
-  parallel/test-dgram-cluster-close-in-listening.js \
-  parallel/test-dgram-unref-in-cluster.js \
-  parallel/test-http-server-drop-connections-in-cluster.js \
-  parallel/test-tls-ticket-cluster.js \
-  parallel/test-diagnostics-channel-process.js \
-  parallel/test-http-chunk-problem.js \
-  parallel/test-http-client-with-create-connection.js \
-  parallel/test-http-full-response.js \
-  parallel/test-http-server-stale-close.js \
-  parallel/test-dgram-deprecation-error.js \
-  parallel/test-https-agent-unref-socket.js \
-  parallel/test-crypto-secure-heap.js \
-  parallel/test-domain-top-level-error-handler-throw.js \
-  parallel/test-domain-uncaught-exception.js \
-  sequential/test-dgram-bind-shared-ports.js \
-  known_issues/test-dgram-bind-shared-ports-after-port-0.js
+  parallel/test-http-client-response-domain.js \
+  parallel/test-http-client-with-create-connection.js
+# Emptied 2026-07-07: with fork IPC (libuv-wasix plain read) and the cluster
+# reuseport scheduling strategy (TCP and UDP) in place, every cluster/fork
+# test in the wasix lanes passes. test-http-client-with-create-connection
+# moved to the unix-socket group and test-crypto-secure-heap to the crypto
+# group (misfiled here; their failures are unrelated to cluster/fork).
+WASIX_SKIP_CLUSTER_FORK_TESTS :=
 WASIX_SKIP_SUBPROCESS_SHELL_TESTS := \
   parallel/test-stream-pipeline-process.js \
   parallel/test-domain-abort-on-uncaught.js \
@@ -197,7 +174,8 @@ WASIX_SKIP_CRYPTO_UNSUPPORTED_TESTS := \
   parallel/test-crypto-argon2.js \
   parallel/test-crypto-no-algorithm.js \
   parallel/test-webcrypto-derivebits-argon2.js \
-  parallel/test-crypto-pqc-keygen-slh-dsa.js
+  parallel/test-crypto-pqc-keygen-slh-dsa.js \
+  parallel/test-crypto-secure-heap.js
 WASIX_SKIP_TLS_SUBPROCESS_ENV_TESTS := \
   parallel/test-tls-enable-keylog-cli.js \
   parallel/test-tls-env-bad-extra-ca.js \
@@ -268,9 +246,15 @@ WASIX_SLOW_WEBCRYPTO_TESTS := \
   parallel/test-webcrypto-webidl.js \
   parallel/test-webcrypto-wrap-unwrap.js
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
+# test-http-chunk-problem (spawns cat) and test-http-full-response (execs ab
+# through a shell) run external guest binaries; the first such exec
+# cold-downloads and compiles wasmer/bash + wasmer/coreutils on runners with
+# an empty wasmer cache, so they need the scaled timeout rather than a skip.
 WASIX_SLOW_TESTS := \
   parallel/test-crypto-oneshot-hash-xof.js \
   parallel/test-fastutf8stream-flush-sync.js \
+  parallel/test-http-chunk-problem.js \
+  parallel/test-http-full-response.js \
   parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-stringbytes-external.js \
   parallel/test-url-parse-invalid-input.js \
