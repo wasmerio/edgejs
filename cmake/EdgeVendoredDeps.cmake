@@ -15,6 +15,36 @@ function(edge_add_vendored_deps)
   set(LIBUV_BUILD_BENCH OFF CACHE BOOL "" FORCE)
   add_subdirectory("${EDGE_LIBUV_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/deps/uv")
 
+  add_library(edge_uvwasi STATIC
+    "${PROJECT_ROOT}/deps/uvwasi/src/clocks.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/fd_table.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/path_resolver.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/poll_oneoff.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/sync_helpers.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/uv_mapping.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/uvwasi.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/wasi_rights.c"
+    "${PROJECT_ROOT}/deps/uvwasi/src/wasi_serdes.c"
+  )
+  target_include_directories(edge_uvwasi
+    PUBLIC
+      "${PROJECT_ROOT}/deps/uvwasi/include"
+  )
+  target_compile_definitions(edge_uvwasi PRIVATE NEED_UVWASI_EXPORT)
+  if(CMAKE_C_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
+    target_compile_options(edge_uvwasi PRIVATE
+      -fvisibility=hidden
+      -Wno-unused-parameter
+    )
+  endif()
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(edge_uvwasi PRIVATE
+      _GNU_SOURCE
+      _POSIX_C_SOURCE=200112
+    )
+  endif()
+  target_link_libraries(edge_uvwasi PUBLIC uv_a)
+
   set(CARES_STATIC ON CACHE BOOL "" FORCE)
   set(CARES_SHARED OFF CACHE BOOL "" FORCE)
   set(CARES_INSTALL OFF CACHE BOOL "" FORCE)

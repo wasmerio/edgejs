@@ -27,6 +27,7 @@ set(EDGE_INTERNAL_BINDING_SOURCES
   "${EDGE_ROOT}/src/internal_binding/binding_undici.cc"
   "${EDGE_ROOT}/src/internal_binding/binding_util.cc"
   "${EDGE_ROOT}/src/internal_binding/binding_v8.cc"
+  "${EDGE_ROOT}/src/internal_binding/binding_wasi.cc"
   "${EDGE_ROOT}/src/internal_binding/binding_watchdog.cc"
   "${EDGE_ROOT}/src/internal_binding/binding_wasm_web_api.cc"
   "${EDGE_ROOT}/src/internal_binding/binding_worker.cc"

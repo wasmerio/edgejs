@@ -786,6 +786,7 @@ for (const name of [
   'tcp_wrap',
   'tty_wrap',
   'util',
+  'wasi',
   'wasm_web_api',
 ]) {
   const binding = internalBinding(name);
@@ -799,6 +800,39 @@ require('node:perf_hooks');
 require('node:tls');
 
 globalThis.__edge_binding_cleanup_recreate_ok = 1;
+)JS";
+
+constexpr const char* kWasiBindingParityScript = R"JS(
+const assert = require('assert');
+
+const wasiBinding = internalBinding('wasi');
+assert.ok(wasiBinding && typeof wasiBinding === 'object');
+assert.strictEqual(typeof wasiBinding.WASI, 'function');
+const wasiWrap = new wasiBinding.WASI(
+  ['edge'],
+  ['EDGE_WASI_TEST=1'],
+  [],
+  [0, 1, 2],
+);
+for (const syscall of [
+  'args_get',
+  'environ_get',
+  'fd_read',
+  'fd_write',
+  'path_open',
+  'poll_oneoff',
+  'proc_exit',
+  'random_get',
+  'sock_recv',
+]) {
+  assert.strictEqual(typeof wasiWrap[syscall], 'function', syscall);
+}
+assert.throws(
+  () => wasiWrap.args_sizes_get(0, 4),
+  (error) => error && error.code === 'ERR_WASI_NOT_STARTED',
+);
+
+globalThis.__edge_wasi_binding_parity_ok = 1;
 )JS";
 
 }  // namespace
@@ -872,6 +906,28 @@ TEST_F(Test5InternalBindingParityPhase03, BootstrapSymbolsShareStateAcrossBindin
 
   napi_value ok_value = nullptr;
   ASSERT_EQ(napi_get_named_property(s.env, global, "__edge_symbol_bootstrap_parity_ok", &ok_value), napi_ok);
+
+  int32_t ok = 0;
+  ASSERT_EQ(napi_get_value_int32(s.env, ok_value, &ok), napi_ok);
+  EXPECT_EQ(ok, 1);
+}
+
+TEST_F(Test5InternalBindingParityPhase03, WasiBindingExposesNodePreviewOne) {
+  EnvScope s(runtime_.get());
+
+  std::string error;
+  const int exit_code =
+      EdgeRunScriptSource(s.env, kWasiBindingParityScript, &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty());
+
+  napi_value global = nullptr;
+  ASSERT_EQ(napi_get_global(s.env, &global), napi_ok);
+
+  napi_value ok_value = nullptr;
+  ASSERT_EQ(napi_get_named_property(s.env, global,
+                                    "__edge_wasi_binding_parity_ok", &ok_value),
+            napi_ok);
 
   int32_t ok = 0;
   ASSERT_EQ(napi_get_value_int32(s.env, ok_value, &ok), napi_ok);

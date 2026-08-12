@@ -44,7 +44,7 @@ struct BindingEntry {
 };
 
 #define EDGE_BINDING_REGISTRY_ENTRY(name, init) BindingEntry{#name, init},
-constexpr std::array<BindingEntry, 63> kBindings = {{
+constexpr std::array<BindingEntry, 64> kBindings = {{
     EDGE_BINDING_REGISTRY_LIST(EDGE_BINDING_REGISTRY_ENTRY)
 }};
 #undef EDGE_BINDING_REGISTRY_ENTRY

@@ -2,6 +2,7 @@
 
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
+#include "unofficial_napi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,9 +18,47 @@
 
 #include <wasm.h>
 
+// Wasmer extensions needed because the version of wasm.h used by the C API
+// does not carry the shared bit in wasm_limits_t and only standardizes shared
+// module handles, not shared memories.
+extern "C" {
+typedef struct wasm_shared_memory_t wasm_shared_memory_t;
+WASM_API_EXTERN wasm_memorytype_t *
+wasm_shared_memorytype_new(const wasm_limits_t *limits);
+WASM_API_EXTERN bool
+wasm_memorytype_is_shared(const wasm_memorytype_t *memory_type);
+#if defined(__wasi__)
+WASM_API_EXTERN bool wasm_memory_read(const wasm_memory_t *memory,
+                                      uint64_t offset, uint8_t *destination,
+                                      size_t length);
+WASM_API_EXTERN bool wasm_memory_write(const wasm_memory_t *memory,
+                                       uint64_t offset,
+                                       const uint8_t *source,
+                                       size_t length);
+WASM_API_EXTERN bool wasm_memory_atomic(
+    const wasm_memory_t *memory, uint64_t offset, int operation, int width,
+    uint64_t value, uint64_t replacement, uint64_t *result);
+WASM_API_EXTERN int wasm_memory_atomic_wait(const wasm_memory_t *memory,
+                                            uint64_t offset, int width,
+                                            int64_t expected,
+                                            int64_t timeout_nanos);
+WASM_API_EXTERN int wasm_memory_atomic_notify(const wasm_memory_t *memory,
+                                              uint64_t offset,
+                                              uint32_t count);
+#endif
+WASM_API_EXTERN wasm_shared_memory_t *
+wasm_memory_share(const wasm_memory_t *memory);
+WASM_API_EXTERN wasm_memory_t *
+wasm_memory_obtain(wasm_store_t *store,
+                   const wasm_shared_memory_t *shared_memory);
+WASM_API_EXTERN void
+wasm_shared_memory_delete(wasm_shared_memory_t *shared_memory);
+}
+
 namespace {
 
 constexpr uint32_t kInternalCreateMagic = 0x45574153; // EWAS
+constexpr uint32_t kCloneBackingMagic = 0x4557434c;  // EWCL
 
 enum class WasmObjectKind : uint32_t {
   kModule = 1,
@@ -57,6 +96,8 @@ struct WasmMemoryObject {
   napi_ref buffer_ref = nullptr;
   void *buffer_data = nullptr;
   size_t buffer_size = 0;
+  bool buffer_host_backed = false;
+  bool shared = false;
 };
 
 struct WasmTableObject {
@@ -78,6 +119,16 @@ struct InternalCreate {
   uint32_t magic = kInternalCreateMagic;
   WasmObjectKind kind = WasmObjectKind::kModule;
   void *ptr = nullptr;
+};
+
+struct WasmCloneBacking {
+  uint32_t magic = kCloneBackingMagic;
+  WasmObjectKind kind = WasmObjectKind::kModule;
+  void *shared = nullptr;
+};
+
+struct HostMemoryBacking {
+  wasm_memory_t *memory = nullptr;
 };
 
 void DeleteRefIfPresent(napi_env env, napi_ref *ref) {
@@ -707,17 +758,146 @@ void RefreshMemoryView(WasmMemoryObject *object) {
       object->memory == nullptr)
     return;
   void *data = wasm_memory_data(object->memory);
-  size_t size = wasm_memory_data_size(object->memory);
-  if (data == object->buffer_data && size == object->buffer_size)
+  const size_t size = object->shared
+                          ? static_cast<size_t>(wasm_memory_size(object->memory)) *
+                                65'536
+                          : wasm_memory_data_size(object->memory);
+  const bool same_backing = object->buffer_host_backed
+                                ? data == nullptr
+                                : data == object->buffer_data;
+  if (same_backing && size == object->buffer_size)
     return;
   napi_env env = object->base.state->env;
   napi_value buffer = nullptr;
-  if (napi_get_reference_value(env, object->buffer_ref, &buffer) == napi_ok &&
+  if (!object->shared &&
+      napi_get_reference_value(env, object->buffer_ref, &buffer) == napi_ok &&
       buffer != nullptr)
     napi_detach_arraybuffer(env, buffer);
   DeleteRefIfPresent(env, &object->buffer_ref);
   object->buffer_data = nullptr;
   object->buffer_size = 0;
+  object->buffer_host_backed = false;
+}
+
+bool IsSharedMemory(wasm_memory_t *memory) {
+  if (memory == nullptr)
+    return false;
+  wasm_memorytype_t *type = wasm_memory_type(memory);
+  if (type == nullptr)
+    return false;
+  const bool shared = wasm_memorytype_is_shared(type);
+  wasm_memorytype_delete(type);
+  return shared;
+}
+
+void SharedMemoryBufferFinalize(napi_env, void *, void *hint) {
+  auto *shared = static_cast<wasm_shared_memory_t *>(hint);
+  if (shared != nullptr)
+    wasm_shared_memory_delete(shared);
+}
+
+int NAPI_CDECL HostMemoryRead(void *hint, size_t offset, void *destination,
+                              size_t length) {
+  auto *backing = static_cast<HostMemoryBacking *>(hint);
+#if defined(__wasi__)
+  return backing != nullptr && backing->memory != nullptr &&
+                 wasm_memory_read(backing->memory, offset,
+                                  static_cast<uint8_t *>(destination), length)
+             ? 0
+             : -1;
+#else
+  if (backing == nullptr || backing->memory == nullptr ||
+      offset > wasm_memory_data_size(backing->memory) ||
+      length > wasm_memory_data_size(backing->memory) - offset)
+    return -1;
+  std::memcpy(destination, wasm_memory_data(backing->memory) + offset, length);
+  return 0;
+#endif
+}
+
+int NAPI_CDECL HostMemoryWrite(void *hint, size_t offset, const void *source,
+                               size_t length) {
+  auto *backing = static_cast<HostMemoryBacking *>(hint);
+#if defined(__wasi__)
+  return backing != nullptr && backing->memory != nullptr &&
+                 wasm_memory_write(backing->memory, offset,
+                                   static_cast<const uint8_t *>(source),
+                                   length)
+             ? 0
+             : -1;
+#else
+  if (backing == nullptr || backing->memory == nullptr ||
+      offset > wasm_memory_data_size(backing->memory) ||
+      length > wasm_memory_data_size(backing->memory) - offset)
+    return -1;
+  std::memcpy(wasm_memory_data(backing->memory) + offset, source, length);
+  return 0;
+#endif
+}
+
+int NAPI_CDECL HostMemoryAtomic(void *hint, size_t offset, int operation,
+                               int width, uint64_t value, uint64_t replacement,
+                               uint64_t *result) {
+  auto *backing = static_cast<HostMemoryBacking *>(hint);
+#if defined(__wasi__)
+  return backing != nullptr && backing->memory != nullptr && result != nullptr &&
+                 wasm_memory_atomic(backing->memory, offset, operation, width,
+                                    value, replacement, result)
+             ? 0
+             : -1;
+#else
+  return -1;
+#endif
+}
+
+int NAPI_CDECL HostMemoryWait(void *hint, size_t offset, int width,
+                             int64_t expected, int64_t timeout_nanos) {
+  auto *backing = static_cast<HostMemoryBacking *>(hint);
+#if defined(__wasi__)
+  return backing != nullptr && backing->memory != nullptr
+             ? wasm_memory_atomic_wait(backing->memory, offset, width, expected,
+                                       timeout_nanos)
+             : -1;
+#else
+  return -1;
+#endif
+}
+
+int NAPI_CDECL HostMemoryNotify(void *hint, size_t offset, uint32_t count) {
+  auto *backing = static_cast<HostMemoryBacking *>(hint);
+#if defined(__wasi__)
+  return backing != nullptr && backing->memory != nullptr
+             ? wasm_memory_atomic_notify(backing->memory, offset, count)
+             : -1;
+#else
+  return -1;
+#endif
+}
+
+void HostMemoryBufferFinalize(napi_env, void *, void *hint) {
+  auto *backing = static_cast<HostMemoryBacking *>(hint);
+  if (backing == nullptr)
+    return;
+  if (backing->memory != nullptr)
+    wasm_memory_delete(backing->memory);
+  delete backing;
+}
+
+void WasmCloneBackingFinalize(napi_env, void *, void *hint) {
+  auto *backing = static_cast<WasmCloneBacking *>(hint);
+  if (backing == nullptr)
+    return;
+  if (backing->magic == kCloneBackingMagic && backing->shared != nullptr) {
+    if (backing->kind == WasmObjectKind::kModule) {
+      wasm_shared_module_delete(
+          static_cast<wasm_shared_module_t *>(backing->shared));
+    } else if (backing->kind == WasmObjectKind::kMemory) {
+      wasm_shared_memory_delete(
+          static_cast<wasm_shared_memory_t *>(backing->shared));
+    }
+  }
+  backing->magic = 0;
+  delete backing;
 }
 
 void RefreshMemoryViews(WasmState *state) {
@@ -1542,6 +1722,7 @@ napi_value MemoryConstructor(napi_env env, napi_callback_info info) {
     object->base.kind = WasmObjectKind::kMemory;
     object->base.state = state;
     object->memory = static_cast<wasm_memory_t *>(internal_memory);
+    object->shared = IsSharedMemory(object->memory);
     if (napi_wrap(env, this_arg, object, MemoryFinalize, nullptr, nullptr) !=
         napi_ok) {
       MemoryFinalize(env, object, nullptr);
@@ -1564,10 +1745,9 @@ napi_value MemoryConstructor(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   bool shared = false;
-  if (GetOptionalBool(env, argv[0], "shared", false, &shared) && shared) {
-    napi_throw_type_error(
-        env, nullptr,
-        "Shared WebAssembly.Memory is not supported by this QuickJS build");
+  if (!GetOptionalBool(env, argv[0], "shared", false, &shared)) {
+    napi_throw_type_error(env, nullptr,
+                          "Invalid WebAssembly.Memory shared value");
     return nullptr;
   }
 
@@ -1577,7 +1757,14 @@ napi_value MemoryConstructor(napi_env env, napi_callback_info info) {
                           "Invalid WebAssembly.Memory descriptor");
     return nullptr;
   }
-  wasm_memorytype_t *type = wasm_memorytype_new(&limits);
+  if (shared && limits.max == wasm_limits_max_default) {
+    napi_throw_type_error(
+        env, nullptr,
+        "Shared WebAssembly.Memory requires a maximum page count");
+    return nullptr;
+  }
+  wasm_memorytype_t *type = shared ? wasm_shared_memorytype_new(&limits)
+                                   : wasm_memorytype_new(&limits);
   if (type == nullptr) {
     napi_throw_range_error(env, nullptr, "Invalid WebAssembly.Memory limits");
     return nullptr;
@@ -1593,6 +1780,7 @@ napi_value MemoryConstructor(napi_env env, napi_callback_info info) {
   object->base.kind = WasmObjectKind::kMemory;
   object->base.state = state;
   object->memory = memory;
+  object->shared = shared;
   if (napi_wrap(env, this_arg, object, MemoryFinalize, nullptr, nullptr) !=
       napi_ok) {
     MemoryFinalize(env, object, nullptr);
@@ -1622,12 +1810,55 @@ napi_value MemoryBufferGetter(napi_env env, napi_callback_info info) {
       return cached;
   }
   void *data = wasm_memory_data(object->memory);
-  size_t size = wasm_memory_data_size(object->memory);
+  size_t size = object->shared
+                    ? static_cast<size_t>(wasm_memory_size(object->memory)) *
+                          65'536
+                    : wasm_memory_data_size(object->memory);
+  if (data == nullptr && size != 0) {
+    if (!object->shared) {
+      napi_throw_error(env, nullptr,
+                       "Failed to access WebAssembly.Memory storage");
+      return nullptr;
+    }
+
+    wasm_memory_t *retained = wasm_memory_copy(object->memory);
+    auto *backing = retained == nullptr
+                        ? nullptr
+                        : new (std::nothrow) HostMemoryBacking{retained};
+    if (backing == nullptr) {
+      if (retained != nullptr)
+        wasm_memory_delete(retained);
+      napi_throw_error(env, nullptr,
+                       "Failed to retain host WebAssembly.Memory storage");
+      return nullptr;
+    }
+    napi_value host_buffer = nullptr;
+    const napi_status status = unofficial_napi_create_host_sharedarraybuffer(
+        env, backing, size, HostMemoryRead, HostMemoryWrite, HostMemoryAtomic,
+        HostMemoryWait, HostMemoryNotify,
+        HostMemoryBufferFinalize, backing, &host_buffer);
+    if (status != napi_ok || host_buffer == nullptr)
+      return nullptr;
+    napi_create_reference(env, host_buffer, 1, &object->buffer_ref);
+    object->buffer_data = backing;
+    object->buffer_size = size;
+    object->buffer_host_backed = true;
+    return host_buffer;
+  }
   napi_value array_buffer = nullptr;
-  if (napi_create_external_arraybuffer(env, data, size,
-                                       ExternalArrayBufferNoopFinalize, nullptr,
-                                       &array_buffer) != napi_ok ||
-      array_buffer == nullptr) {
+  napi_status buffer_status = napi_generic_failure;
+  if (object->shared) {
+    wasm_shared_memory_t *shared = wasm_memory_share(object->memory);
+    if (shared != nullptr) {
+      buffer_status = unofficial_napi_create_external_sharedarraybuffer(
+          env, data, size, SharedMemoryBufferFinalize, shared, &array_buffer);
+    }
+  } else {
+    buffer_status = napi_create_external_arraybuffer(
+        env, data, size, ExternalArrayBufferNoopFinalize, nullptr,
+        &array_buffer);
+  }
+  if (buffer_status != napi_ok || array_buffer == nullptr) {
     napi_throw_error(env, nullptr,
                      "Failed to create WebAssembly.Memory buffer");
     return nullptr;
@@ -1636,6 +1867,7 @@ napi_value MemoryBufferGetter(napi_env env, napi_callback_info info) {
       napi_ok) {
     object->buffer_data = data;
     object->buffer_size = size;
+    object->buffer_host_backed = false;
   } else {
     object->buffer_ref = nullptr;
   }
@@ -2391,4 +2623,115 @@ bool EdgeInstallQuickJsWebAssembly(napi_env env, std::string *error_out) {
   napi_create_reference(env, webassembly, 1, &state->webassembly_ref);
 
   return InstallJsWrappers(env, error_out);
+}
+
+napi_value EdgePrepareQuickJsWebAssemblyClone(napi_env env, napi_value value) {
+  if (env == nullptr || value == nullptr)
+    return nullptr;
+
+  WasmObjectKind kind;
+  void *shared = nullptr;
+  if (auto *module =
+          Unwrap<WasmModuleObject>(env, value, WasmObjectKind::kModule);
+      module != nullptr && module->module != nullptr) {
+    kind = WasmObjectKind::kModule;
+    shared = wasm_module_share(module->module);
+  } else if (auto *memory =
+                 Unwrap<WasmMemoryObject>(env, value, WasmObjectKind::kMemory);
+             memory != nullptr && memory->memory != nullptr && memory->shared) {
+    kind = WasmObjectKind::kMemory;
+    shared = wasm_memory_share(memory->memory);
+  } else {
+    return nullptr;
+  }
+  if (shared == nullptr)
+    return nullptr;
+
+  auto *backing = new (std::nothrow) WasmCloneBacking();
+  if (backing == nullptr) {
+    if (kind == WasmObjectKind::kModule)
+      wasm_shared_module_delete(static_cast<wasm_shared_module_t *>(shared));
+    else
+      wasm_shared_memory_delete(static_cast<wasm_shared_memory_t *>(shared));
+    return nullptr;
+  }
+  backing->kind = kind;
+  backing->shared = shared;
+
+  napi_value clone_data = nullptr;
+  if (unofficial_napi_create_external_sharedarraybuffer(
+          env, backing, sizeof(*backing), WasmCloneBackingFinalize, backing,
+          &clone_data) != napi_ok ||
+      clone_data == nullptr) {
+    // The external-buffer API invokes the finalizer when construction fails.
+    return nullptr;
+  }
+
+  napi_value marker = nullptr;
+  napi_value true_value = nullptr;
+  if (napi_create_object(env, &marker) != napi_ok || marker == nullptr ||
+      napi_get_boolean(env, true, &true_value) != napi_ok ||
+      napi_set_named_property(env, marker,
+                              "__ubiWebAssemblyCloneMarker",
+                              true_value) != napi_ok ||
+      napi_set_named_property(env, marker, "data", clone_data) != napi_ok) {
+    return nullptr;
+  }
+  return marker;
+}
+
+bool EdgeIsQuickJsWebAssemblyCloneMarker(napi_env env, napi_value value) {
+  if (env == nullptr || value == nullptr)
+    return false;
+  bool has_marker = false;
+  if (napi_has_named_property(env, value, "__ubiWebAssemblyCloneMarker",
+                              &has_marker) != napi_ok ||
+      !has_marker) {
+    return false;
+  }
+  napi_value marker = nullptr;
+  bool enabled = false;
+  return napi_get_named_property(env, value, "__ubiWebAssemblyCloneMarker",
+                                 &marker) == napi_ok &&
+         marker != nullptr &&
+         napi_get_value_bool(env, marker, &enabled) == napi_ok && enabled;
+}
+
+napi_value EdgeRestoreQuickJsWebAssemblyClone(napi_env env,
+                                               napi_value marker) {
+  if (!EdgeIsQuickJsWebAssemblyCloneMarker(env, marker))
+    return nullptr;
+  napi_value clone_data = nullptr;
+  if (napi_get_named_property(env, marker, "data", &clone_data) != napi_ok ||
+      clone_data == nullptr) {
+    return nullptr;
+  }
+
+  void *raw = nullptr;
+  size_t size = 0;
+  if (unofficial_napi_get_external_sharedarraybuffer_info(
+          env, clone_data, &raw, &size) != napi_ok ||
+      raw == nullptr || size != sizeof(WasmCloneBacking)) {
+    return nullptr;
+  }
+  auto *backing = static_cast<WasmCloneBacking *>(raw);
+  if (backing->magic != kCloneBackingMagic || backing->shared == nullptr)
+    return nullptr;
+
+  std::string error;
+  WasmState *state = EnsureState(env, &error);
+  if (state == nullptr)
+    return nullptr;
+
+  if (backing->kind == WasmObjectKind::kModule) {
+    wasm_module_t *module = wasm_module_obtain(
+        state->store, static_cast<wasm_shared_module_t *>(backing->shared));
+    return CreateObjectFromOwned(state, WasmObjectKind::kModule, module);
+  }
+  if (backing->kind == WasmObjectKind::kMemory) {
+    wasm_memory_t *memory = wasm_memory_obtain(
+        state->store, static_cast<wasm_shared_memory_t *>(backing->shared));
+    return CreateObjectFromOwned(state, WasmObjectKind::kMemory, memory);
+  }
+  return nullptr;
 }

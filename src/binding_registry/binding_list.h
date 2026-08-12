@@ -63,6 +63,7 @@
   V(util, internal_binding::InitUtil)          \
   V(uv, EdgeInstallUvBinding)                  \
   V(v8, internal_binding::InitV8)              \
+  V(wasi, internal_binding::InitWasi)          \
   V(wasm_web_api, internal_binding::InitWasmWebApi) \
   V(watchdog, internal_binding::InitWatchdog)  \
   V(worker, internal_binding::InitWorker)      \
