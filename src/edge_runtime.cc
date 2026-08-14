@@ -91,6 +91,52 @@ constexpr int kExitCodeInvalidFatalExceptionMonkeyPatching = 6;
 constexpr int kExitCodeExceptionInFatalExceptionHandler = 7;
 constexpr int kExitCodeUnsettledTopLevelAwait = 13;
 
+#if defined(ENABLE_TRACING)
+bool IsTruthyTraceEnv(const char* value) {
+  if (value == nullptr || value[0] == '\0') return false;
+  std::string normalized(value);
+  for (char& ch : normalized) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return normalized != "0" &&
+         normalized != "false" &&
+         normalized != "no" &&
+         normalized != "off";
+}
+
+class StartupPhaseTracer {
+ public:
+  StartupPhaseTracer() :
+      enabled_(IsTruthyTraceEnv(std::getenv("EDGE_STARTUP_TRACE"))),
+      process_start_(std::chrono::steady_clock::now()),
+      phase_start_(process_start_) {}
+
+  void Mark(const char* phase) {
+    if (!enabled_ || phase == nullptr) return;
+    const auto now = std::chrono::steady_clock::now();
+    const double delta_ms = DurationMs(phase_start_, now);
+    const double total_ms = DurationMs(process_start_, now);
+    phase_start_ = now;
+    std::cerr << "{\"edge_startup_trace\":\"" << phase << "\",\"delta_ms\":"
+              << delta_ms << ",\"total_ms\":" << total_ms << "}\n";
+  }
+
+ private:
+  static double DurationMs(std::chrono::steady_clock::time_point start,
+                           std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start).count();
+  }
+
+  bool enabled_ = false;
+  std::chrono::steady_clock::time_point process_start_;
+  std::chrono::steady_clock::time_point phase_start_;
+};
+#define EDGE_RUNTIME_STARTUP_TRACE(tracer, phase) (tracer).Mark((phase))
+#else
+struct StartupPhaseTracer {};
+#define EDGE_RUNTIME_STARTUP_TRACE(tracer, phase) ((void)(tracer))
+#endif
+
 void ResetDomainHelperRef(napi_env env, napi_ref* ref);
 
 struct DomainCallbackCache {
@@ -2737,10 +2783,13 @@ int RunScriptWithGlobals(napi_env env,
                          std::string* error_out,
                          bool keep_event_loop_alive,
                          EdgeBootstrapMode mode) {
+  StartupPhaseTracer startup_trace;
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "run-script-with-globals.begin");
   InitializeProcessStdioInheritanceOnce();
 #if !defined(_WIN32)
   InstallDefaultSignalBehavior();
 #endif
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "process-stdio-and-signals");
   if (env == nullptr) {
     if (error_out != nullptr) {
       *error_out = "Invalid environment";
@@ -2756,6 +2805,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "runtime-platform-hooks");
   if (should_abort_worker_bootstrap()) return 1;
   if (EdgeInitializeTimersHost(env) != napi_ok) {
     if (error_out != nullptr) {
@@ -2763,6 +2813,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "timers-host-init");
   if (should_abort_worker_bootstrap()) return 1;
   if (source_text == nullptr || source_text[0] == '\0') {
     if (error_out != nullptr) {
@@ -2774,6 +2825,7 @@ int RunScriptWithGlobals(napi_env env,
   if (!ConfigureSecureHeapFromExecArgv(error_out)) {
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "parse-flags-and-secure-heap");
 
   // Activate the embedded ICU common data before any locale-aware code runs, so
   // ICU-backed Intl (and legacy charset conversion) sees real data instead of
@@ -2804,6 +2856,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "install-process-object");
   if (should_abort_worker_bootstrap()) return 1;
 
   status = EdgeInstallModuleLoader(env, entry_script_path);
@@ -2813,6 +2866,7 @@ int RunScriptWithGlobals(napi_env env,
     }
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "install-module-loader");
   if (should_abort_worker_bootstrap()) return 1;
 
   // Create empty primordials container on the native side first (Node-aligned).
@@ -2946,14 +3000,17 @@ int RunScriptWithGlobals(napi_env env,
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.per_context.primordials");
   if (!execute_bootstrapper("internal/per_context/domexception", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.per_context.domexception");
   if (!execute_bootstrapper("internal/per_context/messageport", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.per_context.messageport");
   if (napi_set_named_property(env, global, "primordials", primordials_container) != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to expose primordials during bootstrap";
@@ -2965,6 +3022,7 @@ int RunScriptWithGlobals(napi_env env,
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.realm");
 
   {
     napi_value primordials_key = nullptr;
@@ -3070,6 +3128,7 @@ int RunScriptWithGlobals(napi_env env,
     if (should_abort_worker_bootstrap()) return 1;
     return 1;
   }
+  EDGE_RUNTIME_STARTUP_TRACE(startup_trace, "bootstrap.node-and-web");
 
   // Bridge V8 host dynamic import (napi/v8) into Node's module_wrap callback
   // registry so import('node:...') from CJS follows Node's ESM pathway.

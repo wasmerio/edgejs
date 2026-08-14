@@ -177,6 +177,42 @@ def build_cases(host: str, include_network: bool) -> list[Case]:
     return cases
 
 
+def build_cases(host: str, include_network: bool) -> list[tuple[str, str, str]]:
+    cases = [
+        (
+            "queueMicrotask",
+            "console.log('A'); queueMicrotask(() => console.log('B')); console.log('C');",
+            "A\nC\nB\n",
+        ),
+        (
+            "blob.arrayBuffer",
+            "new Blob([new Uint8Array([65,66,67])]).arrayBuffer().then((ab) => console.log('BLOB', ab.byteLength));",
+            "BLOB 3\n",
+        ),
+    ]
+
+    if include_network:
+        cases.extend([
+            (
+                f"fetch http://{host}/",
+                f"const keepAlive = setTimeout(() => {{}}, 30000); fetch('http://{host}/').then((r) => console.log('FETCH', r.status)).catch((e) => {{ console.error('FETCHERR', e && (e.stack || e.message || e)); process.exitCode = 1; }}).finally(() => clearTimeout(keepAlive));",
+                "FETCH 200\n",
+            ),
+            (
+                f"https.get https://{host}/",
+                f"require('node:https').get({{ hostname: '{host}', port: 443, path: '/', servername: '{host}' }}, (r) => {{ console.log('HTTPS', r.statusCode); r.resume(); }}).on('error', (e) => {{ console.error('HTTPSERR', e && (e.stack || e.message || e)); process.exit(1); }});",
+                "HTTPS 200\n",
+            ),
+            (
+                f"tls.connect verified {host}",
+                f"const tls=require('node:tls'); const s=tls.connect(443,'{host}',{{servername:'{host}'}},()=>{{ console.log('TLS CONNECTED', s.authorized); s.destroy(); }}); s.on('close',()=>console.log('TLS CLOSE')); process.on('exit',(code)=>console.log('TLS EXIT', code)); s.on('error',(e)=>{{ console.error('TLSERR', e && (e.stack || e.message || e)); process.exitCode = 1; }});",
+                "TLS CONNECTED true\nTLS CLOSE\nTLS EXIT 0\n",
+            ),
+        ])
+
+    return cases
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run WASIX safe-mode smoke tests through Wasmer.")
     parser.add_argument(
