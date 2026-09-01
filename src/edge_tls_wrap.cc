@@ -1166,16 +1166,39 @@ void DestroySsl(TlsWrap* wrap) {
   DeleteRefIfPresent(wrap->env, &wrap->user_read_buffer_ref);
   wrap->user_buffer_base = nullptr;
   wrap->user_buffer_len = 0;
+  // We just detached from the parent stream, so ParentStreamOnClose can no
+  // longer fire, and Node's JS TLSWrap.prototype.close shadows TlsWrapClose and
+  // delegates to the parent handle -- so nothing will ever reach
+  // EdgeStreamBaseOnClosed for this stream. Its active-handle registration
+  // holds a strong ref to our wrapper, which would keep the wrapper (and this
+  // whole TlsWrap, the parent handle and the SecureContext) alive forever and
+  // stop TlsWrapFinalize from ever running. Drop just the registration and
+  // nothing else: emitting the full close/destroy lifecycle from here instead
+  // re-enters JS while the socket still owns the handle, which fails several
+  // node:tls tests under the QuickJS provider.
+  EdgeStreamBaseReleaseActiveHandle(&wrap->base);
   ReleaseKeepaliveHandle(wrap);
 }
 
 void TlsWrapFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<TlsWrap*>(data);
   if (wrap == nullptr) return;
+  // Mark the stream finalized up front: this runs from QuickJS's cycle sweep,
+  // and everything below (DestroySsl, NotifyTlsStreamClosed) would otherwise
+  // reach back into the JS object graph and resurrect zombies.
+  wrap->base.finalized = true;
+  auto* environment = EdgeEnvironmentGet(env);
+  const bool cleanup_started = environment == nullptr || environment->cleanup_started();
+  if (cleanup_started) {
+    // Finalizer order within a teardown sweep is unspecified, so the parent
+    // stream may already be gone and its listener chain freed with it. Nothing
+    // will drive this listener again either way, so drop it without walking.
+    wrap->parent_stream_base = nullptr;
+    wrap->parent_stream_listener.previous = nullptr;
+  }
   DestroySsl(wrap);
   ReleaseKeepaliveHandle(wrap);
-  auto* environment = EdgeEnvironmentGet(env);
-  if (environment == nullptr || !environment->cleanup_started()) {
+  if (!cleanup_started) {
     NotifyTlsStreamClosed(wrap);
   }
   RemoveWrapFromState(wrap);
