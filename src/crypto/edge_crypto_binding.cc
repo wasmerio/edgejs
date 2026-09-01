@@ -781,10 +781,22 @@ std::string CanonicalizeDigestName(const std::string& in) {
   return out;
 }
 
+// An SSL_CTX plus the state CreateConfiguredSecureContext attaches to it costs
+// ~30 KiB of native memory the GC cannot see, and tls.connect() mints one
+// SecureContext per connection. Unreported, the JS heap stays small, no
+// collection is triggered, and dead contexts pile up -- native high-water
+// growth that never comes back on an allocator that does not return pages.
+// Measured at 30.5 KiB/context (2000 contexts, RSS delta); rounded down so we
+// under-report rather than over-trigger collection.
+constexpr int64_t kSecureContextExternalBytes = 28 * 1024;
+
 void SecureContextFinalizer(node_api_basic_env env, void* data, void* hint) {
-  (void)env;
   (void)hint;
   auto* holder = reinterpret_cast<SecureContextHolder*>(data);
+  if (env != nullptr) {
+    int64_t adjusted = 0;
+    (void)napi_adjust_external_memory(env, -kSecureContextExternalBytes, &adjusted);
+  }
   delete holder;
 }
 
@@ -1600,6 +1612,8 @@ napi_value CryptoSecureContextCreate(napi_env env, napi_callback_info info) {
     delete holder;
     return nullptr;
   }
+  int64_t adjusted = 0;
+  (void)napi_adjust_external_memory(env, kSecureContextExternalBytes, &adjusted);
   return out;
 }
 
