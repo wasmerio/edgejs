@@ -36,10 +36,10 @@
               pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
             v8Prebuilt = pkgs.stdenvNoCC.mkDerivation {
               pname = "ubi-v8-prebuilt";
-              version = "11.9.2";
+              version = "11.9.9";
               src = pkgs.fetchurl {
-                url = "https://github.com/wasmerio/v8-custom-builds/releases/download/11.9.2/v8-linux-amd64.tar.xz";
-                hash = "sha256-nTCVdBKtyVMb7lE+Db4RDsShKkLbG/0r980ejd+EAvo=";
+                url = "https://github.com/wasmerio/v8-custom-builds/releases/download/11.9.9/v8-linux-amd64.tar.xz";
+                hash = "sha256-MtFeXv0d0Zr9SBdLGQj32IE8hDP7+/5hbAbzgDGacW0=";
               };
               nativeBuildInputs = [ pkgs.clang pkgs.xz pkgs.gnutar ];
               dontUnpack = true;
@@ -107,7 +107,7 @@
 
             shellHook = ''
               export UBI_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-              export V8_VERSION="11.9.2"
+              export V8_VERSION="11.9.9"
               export V8_ROOT_DEFAULT="${v8Prebuilt}"
 
               export LLVM_SYS_211_PREFIX="${pkgs.llvmPackages_21.llvm.dev}"

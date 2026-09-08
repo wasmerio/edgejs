@@ -58,6 +58,7 @@ canonical home for known incompatibilities once a troubleshooting page exists.
 | [dev_007_host_js_imported_napi](dev_007_host_js_imported_napi/) | 🟠 | Engine-free `syrusakbary/edgejs` package contract and artifact validation for a host-JavaScript N-API backend; host integration remains active. |
 | [dev_008_wasix_ci_standalone_napi_cli](dev_008_wasix_ci_standalone_napi_cli/) | 🟢 | V8 WASIX tests use the locked standalone N-API CLI aligned with the current compatible Wasmer SDK branch. |
 | [dev_009_napi_pr61_main_sync](dev_009_napi_pr61_main_sync/) | ▶️ | Sync N-API PR #61 with `main`, combine its Wasmer store-lending stack into SDK PR #6956, and advance EdgeJS PR #149 through green verification. |
+| [dev_010_v8_1199_integration](dev_010_v8_1199_integration/) | 🟠 | Custom V8 build 11.9.9 integration passes the native Node lane; a pre-existing intermittent REPL CTest failure is documented. |
 
 ## Status Icons
 
