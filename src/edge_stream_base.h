@@ -73,6 +73,12 @@ void EdgeStreamBaseSetInitialStreamProperties(EdgeStreamBase* base,
 
 void EdgeStreamBaseFinalize(EdgeStreamBase* base);
 void EdgeStreamBaseOnClosed(EdgeStreamBase* base);
+
+// Drop only the active-handle registration (and the strong ref to the wrapper
+// it holds) without emitting the close/destroy lifecycle. For streams that have
+// no libuv handle of their own -- TLSWrap -- the registration would otherwise
+// outlive the stream and pin the wrapper forever.
+void EdgeStreamBaseReleaseActiveHandle(EdgeStreamBase* base);
 void EdgeStreamBaseEmitAfterWrite(EdgeStreamBase* base, napi_value req_obj, int status);
 void EdgeStreamBaseEmitAfterShutdown(EdgeStreamBase* base, napi_value req_obj, int status);
 void EdgeStreamBaseEmitAfterShutdown(EdgeStreamBase* base,

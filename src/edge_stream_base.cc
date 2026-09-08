@@ -903,6 +903,12 @@ void EdgeStreamBaseSetWrapperRef(EdgeStreamBase* base, napi_ref wrapper_ref) {
 
 napi_value EdgeStreamBaseGetWrapper(EdgeStreamBase* base) {
   if (base == nullptr || base->env == nullptr) return nullptr;
+  // Once we are finalizing, the wrapper is being collected and may already be a
+  // zombie inside QuickJS's cycle sweep. Materialising it here would take a new
+  // reference to memory the collector is about to release, and whichever scope
+  // owns that napi_value would free it again afterwards. Every JS-touching
+  // caller funnels through here, so this is the one place to stop it.
+  if (base->finalized) return nullptr;
   return GetRefValue(base->env, base->wrapper_ref);
 }
 
@@ -979,6 +985,12 @@ void EdgeStreamBaseFinalize(EdgeStreamBase* base) {
 
   StreamBaseDetach(base);
   DestroyBase(base);
+}
+
+void EdgeStreamBaseReleaseActiveHandle(EdgeStreamBase* base) {
+  if (base == nullptr || base->env == nullptr || base->active_handle_token == nullptr) return;
+  EdgeUnregisterActiveHandle(base->env, base->active_handle_token);
+  base->active_handle_token = nullptr;
 }
 
 void EdgeStreamBaseOnClosed(EdgeStreamBase* base) {
