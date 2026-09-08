@@ -3,7 +3,7 @@
 | | | Remarks |
 | --- | --- | --- |
 | **Status** | 🟢 | Implemented and verified. |
-| **Last updated** | 2026-05-14 | Documents the current `napi/v8` refactor state. |
+| **Last updated** | 2026-09-07 | Includes the custom V8 11.9.9 build integration. |
 
 ## Goal
 
@@ -152,6 +152,22 @@ The tracker records `napi_value` creation/release by current V8 scope for
 diagnostics. It does not persist public `napi_value` handles.
 
 ## Build Integration
+
+### Current custom V8 build
+
+EdgeJS uses [custom V8 build 11.9.9](https://github.com/wasmerio/v8-custom-builds/releases/tag/11.9.9)
+for the Python fixes. This custom-build release embeds upstream V8
+`13.6.233.17`; the release tag and engine version are distinct. The root
+`Makefile` prebuilt default and the Linux amd64
+Nix development shell must match the pinned N-API backend's version. The Nix
+archive has SHA-256
+`32d15e5efd1dd19afd48174b1908f7d8813c8433fbfbfe616c06f380319a716d`.
+
+The historical 11.9.2 commands below document the original refactor baseline;
+they are not the current build pins. Integration verification is tracked in
+[the V8 11.9.9 task note](../quickjs-wasm/development/dev_010_v8_1199_integration/001_edgejs_build_pins.md).
+
+### Original refactor integration
 
 `napi/v8/CMakeLists.txt` now builds the internal source files explicitly and
 uses the same generic lifetime tracker options as QuickJS, exposed through the
