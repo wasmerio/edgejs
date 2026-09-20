@@ -1,4 +1,5 @@
 #include "crypto/edge_crypto_binding.h"
+#include "crypto/edge_crypto_hash.h"
 #include "crypto/edge_secure_context_bridge.h"
 #include "edge_buffer_lease.h"
 #include "edge_environment.h"
@@ -932,39 +933,46 @@ napi_value CreateX509DerBuffer(napi_env env, X509* cert) {
   return CreateBufferCopy(env, out.data(), out.size());
 }
 
+napi_value HashBuffer(napi_env env, napi_value input, const ncrypto::Digest& md,
+                      size_t output_length) {
+  size_t byte_length = 0;
+  if (!EdgeGetBinaryByteLength(env, input, &byte_length)) {
+    ThrowError(env, "ERR_INVALID_ARG_TYPE", "hash data must be a Buffer");
+    return nullptr;
+  }
+  std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  if (!context || EVP_DigestInit_ex(context.get(), md.get(), nullptr) != 1 ||
+      !UpdateHashFromBuffer(env, context.get(), input, byte_length)) {
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
+    return nullptr;
+  }
+  std::vector<uint8_t> digest(output_length);
+  bool ok = false;
+  if ((EVP_MD_flags(md.get()) & EVP_MD_FLAG_XOF) != 0) {
+    ok = EVP_DigestFinalXOF(context.get(), digest.data(), digest.size()) == 1;
+  } else {
+    unsigned int written = 0;
+    ok = EVP_DigestFinal_ex(context.get(), digest.data(), &written) == 1;
+    if (ok) digest.resize(written);
+  }
+  if (!ok) {
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
+    return nullptr;
+  }
+  return CreateBufferCopy(env, digest.data(), digest.size());
+}
+
 napi_value CryptoHashOneShot(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 2) return nullptr;
   const std::string algo = ValueToUtf8(env, argv[0]);
-  EdgeBufferLease input;
-  if (!input.Acquire(env, argv[1], unofficial_napi_buffer_access_read)) {
-    ThrowError(env, "ERR_INVALID_ARG_TYPE", "hash data must be a Buffer");
-    return nullptr;
-  }
   const ncrypto::Digest md = ResolveDigest(algo);
   if (!md) {
     ThrowError(env, "ERR_CRYPTO_HASH_UNKNOWN", "Unknown hash");
     return nullptr;
   }
-  auto out = ncrypto::hashDigest({input.data(), input.size()}, md.get());
-  if (!out) {
-    const std::string canonical = CanonicalizeDigestName(algo);
-    size_t default_xof_len = 0;
-    if (canonical == "shake128") {
-      default_xof_len = 16;
-    } else if (canonical == "shake256") {
-      default_xof_len = 32;
-    }
-    if (default_xof_len > 0) {
-      out = ncrypto::xofHashDigest({input.data(), input.size()}, md.get(), default_xof_len);
-    }
-  }
-  if (!out) {
-    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
-    return nullptr;
-  }
-  return CreateBufferCopy(env, out);
+  return HashBuffer(env, argv[1], md, md.size());
 }
 
 napi_value CryptoHashOneShotXof(napi_env env, napi_callback_info info) {
@@ -972,11 +980,6 @@ napi_value CryptoHashOneShotXof(napi_env env, napi_callback_info info) {
   napi_value argv[3] = {nullptr, nullptr, nullptr};
   if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 3) return nullptr;
   const std::string algo = ValueToUtf8(env, argv[0]);
-  EdgeBufferLease input;
-  if (!input.Acquire(env, argv[1], unofficial_napi_buffer_access_read)) {
-    ThrowError(env, "ERR_INVALID_ARG_TYPE", "hash data must be a Buffer");
-    return nullptr;
-  }
   int32_t out_len_i32 = 0;
   if (napi_get_value_int32(env, argv[2], &out_len_i32) != napi_ok || out_len_i32 < 0) {
     ThrowError(env, "ERR_INVALID_ARG_VALUE", "Invalid output length");
@@ -988,33 +991,14 @@ napi_value CryptoHashOneShotXof(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   const bool is_xof = (EVP_MD_flags(md.get()) & EVP_MD_FLAG_XOF) != 0;
-  if (!is_xof) {
-    const size_t digest_size = md.size();
-    if (static_cast<size_t>(out_len_i32) != digest_size) {
-      const std::string message =
-          "Output length " + std::to_string(out_len_i32) + " is invalid for " + algo +
-          ", which does not support XOF";
-      ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", message.c_str());
-      return nullptr;
-    }
-    auto out = ncrypto::hashDigest({input.data(), input.size()}, md.get());
-    if (!out) {
-      ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
-      return nullptr;
-    }
-    return CreateBufferCopy(env, out);
-  }
-  if (out_len_i32 == 0) {
-    return CreateBufferCopy(env, nullptr, 0);
-  }
-
-  auto out = ncrypto::xofHashDigest(
-      {input.data(), input.size()}, md.get(), static_cast<size_t>(out_len_i32));
-  if (!out) {
-    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
+  if (!is_xof && static_cast<size_t>(out_len_i32) != md.size()) {
+    const std::string message =
+        "Output length " + std::to_string(out_len_i32) + " is invalid for " + algo +
+        ", which does not support XOF";
+    ThrowError(env, "ERR_CRYPTO_OPERATION_FAILED", message.c_str());
     return nullptr;
   }
-  return CreateBufferCopy(env, out);
+  return HashBuffer(env, argv[1], md, static_cast<size_t>(out_len_i32));
 }
 
 napi_value CryptoHmacOneShot(napi_env env, napi_callback_info info) {

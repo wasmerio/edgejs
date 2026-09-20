@@ -580,7 +580,7 @@ function create(options) {
   // pnpm 11 dropped support for the `pnpm` field in package.json; settings
   // (including onlyBuiltDependencies) now live in pnpm-workspace.yaml. Only
   // pnpm <= 10 still reads onlyBuiltDependencies from package.json, and only
-  // there does it conflict with --config.dangerouslyAllowAllBuilds.
+  // there does it conflict with --config.dangerously-allow-all-builds.
   function pnpmReadsPackageJsonPnpmField() {
     const major = detectPnpmMajorVersion();
     return typeof major === 'number' && major <= 10;
@@ -1211,6 +1211,16 @@ function create(options) {
       && pkg.pnpm.onlyBuiltDependencies.length > 0;
   }
 
+  function pnpmScriptEnv() {
+    return {
+      ...process.env,
+      // pnpm 12 otherwise reinstalls before run/exec. Installation is an
+      // explicit harness phase using --no-lockfile and a dedicated store;
+      // rebuilding here can use stale lockfiles and replace our runner shim.
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: 'false',
+    };
+  }
+
   function pnpmInstallArgs(project) {
     const args = [
       'install',
@@ -1223,7 +1233,9 @@ function create(options) {
     // field (js-gatsby-staticsite2); pnpm 11 ignores that field entirely, so
     // the flag is always safe and required there.
     if (!(pnpmReadsPackageJsonPnpmField() && projectHasOnlyBuiltDependencies(project))) {
-      args.push('--config.dangerouslyAllowAllBuilds=true');
+      // The Rust CLI in pnpm 12 requires kebab-case config keys; camelCase
+      // is silently ignored. This spelling also works with pnpm 10 and 11.
+      args.push('--config.dangerously-allow-all-builds=true');
     }
     return args;
   }
@@ -1426,6 +1438,7 @@ function create(options) {
     normalizeRoutePath,
     normalizeRunnerCommandParts,
     parseSelector,
+    pnpmScriptEnv,
     printMatrixSummary,
     printSection,
     printStageSummary,

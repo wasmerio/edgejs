@@ -42,6 +42,7 @@
 #include "edge_buffer_lease.h"
 #include "edge_crypto.h"
 #include "crypto/edge_crypto_binding.h"
+#include "crypto/edge_crypto_hash.h"
 #include "internal_binding/helpers.h"
 #include "edge_environment.h"
 #include "unofficial_napi.h"
@@ -1185,7 +1186,7 @@ EVP_PKEY* ParseAnyKeyBytes(const std::vector<uint8_t>& data,
 struct HashWrap {
   napi_ref wrapper_ref = nullptr;
   std::string algorithm;
-  std::vector<uint8_t> data;
+  std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context{nullptr, EVP_MD_CTX_free};
   int32_t output_len = -1;
   bool use_xof = false;
   bool finalized = false;
@@ -1214,13 +1215,11 @@ napi_value HashCtor(napi_env env, napi_callback_info info) {
     return nullptr;
   }
   auto* wrap = new HashWrap();
+  HashWrap* source = nullptr;
   if (argc >= 1 && argv[0] != nullptr) {
-    HashWrap* source = UnwrapHash(env, argv[0]);
+    source = UnwrapHash(env, argv[0]);
     if (source != nullptr) {
       wrap->algorithm = source->algorithm;
-      wrap->data = source->data;
-      wrap->finalized = source->finalized;
-      wrap->digest_cache = source->digest_cache;
     } else {
       size_t len = 0;
       if (napi_get_value_string_utf8(env, argv[0], nullptr, 0, &len) == napi_ok) {
@@ -1250,15 +1249,15 @@ napi_value HashCtor(napi_env env, napi_callback_info info) {
   const EVP_MD* evp_md = md.get();
   const bool is_xof = evp_md != nullptr && (EVP_MD_flags(evp_md) & EVP_MD_FLAG_XOF) != 0;
   const int32_t digest_size = evp_md != nullptr ? EVP_MD_size(evp_md) : -1;
+  wrap->use_xof = is_xof;
+  if (wrap->output_len < 0) wrap->output_len = digest_size;
   if (argc >= 2 && argv[1] != nullptr && !IsNullOrUndefinedValue(env, argv[1])) {
     if (napi_get_value_int32(env, argv[1], &wrap->output_len) != napi_ok || wrap->output_len < 0) {
       delete wrap;
       napi_throw_error(env, "ERR_INVALID_ARG_VALUE", "Invalid output length");
       return nullptr;
     }
-    if (is_xof) {
-      wrap->use_xof = true;
-    } else if (wrap->output_len != digest_size) {
+    if (!is_xof && wrap->output_len != digest_size) {
       delete wrap;
       napi_throw_error(env,
                        "ERR_OSSL_EVP_NOT_XOF_OR_INVALID_LENGTH",
@@ -1267,7 +1266,21 @@ napi_value HashCtor(napi_env env, napi_callback_info info) {
     }
   }
 
-  napi_wrap(env, this_arg, wrap, HashFinalize, nullptr, &wrap->wrapper_ref);
+  wrap->context.reset(EVP_MD_CTX_new());
+  if (!wrap->context ||
+      (source != nullptr
+           ? source->context == nullptr ||
+                 EVP_MD_CTX_copy_ex(wrap->context.get(), source->context.get()) != 1
+           : EVP_DigestInit_ex(wrap->context.get(), evp_md, nullptr) != 1)) {
+    delete wrap;
+    napi_throw_error(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
+    return nullptr;
+  }
+
+  if (napi_wrap(env, this_arg, wrap, HashFinalize, nullptr, &wrap->wrapper_ref) != napi_ok) {
+    delete wrap;
+    return nullptr;
+  }
   return this_arg;
 }
 
@@ -1277,13 +1290,21 @@ napi_value HashUpdate(napi_env env, napi_callback_info info) {
   napi_value this_arg = nullptr;
   napi_get_cb_info(env, info, &argc, argv, &this_arg, nullptr);
   HashWrap* wrap = UnwrapHash(env, this_arg);
-  if (wrap == nullptr) return this_arg != nullptr ? this_arg : Undefined(env);
-  if (wrap->finalized) return this_arg != nullptr ? this_arg : Undefined(env);
-  if (argc >= 1 && argv[0] != nullptr) {
-    std::vector<uint8_t> input = ValueToBytesWithEncoding(env, argv[0], argc >= 2 ? argv[1] : nullptr);
-    wrap->data.insert(wrap->data.end(), input.begin(), input.end());
+  bool ok = wrap != nullptr && !wrap->finalized && wrap->context != nullptr && argc >= 1;
+  if (ok) {
+    size_t byte_length = 0;
+    if (EdgeGetBinaryByteLength(env, argv[0], &byte_length)) {
+      ok = edge::crypto::UpdateHashFromBuffer(env, wrap->context.get(), argv[0], byte_length);
+    } else {
+      std::vector<uint8_t> input = ValueToBytesWithEncoding(env, argv[0], argc >= 2 ? argv[1] : nullptr);
+      bool pending = false;
+      napi_is_exception_pending(env, &pending);
+      ok = !pending && EVP_DigestUpdate(wrap->context.get(), input.data(), input.size()) == 1;
+    }
   }
-  return this_arg != nullptr ? this_arg : Undefined(env);
+  napi_value result = nullptr;
+  napi_get_boolean(env, ok, &result);
+  return result;
 }
 
 napi_value HashDigest(napi_env env, napi_callback_info info) {
@@ -1298,26 +1319,25 @@ napi_value HashDigest(napi_env env, napi_callback_info info) {
     napi_value cached = BytesToBuffer(env, wrap->digest_cache);
     return MaybeToEncodedOutput(env, cached, argc >= 1 ? argv[0] : nullptr);
   }
-  napi_value binding = GetBinding(env);
-  if (binding == nullptr) return Undefined(env);
+  if (wrap->context == nullptr) return Undefined(env);
 
-  napi_value algorithm = nullptr;
-  napi_create_string_utf8(env, wrap->algorithm.c_str(), NAPI_AUTO_LENGTH, &algorithm);
-  napi_value data = BytesToBuffer(env, wrap->data);
-  napi_value out = nullptr;
+  wrap->digest_cache.resize(static_cast<size_t>(wrap->output_len));
+  bool ok = false;
   if (wrap->use_xof) {
-    napi_value xof_len_value = nullptr;
-    napi_create_int32(env, wrap->output_len, &xof_len_value);
-    napi_value call_argv[3] = {algorithm, data, xof_len_value};
-    if (!CallBindingMethod(env, binding, "hashOneShotXof", 3, call_argv, &out)) return Undefined(env);
+    ok = EVP_DigestFinalXOF(wrap->context.get(),
+                            wrap->digest_cache.data(), wrap->digest_cache.size()) == 1;
   } else {
-    napi_value call_argv[2] = {algorithm, data};
-    if (!CallBindingMethod(env, binding, "hashOneShot", 2, call_argv, &out)) return Undefined(env);
+    unsigned int digest_size = 0;
+    ok = EVP_DigestFinal_ex(wrap->context.get(), wrap->digest_cache.data(), &digest_size) == 1;
+    if (ok) wrap->digest_cache.resize(digest_size);
   }
-  napi_value as_buffer = EnsureBufferValue(env, out);
-  wrap->digest_cache = ValueToBytes(env, as_buffer);
+  if (!ok) {
+    napi_throw_error(env, "ERR_CRYPTO_OPERATION_FAILED", "Hash operation failed");
+    return nullptr;
+  }
+  wrap->context.reset();
   wrap->finalized = true;
-  wrap->data.clear();
+  napi_value as_buffer = BytesToBuffer(env, wrap->digest_cache);
   return MaybeToEncodedOutput(env, as_buffer, argc >= 1 ? argv[0] : nullptr);
 }
 
@@ -8150,7 +8170,10 @@ napi_value CryptoOneShotDigest(napi_env env, napi_callback_info info) {
   if (binding == nullptr || argc < 4) return Undefined(env);
 
   napi_value algorithm = argv[0];
-  napi_value input = EnsureBufferValue(env, argv[3]);
+  size_t input_length = 0;
+  napi_value input = EdgeGetBinaryByteLength(env, argv[3], &input_length)
+                         ? argv[3]
+                         : EnsureBufferValue(env, argv[3]);
   bool has_output_length = argc >= 7 && argv[6] != nullptr && !IsUndefined(env, argv[6]);
 
   napi_value out = nullptr;

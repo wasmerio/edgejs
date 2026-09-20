@@ -561,7 +561,11 @@ dist-only:
 		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
 	fi
 
-framework-test-run:
+.PHONY: test-framework-install
+test-framework-install:
+	@"$(FRAMEWORK_TEST_ORCHESTRATOR)" --test "$(CURDIR)/scripts/test-framework-install.js"
+
+framework-test-run: test-framework-install
 	@command -v "$(FRAMEWORK_TEST_ORCHESTRATOR)" >/dev/null 2>&1 || { \
 		echo "error: $(FRAMEWORK_TEST_ORCHESTRATOR) is required to run framework-test" >&2; \
 		exit 1; \
@@ -574,7 +578,7 @@ framework-test-run:
 		FRAMEWORK_TEST_RUNNER_LABEL="$(FRAMEWORK_TEST_RUNNER_LABEL)" \
 		"$(FRAMEWORK_TEST_ORCHESTRATOR)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
 
-framework-test: $(EDGE_BINARY)
+framework-test: $(EDGE_BINARY) test-framework-install
 	@"$(EDGE_BINARY)" "$(FRAMEWORK_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
 
 # js-etherpad runs on both EdgeJS QuickJS Native and WASIX edge stages: the
@@ -631,7 +635,7 @@ framework-test-reset:
 		exit 1; \
 	fi
 
-standalone-build-test-run:
+standalone-build-test-run: test-framework-install
 	@command -v "$(FRAMEWORK_TEST_ORCHESTRATOR)" >/dev/null 2>&1 || { \
 		echo "error: $(FRAMEWORK_TEST_ORCHESTRATOR) is required to run standalone-build-test" >&2; \
 		exit 1; \
@@ -648,7 +652,7 @@ standalone-build-test-run:
 # QuickJS binary). The native V8 job only builds build-edge/edge, so pin the runner
 # to it explicitly — mirroring standalone-build-test-quickjs-native — otherwise the
 # default resolves to a binary this lane never builds and the step fails.
-standalone-build-test: $(EDGE_BINARY)
+standalone-build-test: $(EDGE_BINARY) test-framework-install
 	@SYMLINK_TARGET="$(abspath $(EDGE_BINARY))" \
 		"$(EDGE_BINARY)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
 
