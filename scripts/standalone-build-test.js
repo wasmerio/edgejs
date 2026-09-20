@@ -34,6 +34,7 @@ const {
   logSuccess,
   logWarn,
   parseSelector,
+  pnpmScriptEnv,
   printMatrixSummary,
   printSection,
   readJsonFile,
@@ -348,7 +349,7 @@ async function runNodeBuild(project, stage) {
     cwd: project.dir,
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...pnpmScriptEnv(),
       CI: process.env.CI || 'true',
     },
     shell: true,
@@ -379,7 +380,7 @@ async function runPrelaunchSteps(project, stage) {
     const result = spawnSync(command, {
       cwd: project.dir,
       encoding: 'utf8',
-      env: process.env,
+      env: pnpmScriptEnv(),
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

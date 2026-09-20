@@ -1460,7 +1460,7 @@ function toProjectRelativePath(projectDir, targetPath) {
 
 function makeProjectEnv(port) {
   const env = {
-    ...process.env,
+    ...harness.pnpmScriptEnv(),
     BROWSER: 'none',
     CI: '1',
     HOST: DEFAULT_HOST,
