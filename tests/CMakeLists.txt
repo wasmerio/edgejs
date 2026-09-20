@@ -121,3 +121,11 @@ add_test(
           "${EDGE_ROOT}/scripts/check_internal_binding_dispatch.py"
           "${EDGE_ROOT}/src/edge_module_loader.cc"
 )
+
+if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
+  add_test(
+    NAME edge.crypto_hash_streaming
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/crypto-hash-streaming.js"
+  )
+  set_tests_properties(edge.crypto_hash_streaming PROPERTIES TIMEOUT 60)
+endif()
