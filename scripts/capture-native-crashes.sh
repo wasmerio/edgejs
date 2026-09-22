@@ -8,7 +8,13 @@ mkdir -p "${crash_dir}"
 # Only symbolic backtraces are uploaded. Core files contain process memory and
 # remain temporary inputs to LLDB on the same CI runner.
 shopt -s nullglob
-cores=("${crash_dir}"/core.edge.*)
+cores=()
+# Linux's %e may contain the crashing thread's name, not "edge".
+for candidate in "${crash_dir}"/core.*; do
+  if [[ -f "${candidate}" && "${candidate}" != *.txt ]]; then
+    cores+=("${candidate}")
+  fi
+done
 if (( ${#cores[@]} == 0 )); then
   printf 'No Edge core dump was produced by the failed test step.\n' \
     > "${crash_dir}/no-core.txt"
