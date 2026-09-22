@@ -33,3 +33,12 @@ Turn the change into an explicit patch file with rationale and upstream context,
 or move to a QuickJS/QuickJS-NG version that supports WASIX atomics cleanly. Add
 build-time and runtime smoke tests for `Atomics`, `SharedArrayBuffer`, and
 blocking-wait limitations.
+
+## Upstream master sync (2026-09-21)
+
+QuickJS-NG master `6d46d07` still excludes all WASI targets from atomics and
+pthread helpers. The fork's `__wasm_atomics__` guards remain necessary and are
+preserved in QuickJS PR [#9](https://github.com/wasmerio/quickjs/pull/9).
+Upstream's configurable WASI stack protection is adopted separately; it does
+not replace the atomics guards. See the
+[synchronization audit](../../../dev_010_quickjs_upstream_sync/001_fork_audit.md).

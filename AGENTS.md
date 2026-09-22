@@ -211,7 +211,7 @@ plans/quickjs-wasm/development/troubleshooting/node-test/018_tls_securecontext_s
 Most recent Node compatibility troubleshooting note:
 
 ```text
-plans/quickjs-wasm/development/troubleshooting/node-compat/deploy/023_wasix_standalone_nested_entry_paths.md
+plans/quickjs-wasm/development/troubleshooting/node-compat/napi/021_quickjs_upstream_sync.md
 ```
 
 Most recent Wasmer deploy troubleshooting note:
