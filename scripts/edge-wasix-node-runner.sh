@@ -13,12 +13,10 @@ guest_root="${WASIX_EDGEJS_GUEST_ROOT:-/workspace}"
 guest_test_tmp_root="${WASIX_EDGEJS_GUEST_TEST_TMP_ROOT:-/tmp/edgejs-node-test}"
 workspace_dirs_csv="${WASIX_EDGEJS_WORKSPACE_DIRS:-test,lib,deps,assets,build-quickjs-wasix}"
 guest_exec_path="${WASIX_EDGEJS_GUEST_EXEC_PATH:-${guest_root}/build-quickjs-wasix/edgejs.wasm}"
-wasmer_stack_args=()
+# QuickJS's guest-stack guard needs enough host stack to raise a JS exception.
+# Wasmer's 1 MiB default can trap first with LLVM/amd64; retain the override.
+wasmer_stack_args=(--stack-size "${WASMER_STACK_SIZE:-4194304}")
 created_run_root=0
-
-if [[ -n "${WASMER_STACK_SIZE:-}" ]]; then
-  wasmer_stack_args+=(--stack-size "${WASMER_STACK_SIZE}")
-fi
 
 # Extra `wasmer run` flags for package-based lanes. Word-split intentionally.
 wasmer_extra_args=()

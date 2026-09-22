@@ -100,7 +100,7 @@ The user requested Wasmer 7.4.2 in CI if it works better. Compatibility review
 found no dependency on the custom Wasmer C-API extensions. The Actions source
 variable was removed and `WASMER_RELEASE_VERSION=v7.4.2` set through the existing
 provisioning interface; the next full QuickJS CI matrix validates that release.
-No engine stack, TLS, or test-exclusion workaround was added.
+No engine guard, TLS, or test-exclusion changes were added.
 
 Final V8 Linux initially reported 1,748 passes and one Buffer SIGBUS. The V8
 subtree is identical to Edge main's pin; a fresh local V8 11.9.9 build passed
@@ -111,3 +111,27 @@ The full final native/WASIX/framework CI matrices are the integration gate. The
 full preliminary native suite was not duplicated locally after the Error-stack
 merge because focused final stack checks and exact-commit CI cover that change.
 No Edge runtime, test, or build source changes were required during this subtask.
+The subsequent AMD64 investigation below changes the package launchers' host
+stack budget.
+
+## AMD64 host-stack correction
+
+The same candidate X509 test traps with released Wasmer 7.4.2 on AMD64 at its
+default 1 MiB host stack; it passes at 2 and 4 MiB. The consumed baseline passes
+X509 at 1 MiB, but both artifacts trap with a minimal recursive JavaScript
+function at that host limit. At 4 MiB, both instead catch the normal QuickJS
+`RangeError`: 2,584 calls for the baseline and 3,233 for the candidate.
+
+LLDB reproduced a fault in a protected 4 KiB mapping on a Tokio task thread;
+AMD64 emulation prevented a reliable native unwind. Upstream's smaller
+linear-memory interpreter frame allows more recursion before the guest guard.
+The engine audit found no merge-specific recursion bug. See the detailed
+[diagnostic record](../troubleshooting/node-compat/napi/021_quickjs_upstream_sync.md).
+
+The Node and framework package launchers now use a 4 MiB Wasmer host stack by
+default, preserving `WASMER_STACK_SIZE` overrides and QuickJS's own 1 MiB guard.
+The imported N-API runner path is unchanged. Direct package launch instructions
+document the same option because package annotations cannot configure it.
+The default Node launcher passed X509 three consecutive times on AMD64, and
+shell syntax/diff checks passed. The new full CI matrix validates this change
+with Wasmer 7.4.2 and CI's unchanged wasixcc 0.4.3 toolchain.

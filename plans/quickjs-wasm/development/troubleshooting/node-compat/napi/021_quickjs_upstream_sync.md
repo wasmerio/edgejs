@@ -126,3 +126,59 @@ The unchanged final V8 workflow passed on attempt two, including the Linux
 runtime, framework, and standalone checks. This does not claim to fix the
 unreproduced intermittent SIGBUS. Use PR #154's live checks for the new
 Wasmer 7.4.2 matrix; the old custom-runtime failure remains recorded above.
+
+## Controlled AMD64 stack-budget comparison
+
+Linux AMD64 Docker with released Wasmer 7.4.2 reproduced the candidate trap.
+The first read-only workspace mount failed before test execution while opening
+OpenSSL configuration; a writable mount was required. Ubuntu 24.04 also avoids
+Ubuntu 26 tar syscall failures under the host's AMD64 emulation. These setup
+failures are separate from the X509 result.
+
+With identical runtime, compiler, test fixtures, and runner:
+
+| Guest artifact | Wasmer host stack | X509 result |
+| --- | --- | --- |
+| Edge `7027edfa` / N-API `2061873` / QuickJS `ff1471c` | default 1 MiB | Passed |
+| Candidate QuickJS `0daca74` | default 1 MiB | Trapped twice |
+| Candidate QuickJS `0daca74` | 2 MiB | Passed |
+| Candidate QuickJS `0daca74` | 4 MiB | Passed |
+
+LLDB reproduced SIGSEGV on a Tokio task thread. The fault lies in a 4 KiB
+protected mapping, 16 bytes below the next writable mapping. AMD64 emulation
+reports invalid PC/SP values, preventing a reliable unwind or identification
+of the mapping's owner. Wasmer emitted no requested guest core dump. The
+controlled stack-size comparison is stronger evidence than the trap label.
+Wasmer 7.4.2 alone is therefore not sufficient for this workload.
+
+Correction plan: give the existing Wasmer node/framework launchers a documented
+4 MiB host-stack default, with `WASMER_STACK_SIZE` remaining an override. This
+provides margin above the demonstrated 2 MiB passing budget without disabling
+QuickJS's separate 1 MiB linear-memory guard. Document the same CLI option for
+direct package launches, then rerun the exact AMD64 test through the default
+launcher and all PR checks. Do not change TLS semantics or skip the test.
+
+Native C-API execution was independently verified against embedded Wasmer 7.4.2
+using LLDB's `wasmer_version()` result. Compilation, instantiation, callbacks,
+memory, tables, globals, traps, streaming, and teardown passed. Two broader
+Node wrapper error-format expectations also fail on the old binary and are
+pre-existing compatibility gaps.
+
+The updated default launcher passed X509 three consecutive times on AMD64,
+and its trace confirms `--stack-size 4194304`. A minimal try/catch recursion
+probe traps at 1 MiB but catches a normal `RangeError: Maximum call stack size
+exceeded` at 4 MiB (3,233 calls). The old baseline also traps at 1 MiB for this
+minimal function, showing the default host budget was already insufficient for
+some recursion shapes even though its X509 test passed. At 4 MiB the baseline
+also catches the same RangeError, after 2,584 calls; the candidate permits
+approximately 25% more recursive calls before the guest guard fires.
+
+Read-only engine review found no merge-specific recursion bug: `JS_CallInternal`
+matches upstream apart from retained receiver tracking and one error message.
+Its compiled linear-memory frame shrank from 384 to 304 bytes, while Wasm locals
+changed from 48 to 50. This can permit more recursion before the guest guard;
+it is not proof of a larger native frame. Node's `isStackOverflowError` itself
+intentionally recurses to learn the engine's overflow error. The supported
+correction is sufficient host-stack headroom so that the guest guard can raise
+a catchable exception. Wasmer 7.4.2 package annotations do not expose this host
+budget, so direct package launch instructions include the explicit option.

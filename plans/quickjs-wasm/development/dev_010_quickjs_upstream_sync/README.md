@@ -68,8 +68,13 @@ green. PRs are drafts; default branches have not been updated.
   on attempt two after an intermittent Linux Buffer SIGBUS. The QuickJS WASIX
   X509 stack trap repeated with the custom Wasmer 7.3 host. Per user request,
   CI provisioning now selects released Wasmer 7.4.2 after Linux ARM64 exact-test
-  success and a native C-API compatibility audit. All QuickJS lanes must pass
-  on that release; use linked PR checks for current status. See the
+  success and a native C-API compatibility audit. Controlled AMD64 runs showed
+  that release also needs more host-stack headroom: the candidate traps at
+  1 MiB but passes X509 at 2 and 4 MiB. Node/framework launchers now default to
+  4 MiB, retaining `WASMER_STACK_SIZE`. Three exact-test repetitions passed;
+  a minimal recursion probe catches the JavaScript overflow at 4 MiB instead
+  of trapping. All QuickJS lanes must pass on this configuration; use linked
+  PR checks for current status. See the
   [diagnostic record](../troubleshooting/node-compat/napi/021_quickjs_upstream_sync.md).
   Baseline nightly publishing failure does not run on pull requests.
 
