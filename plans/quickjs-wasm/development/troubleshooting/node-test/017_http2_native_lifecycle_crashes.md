@@ -2,8 +2,8 @@
 
 | | | Remarks |
 | --- | --- | --- |
-| **Status** | ▶️ | Reopened: recurring native V8 macOS shutdown signals remain; a native crash stack is required before another logic change. |
-| **Severity** | High | Signal 5/10/11 crashes intermittently block the macOS V8 CI job. |
+| **Status** | ▶️ | Reopened: recurring native V8 Linux/macOS shutdown signals remain; a native crash stack is required before another logic change. |
+| **Severity** | High | Signal 5/7/10/11 crashes intermittently block native V8 CI. |
 
 ## Symptoms
 
@@ -337,3 +337,56 @@ the Edge test step fails. If the report is absent, rerun only the reported test
 under LLDB in batch mode and upload its backtrace. Use the resulting native
 stack to identify the exact teardown owner before modifying logic; do not mask
 the issue with test skips or automatic retries.
+
+## 2026-09-22 repeated Linux Buffer SIGBUS
+
+QuickJS upstream integration PR #154 reproduced a V8 Linux Signal 7 in
+`test-buffer-bytelength.js` on runs `35688862492` and `35693874264`.
+Each finished with 1,748 passes and one crash. The earlier run passed a manual
+failed-job rerun, and intervening run `35692198613` passed without a rerun.
+The V8 subtree and Edge runtime source are identical to the baseline, so the
+QuickJS sync does not explain this defect. The user explicitly flagged its
+recurrence; a green retry alone is not a resolution.
+
+A fresh macOS V8 build passed 100 mixed Buffer/HTTP2 executions. The successful
+Linux CI binary from `35692198613` then passed 100 exact Buffer test executions
+in Ubuntu 24.04 AMD64 Docker (one serial and 99 with four processes, bytecode
+cache disabled). That uses emulation on an ARM64 host and the successful binary,
+not the failed job's binary, so it does not reproduce hosted Linux scheduling.
+
+Read-only review found a separate concrete ownership mismatch worth diagnosing:
+
+- N-API `ForegroundTaskRunner::PostTaskCommon` initializes the record's isolate
+  state and increments pending work after the host enqueue publishes the task.
+  The host can already have run cleanup by that point.
+- Edge's enqueue failure paths can invoke the record cleanup, but the N-API
+  caller then retrieves the task from the record and deletes the record.
+- A failed `uv_async_send` reports failure after the task is already queued,
+  making ownership on failure ambiguous.
+
+These paths predate the integration and are not yet proven to cause the observed
+SIGBUS. The cross-context ArrayBuffer itself is correctly escaped and its
+context retained; its byte length is read through the JS getter, not a raw
+N-API backing-store pointer.
+
+Action plan before changing runtime behavior:
+
+1. Run the existing exact test under LLDB with a separate standard ASAN build
+   of Edge/N-API. Keep the prebuilt V8 engine unchanged and preserve the original
+   user checkout. Record any actual native stack or sanitizer report.
+2. Review every callback consumer and establish an explicit ownership contract
+   for accepted and rejected foreground work, including delayed tasks and
+   shutdown. Do not infer ownership solely from a return code after publication.
+3. If local runs remain clean, preserve native crash diagnostics in CI so the
+   hosted failure can identify its owner. Do not disable tests or add automatic
+   retries to make the suite green.
+4. Validate any demonstrated correction against the exact Buffer test, relevant
+   N-API/platform tests, the Edge V8 suite, and the full dependent PR matrices.
+
+Local instrumented diagnostic attempts were blocked by automatic review, so
+they are not claimed as verification. Linux CI now enables core dumps for the
+existing runtime test step and retains line tables in the optimized build.
+On failure, LLDB writes symbolic thread backtraces and loaded-image information
+from the actual process core. Only text reports are uploaded; raw process-memory
+core files are removed on the runner. The original test failure remains a
+failure, with no automatic test retry or changed expectation.

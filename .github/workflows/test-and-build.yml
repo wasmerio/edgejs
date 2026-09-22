@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libicu-dev
+          sudo apt-get install -y libicu-dev lldb
 
       - name: Validate public N-API headers stay V8-agnostic
         shell: bash
@@ -82,13 +82,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make build CMAKE_BUILD_TYPE=Release JOBS=4
+          make build CMAKE_BUILD_TYPE=Release JOBS=4 \
+            CMAKE_ARGS='-DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g1" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g1"'
 
       - name: Test edge
+        id: native_tests
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/edge-native-crashes"
+          sudo sysctl -w "kernel.core_pattern=${RUNNER_TEMP}/edge-native-crashes/core.%e.%p"
+          ulimit -c unlimited
           make test-only TEST_JOBS=4
+
+      - name: Capture native crash backtraces
+        if: failure() && steps.native_tests.outcome == 'failure'
+        timeout-minutes: 5
+        shell: bash
+        run: scripts/capture-native-crashes.sh build-edge/edge "${RUNNER_TEMP}/edge-native-crashes"
+
+      - name: Upload native crash backtraces
+        if: failure() && steps.native_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-v8-linux-crash-backtraces
+          path: ${{ runner.temp }}/edge-native-crashes/*.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Test locale (Intl/ICU, V8 native)
         shell: bash
