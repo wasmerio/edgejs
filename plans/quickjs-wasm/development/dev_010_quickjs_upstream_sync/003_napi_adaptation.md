@@ -82,3 +82,17 @@ Cache audit: upstream's bytecode format is now version 28. Existing
 round-trip, mismatched-source rejection, empty-cache fallback, and module
 state/hook APIs. The known upstream serialization loss of module import
 attributes/phase remains outside this synchronization's wire-format changes.
+
+## Consumed dependency commit retention
+
+A later gitlink audit found that N-API `main` consumes QuickJS commit
+`ff1471cf525483ea1e5b8030d5ecf274ed00eb70` from
+`codex/error-derived-stack-filter`, which had not reached the fork's `master`.
+The coordinator is preserving it in the engine integration: derived Error
+constructor filtering, borrowed receiver state, and CallSite `getThis` /
+`getTypeName`, with receiver ownership cleared along upstream CallSite cleanup
+paths. Both N-API configurations rebuilt successfully and their full suites
+passed against this source: **95/95 Release and 95/95 Debug**. No N-API source
+adaptation was necessary. Logs:
+`/private/tmp/quickjs-upstream-sync/napi-{release,debug}-final-rebuild.log` and
+`/private/tmp/quickjs-upstream-sync/napi-{release,debug}-consumed-commit-test.log`.

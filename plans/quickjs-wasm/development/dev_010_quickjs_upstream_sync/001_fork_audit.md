@@ -13,6 +13,14 @@ missing from the fork and 21 non-merge fork-only commits. Existing fork commit
 history should remain; superseded implementations can be removed in the merge
 resolution while retaining their provenance.
 
+The consumer audit subsequently identified an additional engine commit already
+pinned by N-API main: `ff1471cf525483ea1e5b8030d5ecf274ed00eb70`, from
+`origin/codex/error-derived-stack-filter`, is not an ancestor of fork master.
+It is the 22nd non-merge downstream delta in the effective consumed baseline.
+The coordinator merged this branch as well. Auditing fork master alone is not
+sufficient: the final integration must preserve both upstream master and the
+engine commit actually consumed by N-API.
+
 Read the development index and existing module-loading notes before reviewing.
 The existing source-phase limitation is documented in
 `../dev_003_quickjs_module_loading/003_dynamic_import_import_meta_required_facade.md`:
@@ -44,6 +52,7 @@ module value semantics completely.
 | `3b563d4` UBSAN fixes | Split | Generator nullable-state fix is obsolete with upstream embedded state. Retain unresolved-module null check, which supports fork deferred linking. Source-position test changes remain consistent with fork behavior. |
 | `c723e29` CI trimming | Retain fork scope | Upstream publishing/docs release jobs are not appropriate for this fork. Keep sanitizer and supported native lanes and run new upstream regression cases through a compatible driver. |
 | `9d5513a` upstream api-test/test262 omissions | Reassess tests selectively | Several upstream expectations differ intentionally (deferred modules, lazy formatting, function source properties, error text). Do not describe omitted tests as passed or mask genuine new failures with blanket skips. |
+| `ff1471c` consumed branch: derived Error filtering / receiver metadata | Retain and adapt | Already consumed by N-API main although absent from fork master. Retain derived constructor filtering, receiver/type CallSite fields, typed frame formatting, and lazy installation with `JS_PROP_NO_EXOTIC`. Extend upstream CallSite ownership-transfer clearing to the two new fields. Preserve upstream Error storage semantics by using FILTER_START only for frame selection. |
 
 ## Coroutine GC: choose one complete implementation
 
@@ -115,11 +124,48 @@ constructor/nonconstructor assertions.
 The rebuilt merge was rerun against the direct probe and printed `0 1`,
 confirming deferred, single-call formatting.
 
+This defect applies to the initial master-based merge. The later-discovered
+consumed branch `ff1471c` had already fixed the success handling with
+`JS_DefineProperty`, `JS_PROP_NO_EXOTIC`, and `ret == 1`. The final resolved
+integration keeps that stronger branch implementation, including explicit
+getter/setter frees because `JS_DefineProperty` borrows them. The additional
+regression still verifies deferred single-call behavior.
+
 Upstream `c846cb1` must remain intact: insertion via
 `JS_DefinePropertyValueUint32` consumes its value even on failure, and
 `js_new_callsite` clears source `JSValue` fields once ownership transfers.
 Both behaviors are present in the reviewed merge. These matter under OOM,
 including when lazy getter creation allocates after the CallSite array exists.
+
+### Consumed derived-error branch ownership review
+
+`ff1471c` adds borrowed `JSStackFrame.this_val` and owned
+`JSCallSiteData.this_val` / `type_name`. Reviewed the resolved working tree after
+the coordinator merged the branch:
+
+- All five frame creation paths initialize `this_val`: C function data,
+  C closure, C function, ordinary bytecode, and coroutine initialization.
+  Coroutine frames borrow the value already owned/marked by `s->this_val`;
+  no second owning reference is introduced in the frame.
+- The two CallSite fields are initialized to null, populated with duplicated
+  receiver/value ownership, included in GC marking and finalization, and freed
+  by common temporary-data cleanup. `JS_GetCurrentStackTrace` uses that cleanup
+  after extracting raw frame metadata.
+- Upstream's ownership transfer now clears all five fields after copying into
+  the heap CallSite, including `this_val` and `type_name`. Omitting these two
+  clears would reintroduce double-free on failed array insertion.
+- `JS_BACKTRACE_FLAG_FILTER_START` selects the frame after the derived Error
+  constructor but does not force ordinary Errors to gain own stack properties.
+  The lazy eligibility check remains `has_filter_func || can_store_error_stack
+  || can_add_backtrace`, and outer storage keeps the upstream Error data slot.
+- Receiver type names are read from the internal class table without calling
+  receiver getters. The branch's getter-name formatting exception remains.
+
+No additional ownership or stack-storage merge defect was found in this review.
+The branch's `test_exception_derived_constructor_stack_filter` regression
+remains in `tests/test_builtin.js`; it covers derived-frame filtering, deferred
+formatting after class field initialization, receiver/type accessors, anonymous
+frame formatting, and getter-name formatting.
 
 ## Modules, bytecode, and arena allocation
 

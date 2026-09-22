@@ -1,6 +1,6 @@
 # EdgeJS integration validation
 
-Status: active; dependency preparation. Owner: EdgeJS worker. Depends on engine/N-API ready signal.
+Status: local validation complete; exact-commit CI pending. Owner: EdgeJS worker.
 Write ownership: EdgeJS runtime/tests/build changes if necessary and this note;
 no N-API or QuickJS writes, no other plan edits. Audit CI/build dependencies first,
 initialize non-NAPI submodules safely, then build native QuickJS and WASIX and run
@@ -28,3 +28,73 @@ The baseline Makefile lists `test-quickjs-lang` in `.PHONY` but defines no recip
 so its language step currently executes no tests. This is pre-existing and not
 evidence of successful language validation. Direct smoke coverage will be recorded
 separately. No source changes have been made for this caveat.
+
+## Preliminary results (before consumed-fork ancestry audit)
+
+Native Release and WASIX builds completed successfully, including the WASIX
+no-N-API-import check and package validation. Native CTest passed 2/2; native
+and WASIX Intl targets completed (the ICU environment test skips as too old).
+The Next standalone app passed both host Node and native Edge stages.
+
+A temporary engine-sensitive smoke script passed against Node, the existing
+Edge binary, and the newly built native binary. It covers ArrayBuffer transfer
+and detachment, structured clone, V8-shaped serialization, vm cached bytecode,
+AsyncLocalStorage across Promise/microtask boundaries, and fetch/HTTP.
+
+WASIX safe-mode tests passed after one retry: the first cold-cache invocation
+emitted a Wasmer warning about removing a nonexistent corrupt cache entry, which
+the smoke script correctly rejected as unexpected stderr. The warm-cache retry
+passed all seven cases. This was not a guest assertion/crash.
+
+These are preliminary results: the coordinator subsequently discovered that
+N-API main consumes an additional unmerged QuickJS Error-stack branch and is
+integrating it. Rebuild and rerun engine-dependent checks after that signal.
+Logs are under `/private/tmp/quickjs-upstream-sync/edge-*.log`.
+
+The preliminary native Node compatibility run completed with **1,741/1,741
+passing** in 2m47s. This run predates the consumed-fork Error-stack merge, and is
+not a claim about the final engine commit.
+
+## Final local validation
+
+After integrating the consumed QuickJS Error-stack branch, final dependencies
+are QuickJS `0daca74` and N-API `54d7989`.
+
+- Native Release Edge rebuild: passed.
+- WASIX Edge rebuild from `quickjs-wasm/` using `./build.sh`: passed, including
+  no-N-API-import verification.
+- Engine-sensitive native smoke: passed (transfer/detachment, structured clone,
+  serialization, vm bytecode, AsyncLocalStorage, Promise/microtask ordering, HTTP).
+- Native console/diagnostics-channel categories with existing CI exclusions:
+  **77/77 passed**.
+- Direct native Error checks: stack-frame hiding, prepareStackTrace, aggregate
+  errors, formatList, and decorated error stacks passed.
+- Final WASIX safe-mode smoke: **7/7 passed** on warm-cache retry. The first
+  invocation for each new artifact produced the same host Wasmer cold-cache
+  warning noted above. No guest failure was observed.
+- Final WASIX Intl target completed; ICU environment case skips as too old.
+- Final `wasmer package build --check quickjs-wasm`: passed.
+- Final WASIX `test/parallel/test-x509-escaping.js`, via
+  `scripts/edge-wasix-node-runner.sh`: **passed (exit 0, empty output)** on macOS
+  arm64 with Wasmer 7.4.2.
+
+`test-errors-systemerror.js`, run directly with `--expose-internals`, still
+expects V8's wording for access to an undefined object's property; QuickJS says
+`cannot read property 'syscall' of undefined`. The existing Edge binary fails
+the same assertion, so this is pre-existing. The Node harness defaults to
+skipping files whose first meaningful line is `// Flags:`, including this case.
+No broad engine-error-message workaround was added.
+
+## CI follow-up
+
+The first integration CI head, `c55d9e07`, predated the consumed Error-stack merge.
+Its QuickJS native Linux/macOS jobs passed. Its WASIX job reported **1,674 passes
+and 1 failure**, `test-x509-escaping.js` with `RuntimeError: call stack exhausted`.
+The exact final local WASIX test passes as recorded above. The coordinator will
+run final-commit CI before deciding whether this needs Linux Docker reproduction;
+the old failure is not treated as either resolved or a confirmed final regression.
+
+The full final native/WASIX/framework CI matrices are the integration gate. The
+full preliminary native suite was not duplicated locally after the Error-stack
+merge because focused final stack checks and exact-commit CI cover that change.
+No Edge runtime, test, or build source changes were required during this subtask.
