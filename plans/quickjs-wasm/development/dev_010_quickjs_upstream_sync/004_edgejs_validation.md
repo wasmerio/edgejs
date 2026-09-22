@@ -90,9 +90,22 @@ No broad engine-error-message workaround was added.
 The first integration CI head, `c55d9e07`, predated the consumed Error-stack merge.
 Its QuickJS native Linux/macOS jobs passed. Its WASIX job reported **1,674 passes
 and 1 failure**, `test-x509-escaping.js` with `RuntimeError: call stack exhausted`.
-The exact final local WASIX test passes as recorded above. The coordinator will
-run final-commit CI before deciding whether this needs Linux Docker reproduction;
-the old failure is not treated as either resolved or a confirmed final regression.
+The final integration head `4c81f11` repeated the exact WASIX failure while
+all native QuickJS checks passed. Both released Wasmer 7.3.0 and 7.4.2 pass the
+exact candidate test in native Linux ARM64 Ubuntu Docker. CI uses custom Wasmer
+`5281e55` and Linux AMD64, so this does not reproduce its environment. Local
+wasixcc is 0.4.4; CI remains 0.4.3/sysroot `v2026-07-30.1`.
+
+The user requested Wasmer 7.4.2 in CI if it works better. Compatibility review
+found no dependency on the custom Wasmer C-API extensions. The Actions source
+variable was removed and `WASMER_RELEASE_VERSION=v7.4.2` set through the existing
+provisioning interface; the next full QuickJS CI matrix validates that release.
+No engine stack, TLS, or test-exclusion workaround was added.
+
+Final V8 Linux initially reported 1,748 passes and one Buffer SIGBUS. The V8
+subtree is identical to Edge main's pin; a fresh local V8 11.9.9 build passed
+100 mixed Buffer/HTTP2 runs. The full final V8 workflow passed on attempt two.
+This does not claim a root cause or fix for that intermittent signal.
 
 The full final native/WASIX/framework CI matrices are the integration gate. The
 full preliminary native suite was not duplicated locally after the Error-stack

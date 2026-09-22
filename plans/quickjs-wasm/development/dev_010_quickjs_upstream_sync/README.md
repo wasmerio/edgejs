@@ -64,9 +64,13 @@ green. PRs are drafts; default branches have not been updated.
   passed. The first full native run passed 1,741 tests; see the validation note
   for exactly which checks predated the consumed-branch merge.
 - QuickJS and N-API CI are green on final heads `0daca74` and `54d7989`.
-  The first EdgeJS run passed native QuickJS but hit one WASIX x509 stack trap
-  plus two V8 failures (HTTP2 test and npm registry fetch). Final-head EdgeJS CI
-  is the remaining gate; use the linked PR checks for current status.
+  Final EdgeJS native QuickJS Linux/macOS passed, and the V8 workflow passed
+  on attempt two after an intermittent Linux Buffer SIGBUS. The QuickJS WASIX
+  X509 stack trap repeated with the custom Wasmer 7.3 host. Per user request,
+  CI provisioning now selects released Wasmer 7.4.2 after Linux ARM64 exact-test
+  success and a native C-API compatibility audit. All QuickJS lanes must pass
+  on that release; use linked PR checks for current status. See the
+  [diagnostic record](../troubleshooting/node-compat/napi/021_quickjs_upstream_sync.md).
   Baseline nightly publishing failure does not run on pull requests.
 
 Known pre-existing caveat: standalone qjs static-module execution/`--std` can
