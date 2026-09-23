@@ -21,9 +21,16 @@ symbols such as `napi_*`, `node_api_*`, or `unofficial_napi_*`.
 
 ## Run
 
+Use Wasmer 7.4.2 with a 4 MiB host stack. With LLVM on AMD64, Wasmer's default
+1 MiB stack can run out before QuickJS can raise a catchable JavaScript stack
+overflow. QuickJS's own linear-memory stack guard remains enabled. The Node
+compatibility and framework launchers use 4 MiB by default; `WASMER_STACK_SIZE`
+overrides it. Package annotations cannot set this host limit, so direct Wasmer
+invocations need the option shown below.
+
 ```sh
-wasmer run quickjs-wasm -- --version
-wasmer run quickjs-wasm -- -e "console.log('hello from quickjs')"
+wasmer run --stack-size 4194304 quickjs-wasm -- --version
+wasmer run --stack-size 4194304 quickjs-wasm -- -e "console.log('hello from quickjs')"
 ```
 
 The `edge` command remains the default entrypoint. The package also exposes
@@ -38,14 +45,14 @@ it does not change EdgeJS's global `fs` behavior. Arguments after `--` are
 forwarded to pnpm:
 
 ```sh
-wasmer run quickjs-wasm --command=pnpm --volume=. -- --version
+wasmer run --stack-size 4194304 quickjs-wasm --command=pnpm --volume=. -- --version
 ```
 
 Run an install from the project directory with networking enabled and mount
 that directory read-write into the guest:
 
 ```sh
-wasmer run quickjs-wasm --command=pnpm --net --volume=. -- install react
+wasmer run --stack-size 4194304 quickjs-wasm --command=pnpm --net --volume=. -- install react
 ```
 
 `--command=pnpm` selects the pnpm entrypoint, `--net` permits registry access,

@@ -115,3 +115,8 @@ duplicating issue details.
 | 🟠 | High | [003_ci_safe_mode_missing_quickjs_artifact.md](wasmer-deploy/003_ci_safe_mode_missing_quickjs_artifact.md) | CI safe-mode missing QuickJS artifact |
 | 🟢 | High | [004_wasix_safe_mode_https_exit.md](wasmer-deploy/004_wasix_safe_mode_https_exit.md) | WASIX safe-mode HTTPS exits before callbacks |
 | 🟠 | High | [005_pnpm_cli_wasix_futimes.md](wasmer-deploy/005_pnpm_cli_wasix_futimes.md) | pnpm CLI WASIX filesystem fallbacks |
+
+### ▶️ [021_quickjs_upstream_sync.md](node-compat/napi/021_quickjs_upstream_sync.md): QuickJS upstream synchronization compatibility
+
+Overlapping coroutine GC, ArrayBuffer ownership, and lazy stack trace integration
+while adopting upstream QuickJS-NG master; validation across all three repos.
