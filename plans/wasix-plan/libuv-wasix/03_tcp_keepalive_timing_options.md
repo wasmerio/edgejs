@@ -48,10 +48,9 @@ are outside this coverage.
 
 - [libuv #15](https://github.com/wasix-org/libuv/pull/15) contains only the
   filesystem timestamp fixes; its TCP implementation is unchanged.
-- Full configurable probe timing is separate work in
-  [WITX #10](https://github.com/wasix-org/wasix-witx/pull/10),
-  [libc #140](https://github.com/wasix-org/wasix-libc/pull/140), and
-  [Wasmer #7035](https://github.com/wasmerio/wasmer/pull/7035).
-  Those keepalive changes are not prerequisites for this Edge fallback.
-- Pi still needs the Wasmer/libuv timestamp fixes and
-  [N-API #76](https://github.com/wasmerio/napi/pull/76) for host module loading.
+- [Wasmer #7035](https://github.com/wasmerio/wasmer/pull/7035) contains only
+  filesystem timestamp persistence and metadata refresh fixes.
+- [N-API #76](https://github.com/wasmerio/napi/pull/76) provides host module loading.
+
+The earlier libc, WITX, and proxy PRs for configurable TCP probe timing are
+closed as unnecessary for Pi. The native Edge fallback uses the existing ABI.
