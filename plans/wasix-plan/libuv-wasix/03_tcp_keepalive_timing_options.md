@@ -82,3 +82,10 @@ claiming that WASIX already implements every TCP timing option.
 ### Commits without PR
 
 - Sadhbh: libuv-wasix [8d537440](https://github.com/Anodized-Titanium/libuv-wasix/commit/8d537440533cfc290e33c7bcbf181ab414dd1850) Wasix-LibC supports SOL_SOCKET + SO_KEEPALIVE, however does not support additional options such as TCP_KEEPIDLE, TCP_KEEPINTVL, or TCP_KEEPCNT - so we disable them
+
+## September 2026 implementation
+
+[libuv PR #15](https://github.com/wasix-org/libuv/pull/15)
+implements this at the libuv boundary. Basic SO_KEEPALIVE failures still
+propagate; only WASIX unsupported-option errors for the optional TCP timing
+knobs are tolerated. Deferred socket creation is covered by the TCP regression.
