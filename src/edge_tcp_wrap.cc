@@ -2,6 +2,11 @@
 
 #include <arpa/inet.h>
 
+#if defined(__wasi__)
+#include <errno.h>
+#include <sys/socket.h>
+#endif
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -749,11 +754,22 @@ napi_value TcpSetKeepAlive(napi_env env, napi_callback_info info) {
   GetThis(env, info, &argc, argv, &wrap);
   if (wrap == nullptr || argc < 2) return EdgeStreamBaseMakeInt32(env, UV_EINVAL);
   bool on = false;
-  int32_t delay = 0;
   napi_get_value_bool(env, argv[0], &on);
+#if defined(__wasi__)
+  // WASIX supports SO_KEEPALIVE, but not libuv's TCP_KEEP* timing options.
+  // net.js reapplies the cached preference after connect if no fd exists yet.
+  uv_os_fd_t fd;
+  const int err = uv_fileno(reinterpret_cast<const uv_handle_t*>(&wrap->handle), &fd);
+  if (err != 0) return EdgeStreamBaseMakeInt32(env, err == UV_EBADF ? 0 : err);
+  const int enabled = on ? 1 : 0;
+  const int result = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled));
+  return EdgeStreamBaseMakeInt32(env, result == 0 ? 0 : uv_translate_sys_error(errno));
+#else
+  int32_t delay = 0;
   napi_get_value_int32(env, argv[1], &delay);
   return EdgeStreamBaseMakeInt32(env,
                                 uv_tcp_keepalive(&wrap->handle, on ? 1 : 0, static_cast<unsigned int>(delay)));
+#endif
 }
 
 napi_value TcpRef(napi_env env, napi_callback_info info) {
