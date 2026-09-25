@@ -39,15 +39,16 @@ JavaScript fetch()/HTTP client
      as failure for the whole keepalive operation.
 ```
 
-The boundary is libuv <-> socket options. Long-term, `wasix-libc`/Wasmer should
-support the useful TCP options where possible. Until then, libuv should not make
-unsupported timing knobs break basic keepalive enablement.
+The missing support belongs in `wasix-libc` and Wasmer's socket options.
+Libuv should configure the requested values and propagate failures normally.
 
-Proposed solution:
+Runtime solution:
 
-Keep EdgeJS calling `uv_tcp_keepalive()` normally. In libuv-wasix, treat the
-WASIX timing knobs as optional when `SO_KEEPALIVE` has been applied or when the
-platform cannot expose those knobs yet.
+Keep EdgeJS and libuv calling `uv_tcp_keepalive()` and `setsockopt()` normally.
+Map the three TCP timing options through the existing WASIX socket-option
+imports, retain settings made before socket connection, and apply them through
+Wasmer's networking backend. Unsupported options and invalid values remain
+errors.
 
 Relevant libuv-wasix code paths:
 
@@ -58,22 +59,20 @@ Relevant libuv-wasix code paths:
 ~/src/wasmer/lib/wasix/src/syscalls/wasix/sock_set_opt_*.rs
 ```
 
-Proposed callgraph:
+Implemented callgraph:
 
 ```text
 JavaScript fetch()/HTTP client
   -> Node TCPWrap::SetKeepAlive
   -> libuv uv_tcp_keepalive()
-  -> WASIX uv__tcp_keepalive()
-  -> enable/disable SO_KEEPALIVE when available
-  -> skip or tolerate unsupported TCP timing knobs
-  -> return success for the keepalive operation
+  -> libuv uv__tcp_keepalive()
+  -> libc setsockopt(IPPROTO_TCP, TCP_KEEP*)
+  -> WASIX sock_set_opt_size(TcpKeepIdle/TcpKeepInterval/TcpKeepCount)
+  -> Wasmer socket state and networking backend
+  -> apply requested settings or return the backend error
 ```
 
-This is deliberately small: make basic Node keepalive setup succeed without
-claiming that WASIX already implements every TCP timing option.
-
-## Proposed Solution References
+## Earlier workaround references (superseded)
 
 ### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
 
@@ -85,7 +84,30 @@ claiming that WASIX already implements every TCP timing option.
 
 ## September 2026 implementation
 
-[libuv PR #15](https://github.com/wasix-org/libuv/pull/15)
-implements this at the libuv boundary. Basic SO_KEEPALIVE failures still
-propagate; only WASIX unsupported-option errors for the optional TCP timing
-knobs are tolerated. Deferred socket creation is covered by the TCP regression.
+[libuv PR #15](https://github.com/wasix-org/libuv/pull/15) is limited to
+filesystem timestamp fixes and tests. Its TCP error-suppression wrapper has
+been removed; `src/unix/tcp.c` matches the upstream WASIX branch.
+
+- [WITX #10](https://github.com/wasix-org/wasix-witx/pull/10) appends socket
+  option IDs 27, 28, and 29 for idle seconds, interval seconds, and probe count.
+  Existing option IDs and syscall signatures remain unchanged.
+- [wasix-libc #140](https://github.com/wasix-org/wasix-libc/pull/140) maps the
+  POSIX TCP options to the existing size-option imports, with positive integer
+  validation and matching getters.
+- [Wasmer #7035](https://github.com/wasmerio/wasmer/pull/7035) preserves the
+  settings through socket creation and connection and implements the backend
+  options, alongside the filesystem timestamp fixes.
+
+An Edge.js WASIX artifact must be rebuilt against a sysroot containing the
+libc change and run with the updated Wasmer networking implementation. Local
+builds can use the existing override:
+
+```sh
+WASIXCC_SYSROOT=/path/to/rebuilt/sysroot ./wasix/build-wasix.sh
+```
+
+Both WASIX CI workflows currently pin sysroot `v2026-07-30.1`, which predates
+these changes. A released sysroot containing wasix-libc #140 is still required
+before updating that pin and producing release artifacts with this support.
+No unreleased tag is assumed here. The local engine-free Edge build, npm/pnpm
+staging, and WebC package build passed using the rebuilt libc sysroot.
