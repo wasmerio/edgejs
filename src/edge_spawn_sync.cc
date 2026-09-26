@@ -891,7 +891,10 @@ napi_value SpawnSync(napi_env env, napi_callback_info info) {
     uv_options.flags = 0;
     if (!options.cwd.empty()) uv_options.cwd = options.cwd.c_str();
     if (!exec_env.empty()) uv_options.env = exec_env.data();
+    // Keep the same WASIX detached fallback as the asynchronous spawn binding.
+#if !defined(__wasi__)
     if (options.detached) uv_options.flags |= UV_PROCESS_DETACHED;
+#endif
     if (options.windows_hide) uv_options.flags |= UV_PROCESS_WINDOWS_HIDE;
     if (options.windows_verbatim_arguments) uv_options.flags |= UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS;
     if (options.has_uid) {

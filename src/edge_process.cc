@@ -35,6 +35,9 @@
 #include <limits>
 
 #include <uv.h>
+#if defined(__wasi__)
+#include <wasi/api.h>
+#endif
 #include <openssl/crypto.h>
 #include <unicode/uchar.h>
 #include <unicode/uvernum.h>
@@ -3931,7 +3934,14 @@ napi_value ProcessMethodsKillCallback(napi_env env, napi_callback_info info) {
   if (!ValueToInt32(env, argv[0], &pid)) return nullptr;
   int32_t signal = 0;
   if (argc >= 2 && argv[1] != nullptr) ValueToInt32(env, argv[1], &signal);
-  int rc = uv_kill(pid, signal);
+#if defined(__wasi__)
+  // Released WASIX libc returns the syscall error without setting errno in
+  // kill(), so uv_kill() can otherwise turn a missing PID into success.
+  const int rc = uv_translate_sys_error(__wasi_proc_signal(
+      static_cast<__wasi_pid_t>(pid), static_cast<__wasi_signal_t>(signal)));
+#else
+  const int rc = uv_kill(pid, signal);
+#endif
   napi_value out = nullptr;
   napi_create_int32(env, rc, &out);
   return out;

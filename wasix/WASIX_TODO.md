@@ -14,6 +14,16 @@ Items here should be replaced with real WASIX implementations, proper feature ga
 
 ## libc / sysroot gaps
 
+- Native asynchronous and synchronous spawn accept `detached: true` as an
+  ordinary WASIX spawn. No new session or process group is created, so this
+  does not provide Unix group cancellation. Remove this fallback when WASIX
+  supports the corresponding spawn attributes and group signals.
+- Native `process.kill()` calls `proc_signal` directly on WASIX because the
+  released libc `kill()` returns syscall errors without setting `errno`.
+  Missing-PID errors also require a host that returns `ESRCH` from `proc_signal`.
+  This allows callers to fall back from group signals to an individual PID;
+  it does not guarantee termination of all descendants.
+
 - Replace the `fork()` stub in [wasix/src/wasix_compat.h](/home/theduke/dev/github.com/wasmerio/ubi/wasix/src/wasix_compat.h) with either:
   - a proper WASIX process model implementation, or
   - an explicit feature disable path in `ubi` where `fork`-style behavior is unsupported.
