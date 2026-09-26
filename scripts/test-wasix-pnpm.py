@@ -28,7 +28,7 @@ def run(command: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedP
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify the bundled pnpm command under QuickJS WASIX."
+        description="Verify the npm/pnpm aliases and delegated npm operations under WASIX."
     )
     parser.add_argument(
         "--wasmer-bin",
@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument(
         "--package-dir",
         default=str(Path(__file__).resolve().parents[1] / "quickjs-wasm"),
-        help="QuickJS WASIX package directory.",
+        help="WASIX package directory.",
     )
     parser.add_argument("--timeout", type=int, default=60)
     args = parser.parse_args()
@@ -50,31 +50,53 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="edgejs-pnpm-smoke.") as temp_dir:
         project_dir = Path(temp_dir)
         (project_dir / "package.json").write_text(
-            json.dumps({"name": "edge-pnpm-smoke", "private": True}, indent=2) + "\n",
+            json.dumps(
+                {
+                    "name": "edge-pnpm-smoke",
+                    "private": True,
+                    "scripts": {"smoke": "node -p \"require('react').version\""},
+                },
+                indent=2,
+            ) + "\n",
             encoding="utf-8",
         )
 
-        base = [args.wasmer_bin, "run", str(package_dir)]
-        version = run(
-            base + ["--command=pnpm", "--volume=.", "--", "--version"],
-            cwd=project_dir,
-            timeout=args.timeout,
-        ).stdout.strip()
-        if version != "10.34.5":
-            raise RuntimeError(f"unexpected pnpm version: {version!r}")
+        base = [args.wasmer_bin, "run", "--stack-size", "4194304", str(package_dir)]
+        # A project registry verifies the fallback reads npm configuration;
+        # a naive npm -> pnpm alias would recurse until the command times out.
+        registry = "https://alias-registry.invalid/"
+        npmrc = project_dir / ".npmrc"
+        npmrc.write_text(f"registry={registry}\n", encoding="utf-8")
+        for command in ("npm", "pnpm"):
+            version = run(
+                base + [f"--command={command}", "--volume=.", "--", "--version"],
+                cwd=project_dir,
+                timeout=args.timeout,
+            ).stdout.strip()
+            if version != "10.34.5":
+                raise RuntimeError(f"unexpected {command} version: {version!r}")
 
-        store_path = run(
-            base + ["--command=pnpm", "--volume=.", "--", "store", "path"],
-            cwd=project_dir,
-            timeout=args.timeout,
-        ).stdout.strip()
-        if store_path != "/tmp/.pnpm-store/v10":
-            raise RuntimeError(f"unexpected pnpm store path: {store_path!r}")
+            configured_registry = run(
+                base + [f"--command={command}", "--volume=.", "--", "config", "get", "registry"],
+                cwd=project_dir,
+                timeout=args.timeout,
+            ).stdout.strip()
+            if configured_registry != registry:
+                raise RuntimeError(f"{command} did not read .npmrc: {configured_registry!r}")
+
+            store_path = run(
+                base + [f"--command={command}", "--volume=.", "--", "store", "path"],
+                cwd=project_dir,
+                timeout=args.timeout,
+            ).stdout.strip()
+            if store_path != "/tmp/.pnpm-store/v10":
+                raise RuntimeError(f"unexpected {command} store path: {store_path!r}")
+        npmrc.unlink()
 
         install = run(
             base
             + [
-                "--command=pnpm",
+                "--command=npm",
                 "--net",
                 "--volume=.",
                 "--",
@@ -98,6 +120,21 @@ def main() -> int:
         if not (project_dir / "node_modules" / "react" / "package.json").is_file():
             raise RuntimeError("hoisted node_modules/react package was not materialized")
 
+        # The other public alias must consume the same lockfile and install.
+        run(
+            base + ["--command=pnpm", "--volume=.", "--", "install", "--offline", "--frozen-lockfile"],
+            cwd=project_dir,
+            timeout=args.timeout,
+        )
+        for command in ("npm", "pnpm"):
+            script = run(
+                base + [f"--command={command}", "--volume=.", "--", "run", "smoke"],
+                cwd=project_dir,
+                timeout=args.timeout,
+            )
+            if not script.stdout.strip().endswith("19.2.8"):
+                raise RuntimeError(f"{command} could not run the package script: {script.stdout!r}")
+
         edge = run(
             base
             + [
@@ -113,7 +150,7 @@ def main() -> int:
         if edge.stdout.strip() != "19.2.8":
             raise RuntimeError(f"Edge could not resolve installed React: {edge.stdout!r}")
 
-    print("Bundled pnpm WASIX smoke test passed (pnpm 10.34.5, React 19.2.8).")
+    print("Bundled npm/pnpm WASIX smoke test passed (pnpm 10.34.5, React 19.2.8).")
     return 0
 
 

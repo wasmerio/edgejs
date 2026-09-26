@@ -380,6 +380,10 @@ test-wasix-napi-cli: build-wasix build-napi-wasmer-cli
 test-wasix-safe-mode:
 	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)" $(WASIX_SAFE_MODE_ARGS)
 
+.PHONY: test-wasix-pnpm
+test-wasix-pnpm:
+	python3 ./scripts/test-wasix-pnpm.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)"
+
 $(EDGE_BINARY):
 	$(MAKE) build
 
@@ -532,12 +536,19 @@ dist-only:
 	mkdir -p $(DIST_BIN_DIR)
 	if [ "$(BUILD_DIR)" = "build-wasix" ] || [ "$(BUILD_DIR)" = "$(BUILD_QUICKJS_WASIX_DIR)" ]; then \
 		cp "$(BUILD_DIR)/edgejs.wasm" "$(DIST_BIN_DIR)/edgejs"; \
-		cp wasmer.toml "$(DIST_DIR)/wasmer.toml"; \
+		if [ "$(BUILD_DIR)" = "$(BUILD_QUICKJS_WASIX_DIR)" ]; then \
+			cp quickjs-wasm/wasmer.toml "$(DIST_DIR)/wasmer.toml"; \
+		else \
+			cp wasmer.toml "$(DIST_DIR)/wasmer.toml"; \
+		fi; \
+		cp -R quickjs-wasm/etc "$(DIST_DIR)/etc"; \
+		cp -R quickjs-wasm/pnpm "$(DIST_DIR)/pnpm"; \
+		cp -R test/deps/npm "$(DIST_DIR)/npm"; \
 		mkdir -p "$(DIST_DIR)/ssl-certs"; \
 		cp "$(WASIX_SSL_CERTS_DIR)/cacert.pem" "$(DIST_DIR)/ssl-certs/cacert.pem"; \
 		cp "$(WASIX_SSL_CERTS_DIR)/cert.pem" "$(DIST_DIR)/ssl-certs/cert.pem"; \
 		cp -R "$(WASIX_SSL_CERTS_DIR)/certs" "$(DIST_DIR)/ssl-certs/certs"; \
-		perl -0pi -e 's#^source = ".*"#source = "./bin/edgejs"#m' "$(DIST_DIR)/wasmer.toml"; \
+		perl -0pi -e 's#^source = ".*"#source = "./bin/edgejs"#m; s#^"/(etc|npm|pnpm)" = ".*"#"/$$1" = "./$$1"#mg; s#^"/usr/local/ssl" = ".*"#"/usr/local/ssl" = "./ssl-certs"#m' "$(DIST_DIR)/wasmer.toml"; \
 	else \
 		cp "$(EDGE_BINARY)" "$(DIST_BIN_DIR)/edge"; \
 		cp "$(EDGEENV_BINARY)" "$(DIST_BIN_DIR)/edgeenv"; \
@@ -556,7 +567,7 @@ dist-only:
 		done; \
 	fi
 	if [ "$(BUILD_DIR)" = "build-wasix" ] || [ "$(BUILD_DIR)" = "$(BUILD_QUICKJS_WASIX_DIR)" ]; then \
-		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml ssl-certs; \
+		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml ssl-certs etc npm pnpm; \
 	else \
 		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
 	fi

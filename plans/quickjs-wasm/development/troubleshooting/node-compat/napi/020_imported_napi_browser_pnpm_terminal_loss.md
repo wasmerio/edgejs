@@ -229,3 +229,36 @@ WASMER_NEXT_TIMEOUT=600000 node tests/next-browser.mjs
 
 reproduces the WebAssembly `unreachable` and terminal loss before the Next
 ready marker.
+
+## 2026-09-26: consistent public npm alias
+
+The user wants both public package-manager commands to use pnpm. The standard
+package still ran real npm while QuickJS aliased npm to pnpm and retained the
+recursive fallback risk. Plan: expose real npm as `edge-npm-internal`, set
+`npm_config_npm_path=/bin/edge-npm-internal` for both public commands, and keep
+Pi, pnpm and Edge runtime sources unchanged. QuickJS must include the same
+pinned npm assets. Check both aliases' versions, a custom registry lookup
+through npm delegation, installation and script execution in both packages
+before publication; keep the browser demo on the existing URL.
+
+Implemented through package manifests only. Both aliases have identical pnpm
+arguments and environment within each package, including a default command
+`PATH` so package scripts can find `node` in a direct Wasmer CLI invocation.
+The shared distribution target now includes all mounted npm/pnpm assets and
+chooses the QuickJS manifest itself, replacing the workflow's incomplete
+second ZIP assembly. The QuickJS WASIX CI job runs the package-manager smoke
+test.
+
+Validation: the enhanced `scripts/test-wasix-pnpm.py` passes with the native
+Wasmer CLI and embedded QuickJS. Both variants also pass through the Node SDK:
+both public versions are 10.34.5; a project `.npmrc` registry is returned through
+the real-npm fallback; `npm install react@19.2.8` creates the pnpm lockfile;
+`pnpm install --offline --frozen-lockfile` reuses it; both aliases execute the
+installed package script. Both distribution directories pass
+`wasmer package build --check`.
+
+A separate Node SDK diagnostic using `spawnSync` to capture nested registry
+lookups returned status 0 with empty output. This reproduces with the published
+0.2.2 imported-N-API package, including its original real-npm command, as well
+as both new packages. Direct SDK command output and native CLI tests pass.
+This existing nested stdio issue is not fixed by the packaging change.

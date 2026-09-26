@@ -26,8 +26,10 @@ runner = "wasi"
 main-args = ["/pnpm/edge-pnpm.cjs"]
 env = [
   "HOME=/tmp",
+  "PATH=/bin:/usr/bin",
   "npm_config_network_concurrency=4",
   "npm_config_node_linker=hoisted",
+  "npm_config_npm_path=/bin/edge-npm-internal",
   "npm_config_package_import_method=copy",
   "npm_config_store_dir=/tmp/.pnpm-store",
   "npm_config_update_notifier=false",
@@ -42,15 +44,32 @@ runner = "wasi"
 main-args = ["/pnpm/edge-pnpm.cjs"]
 env = [
   "HOME=/tmp",
+  "PATH=/bin:/usr/bin",
   "npm_config_network_concurrency=4",
   "npm_config_node_linker=hoisted",
+  "npm_config_npm_path=/bin/edge-npm-internal",
   "npm_config_package_import_method=copy",
   "npm_config_store_dir=/tmp/.pnpm-store",
   "npm_config_update_notifier=false",
 ]
 
+# pnpm's npm fallback must not resolve to the public pnpm alias.
+[[command]]
+name = "edge-npm-internal"
+module = "edge"
+runner = "wasi"
+
+[command.annotations.wasi]
+main-args = ["/npm/bin/npm-cli.js"]
+env = [
+  "HOME=/tmp",
+  "PATH=/bin:/usr/bin",
+  "npm_config_update_notifier=false",
+]
+
 [fs]
 "/etc" = "./etc"
+"/npm" = "../test/deps/npm"
 "/pnpm" = "./pnpm"
 "/usr/local/ssl" = "../ssl-certs"
 
