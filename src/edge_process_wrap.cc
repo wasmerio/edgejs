@@ -528,7 +528,6 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
 
   std::string cwd;
   const bool has_cwd = GetStringProperty(env, argv[0], "cwd", &cwd);
-  const bool detached = IsTruthyProperty(env, argv[0], "detached");
   const bool windows_hide = IsTruthyProperty(env, argv[0], "windowsHide");
   const bool windows_verbatim_arguments = IsTruthyProperty(env, argv[0], "windowsVerbatimArguments");
 
@@ -561,7 +560,10 @@ napi_value ProcessSpawn(napi_env env, napi_callback_info info) {
   options.args = args.data();
   options.exit_cb = OnProcessExit;
   options.flags = 0;
-  if (detached) options.flags |= UV_PROCESS_DETACHED;
+  // WASIX has no sessions or process groups; accept detached as ordinary spawn.
+#if !defined(__wasi__)
+  if (IsTruthyProperty(env, argv[0], "detached")) options.flags |= UV_PROCESS_DETACHED;
+#endif
   if (windows_hide) options.flags |= UV_PROCESS_WINDOWS_HIDE;
   if (windows_verbatim_arguments) options.flags |= UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS;
   if (has_uid) {
