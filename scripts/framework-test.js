@@ -166,8 +166,9 @@ async function test(selector) {
 
   harness.printMatrixSummary(stageResults, prepared.projects);
 
-  if (stageResults.some((result) => result.failed.length > 0)) {
-    fail('framework runtime validation failed');
+  const failedStages = stageResults.filter((result) => result.failed.length > 0);
+  if (failedStages.length > 0) {
+    fail(`framework runtime validation failed in: ${failedStages.map((result) => result.stage.label).join(', ')}`);
   }
 
   logSuccess('framework runtime validation passed across all configured runner stages');
@@ -2128,6 +2129,7 @@ function summarizeLogFailure(logPath, fallbackError) {
     /undefined symbol/i,
     /symbol lookup error/i,
     /Cannot find module/i,
+    /Can't resolve /i,
     /does not work with/i,
     /Failed to fetch/i,
     /error when starting/i,

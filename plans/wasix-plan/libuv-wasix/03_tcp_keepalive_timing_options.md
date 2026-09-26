@@ -1,84 +1,56 @@
-# libuv-wasix: TCP keepalive timing options
+# WASIX TCP keepalive timing options
 
-Why this is a problem:
+## Current Edge behavior
 
-Node and Undici call `uv_tcp_keepalive()` as part of normal HTTP/HTTPS client
-setup. On Unix, libuv enables `SO_KEEPALIVE` and then often configures TCP
-keepalive timing knobs such as `TCP_KEEPIDLE`, `TCP_KEEPINTVL`, and
-`TCP_KEEPCNT`. WASIX may accept `SO_KEEPALIVE` but reject the timing knobs. If
-libuv treats those timing failures as fatal, ordinary `fetch()` and keepalive
-HTTP requests fail even though the socket itself is usable.
+Node and Undici request TCP keepalive during HTTP/HTTPS client setup. Libuv
+sets `SO_KEEPALIVE` and then `TCP_KEEPIDLE`, `TCP_KEEPINTVL`, and `TCP_KEEPCNT`.
+The stock WASIX libc supports the boolean flag but rejects the timing options
+with `ENOSYS`. If keepalive was requested before a socket existed, libuv
+reapplies those options when opening it and can fail connection establishment.
 
-This occurs in fetch/HTTP/HTTPS client tests that configure keepalive.
+Passing zero for the delay is not an escape hatch: libuv rejects it for a live
+socket and uses a hardcoded delay of 60 when opening a deferred socket.
 
-Minimal Example:
+Edge's native `TcpSetKeepAlive` binding therefore takes a WASIX-only path:
 
-```c
-#include <uv.h>
+1. Obtain the descriptor with the public `uv_fileno()` API.
+2. If it does not exist yet, return success. Unchanged `lib/net.js` caches the
+   preference and reapplies it after connect, before emitting `connect`.
+3. Set only `SO_KEEPALIVE` through the existing libc mapping and return any
+   real socket-option error. Do not set libuv's deferred keepalive flag.
 
-int main(void) {
-  uv_loop_t *loop = uv_default_loop();
-  uv_tcp_t tcp;
-  uv_tcp_init(loop, &tcp);
-  return uv_tcp_keepalive(&tcp, 1, 60) == 0 ? 0 : 1;
-}
-```
+The requested initial delay is ignored on WASIX; probe timing follows the
+network backend's defaults. Other platforms still use `uv_tcp_keepalive()`
+with the requested delay. Pi, Undici, and Edge's JavaScript library files are
+unchanged. HTTP connection reuse and streaming remain available.
 
-Callgraph and boundary:
+This path builds with the existing CI sysroot (`v2026-07-30.1`). It does not
+require a new libc ABI, TCP timing support in Wasmer, or a new WISP extension.
+The existing browser WISP transport treats the basic flag as a no-op; it does
+not promise operating-system TCP probes. Native backends can enable real
+keepalive using their existing boolean-option support.
 
-Current problematic path:
+## Verification
 
-```text
-JavaScript fetch()/HTTP client
-  -> Node TCPWrap::SetKeepAlive
-  -> libuv uv_tcp_keepalive()
-  -> libuv uv__tcp_keepalive()
-  -> setsockopt(SOL_SOCKET, SO_KEEPALIVE)
-  -> setsockopt(IPPROTO_TCP, TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT)
-     HERE IS THE PROBLEM: WASIX rejects timing knobs, and libuv propagates that
-     as failure for the whole keepalive operation.
-```
+`tests/js/wasix-tcp-keepalive.js` exercises requests made before connect, while
+connecting, through connect options, and on accepted sockets. It checks native
+return values when enabling/disabling with zero and nonzero delays, then
+exchanges data. Set `PORT` when the test host does not assign guest listener
+ports dynamically.
 
-The boundary is libuv <-> socket options. Long-term, `wasix-libc`/Wasmer should
-support the useful TCP options where possible. Until then, libuv should not make
-unsupported timing knobs break basic keepalive enablement.
+The stock-sysroot Edge build and import validation pass. The focused test
+passes on the SDK Node host. The complete Pi browser test checks installation,
+streaming, all seven tools, lock heartbeats, saved sessions, and interactive
+startup/exit with the original WISP transport. Long-idle provider connections
+are outside this coverage.
 
-Proposed solution:
+## Related work
 
-Keep EdgeJS calling `uv_tcp_keepalive()` normally. In libuv-wasix, treat the
-WASIX timing knobs as optional when `SO_KEEPALIVE` has been applied or when the
-platform cannot expose those knobs yet.
+- [libuv #15](https://github.com/wasix-org/libuv/pull/15) contains only the
+  filesystem timestamp fixes; its TCP implementation is unchanged.
+- [Wasmer #7035](https://github.com/wasmerio/wasmer/pull/7035) contains only
+  filesystem timestamp persistence and metadata refresh fixes.
+- [N-API #76](https://github.com/wasmerio/napi/pull/76) provides host module loading.
 
-Relevant libuv-wasix code paths:
-
-```text
-~/src/edgejs/deps/libuv-wasix/src/unix/tcp.c
-~/src/edgejs/deps/libuv-wasix/src/unix/internal.h
-~/src/wasix-libc/libc-bottom-half/cloudlibc/src/libc/sys/socket/setsockopt.c
-~/src/wasmer/lib/wasix/src/syscalls/wasix/sock_set_opt_*.rs
-```
-
-Proposed callgraph:
-
-```text
-JavaScript fetch()/HTTP client
-  -> Node TCPWrap::SetKeepAlive
-  -> libuv uv_tcp_keepalive()
-  -> WASIX uv__tcp_keepalive()
-  -> enable/disable SO_KEEPALIVE when available
-  -> skip or tolerate unsupported TCP timing knobs
-  -> return success for the keepalive operation
-```
-
-This is deliberately small: make basic Node keepalive setup succeed without
-claiming that WASIX already implements every TCP timing option.
-
-## Proposed Solution References
-
-### [wasmerio/edgejs#91: [WIP] Node tests using Edgejs WASIX QuickJS](https://github.com/wasmerio/edgejs/pull/91)
-
-- Sadhbh: edgejs [9fa61f18](https://github.com/wasmerio/edgejs/commit/9fa61f1888f34c0785f54da8dd99ae193e536439) UV keep alive fix (disable unsupported options)
-
-### Commits without PR
-
-- Sadhbh: libuv-wasix [8d537440](https://github.com/Anodized-Titanium/libuv-wasix/commit/8d537440533cfc290e33c7bcbf181ab414dd1850) Wasix-LibC supports SOL_SOCKET + SO_KEEPALIVE, however does not support additional options such as TCP_KEEPIDLE, TCP_KEEPINTVL, or TCP_KEEPCNT - so we disable them
+The earlier libc, WITX, and proxy PRs for configurable TCP probe timing are
+closed as unnecessary for Pi. The native Edge fallback uses the existing ABI.

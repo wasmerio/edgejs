@@ -48,6 +48,8 @@ duplicating issue details.
 | 🟠 | High | [022_wasix_ci_tty_bridge_and_signal_pin.md](node-compat/deploy/022_wasix_ci_tty_bridge_and_signal_pin.md) | WASIX CI TTY bridge and signal pin |
 | 🟢 | High | [023_wasix_standalone_nested_entry_paths.md](node-compat/deploy/023_wasix_standalone_nested_entry_paths.md) | WASIX standalone nested entry paths |
 
+### 🟢 [024_gatsby_baseline_builds.md](node-compat/deploy/024_gatsby_baseline_builds.md): Gatsby baseline build failures
+
 ## Node Test
 
 | Status | Severity | Issue | Topic |

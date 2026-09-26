@@ -7,6 +7,28 @@
 
 ## Current State
 
+### Caught synchronous evaluation errors (September 2026)
+
+Before the fix, native and WASIX QuickJS builds exit 1 after a caller catches the error
+from `require()` of a throwing ESM module. The same script exits 0 with V8.
+LLDB confirms that `evaluate_sync` extracts the rejected evaluation promise's
+reason and throws it synchronously without marking that promise handled; V8
+already marks its equivalent promise handled.
+
+Action plan: add shared N-API coverage for synchronous exception identity and
+promise rejection tracking, mark only this consumed rejection handled in the
+QuickJS provider, and rerun native Edge and rebuilt QuickJS WASIX module/Pi
+startup checks. Keep this fix separate from the host-JavaScript module changes.
+
+Fixed in N-API commit `350de41625e6c24f2b79a0ae6287c8b5b889d358` by calling
+`JS_PromiseMarkAsHandled` before propagating the original error. The new shared
+test fails before the change and passes after it; the standard QuickJS suite
+passes all 96 tests and the V8 contextify suite passes all 15. Fresh native and
+WASIX Edge builds exit 0 for caught/cached module errors and the module graph
+regressions, while uncaught errors and ordinary unhandled rejections still exit
+1. Both start the unmodified Pi 0.87.1 CLI (`--version`). WASIX used the existing
+sysroot and Wasmer 7.4.2. Full QuickJS Pi tool-loop coverage remains outstanding.
+
 The QuickJS N-API backend should not carry a parallel C++ approximation of
 Node's package resolver, CommonJS wrapper, or ESM translator policy.
 The C++ CJS/module-loader hack has been removed: `unofficial_module_loader` and
