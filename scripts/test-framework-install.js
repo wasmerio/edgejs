@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
+const { createRequire } = require('node:module');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -59,5 +60,47 @@ for (const legacyAllowlist of [false, true]) {
       stdio: 'pipe',
     });
     assert.ok(!fs.existsSync(path.join(project.dir, 'pnpm-lock.yaml')));
+  });
+}
+
+for (const isGatsby of [false, true]) {
+  test(`generated files can resolve transitive dependencies only for Gatsby (${isGatsby})`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'edgejs-framework-hoist-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const pack = (name, dependencies = {}) => {
+      const directory = path.join(root, name);
+      const source = path.join(directory, 'package');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+        name, version: '1.0.0', main: 'index.js', dependencies,
+      }));
+      fs.writeFileSync(path.join(source, 'index.js'), 'module.exports = 42;\n');
+      const archive = path.join(directory, 'package.tgz');
+      execFileSync('tar', ['-czf', archive, '-C', directory, 'package']);
+      return `file:${archive}`;
+    };
+    const dependency = pack('edgejs-generated-dependency');
+    const framework = isGatsby ? 'gatsby' : 'other-framework';
+    const project = { name: 'js-fixture', dir: path.join(root, 'wasmer-examples', 'js-fixture') };
+    fs.mkdirSync(project.dir, { recursive: true });
+    fs.writeFileSync(path.join(project.dir, 'package.json'), JSON.stringify({
+      name: project.name,
+      private: true,
+      dependencies: { [framework]: pack(framework, { 'edgejs-generated-dependency': dependency }) },
+    }));
+
+    const harness = create({ rootDir: root });
+    harness.ensureDir(harness.LOG_DIR);
+    harness.ensureDir(harness.PNPM_STORE_DIR);
+    await harness.installProjects([project]);
+
+    // Gatsby copies framework code into the app's .cache directory. Its
+    // imports must resolve there, outside the framework's node_modules tree.
+    const generatedRequire = createRequire(path.join(project.dir, '.cache', 'generated.js'));
+    if (isGatsby) {
+      assert.equal(generatedRequire('edgejs-generated-dependency'), 42);
+    } else {
+      assert.throws(() => generatedRequire('edgejs-generated-dependency'), { code: 'MODULE_NOT_FOUND' });
+    }
   });
 }

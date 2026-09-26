@@ -967,6 +967,7 @@ function create(options) {
       /undefined symbol/i,
       /symbol lookup error/i,
       /Cannot find module/i,
+      /Can't resolve /i,
       /does not work with/i,
       /Failed to fetch/i,
       /error when starting/i,
@@ -1227,6 +1228,12 @@ function create(options) {
       '--no-lockfile',
       '--store-dir', PNPM_STORE_DIR,
     ];
+    const pkg = readProjectPackageJson(project);
+    if (pkg?.dependencies?.gatsby || pkg?.devDependencies?.gatsby) {
+      // Gatsby copies code into the app's .cache directory, where imports of
+      // Gatsby's own dependencies need to resolve from the app's node_modules.
+      args.push('--config.shamefully-hoist=true');
+    }
     // Approve all dependency build scripts so installs do not abort on
     // ERR_PNPM_IGNORED_BUILDS. pnpm <= 10 rejects combining
     // dangerouslyAllowAllBuilds with a package.json pnpm.onlyBuiltDependencies
