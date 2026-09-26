@@ -38,7 +38,7 @@ The `edge` command remains the default entrypoint. The package also exposes
 
 ## pnpm
 
-The `pnpm` command runs the pinned pnpm 10.34.5 pure-JavaScript CLI. The build
+Both `pnpm` and `npm` run the pinned pnpm 10.34.5 pure-JavaScript CLI. The build
 stages pnpm's bundle and package-import worker with verified checksums. A small
 package-local launcher adapts unsupported WASIX filesystem metadata operations;
 it does not change EdgeJS's global `fs` behavior. Arguments after `--` are
@@ -72,11 +72,12 @@ command also disables pnpm's update-available notification through
 Run the end-to-end package smoke test with:
 
 ```sh
-make test-wasix-pnpm WASMER_BIN=wasmer
+make test-wasix-pnpm WASMER_BIN=wasmer WASIX_PACKAGE_DIR="$PWD/quickjs-wasm"
 ```
 
 It stages pnpm, installs pinned React in a temporary mounted project, checks the
 manifest, lockfile, and ephemeral store path, confirms that the update
 notification stays hidden, and resolves the installed package through Edge
-QuickJS. Commands that delegate to an external executable still require that
-executable to be packaged; for example, this package does not include `npm`.
+QuickJS. Real npm is included as `edge-npm-internal` for pnpm's delegated
+configuration and publish operations. Both public commands set pnpm's
+`npm-path` to that entrypoint so delegation cannot recurse into the npm alias.

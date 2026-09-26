@@ -51,8 +51,10 @@ atom = "edgejs"
 main-args = ["/pnpm/edge-pnpm.cjs"]
 env = [
   "HOME=/tmp",
+  "PATH=/bin:/usr/bin",
   "npm_config_network_concurrency=4",
   "npm_config_node_linker=hoisted",
+  "npm_config_npm_path=/bin/edge-npm-internal",
   "npm_config_optimistic_repeat_install=true",
   "npm_config_package_import_method=copy",
   "npm_config_store_dir=/tmp/.pnpm-store",
@@ -66,9 +68,32 @@ runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
 atom = "edgejs"
+main-args = ["/pnpm/edge-pnpm.cjs"]
+env = [
+  "HOME=/tmp",
+  "PATH=/bin:/usr/bin",
+  "npm_config_network_concurrency=4",
+  "npm_config_node_linker=hoisted",
+  "npm_config_npm_path=/bin/edge-npm-internal",
+  "npm_config_optimistic_repeat_install=true",
+  "npm_config_package_import_method=copy",
+  "npm_config_store_dir=/tmp/.pnpm-store",
+  "npm_config_update_notifier=false",
+]
+
+# pnpm delegates some config and publish operations to npm. Keep this target
+# separate from the public npm alias so delegation cannot recurse into pnpm.
+[[command]]
+name = "edge-npm-internal"
+module = "edgejs"
+runner = "https://webc.org/runner/wasi"
+
+[command.annotations.wasi]
+atom = "edgejs"
 main-args = ["/npm/bin/npm-cli.js"]
 env = [
   "HOME=/tmp",
+  "PATH=/bin:/usr/bin",
   "npm_config_update_notifier=false",
 ]
 

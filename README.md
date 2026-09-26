@@ -98,6 +98,10 @@ wasmer package build --check .
 The build runs the import/engine validation automatically. The embedded
 QuickJS package remains separately available under `quickjs-wasm/`.
 
+Both WASIX packages expose `npm` as an alias for the bundled pnpm CLI.
+They retain real npm as `edge-npm-internal` and configure pnpm's `npm-path`
+to use it for delegated operations, avoiding recursive calls to the alias.
+
 This host-engine mode is experimental. The buffer ownership and synchronization
 contract is documented in
 [`004_buffer_ownership.md`](./plans/quickjs-wasm/development/dev_007_host_js_imported_napi/004_buffer_ownership.md),
