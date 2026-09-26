@@ -1,0 +1,12 @@
+{
+  "name": "edgejs-jz-kernel-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "edge index.mjs",
+    "bench": "edge bench.mjs"
+  },
+  "dependencies": {
+    "jz": "^0.1.1"
+  }
+}
