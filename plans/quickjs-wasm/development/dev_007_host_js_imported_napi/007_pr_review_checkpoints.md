@@ -20,6 +20,27 @@ printed `EDGEJS_LOADER_OK=42`; the instance exited and its live registry
 drained. The previous guest sent default V8 flags and failed during runtime
 configuration before module loading.
 
+The shared host also denies persistent bytecode handles and native V8
+serialization until their retained buffers can be charged to the workload.
+For imported N-API, `vm.Script` now validates syntax through a transient,
+compile-only provider call; construction does not execute the script.
+`cachedDataRejected` and `cachedDataProduced` report the unavailable cache
+honestly, and `createCachedData()` raises an explicit unsupported error.
+`vm.compileFunction` compiles directly from source under the same cache policy.
+`node:v8` retains its metadata APIs while Serializer and Deserializer fail
+explicitly on use. The test-runner's V8 result header is initialized only when
+parsing child-process results, so importing `node:test` does not try to create
+an unsupported serializer. The child-process serialization path remains
+unavailable on this provider.
+
+The focused `tests/js/host-imported-napi-compat.js` probe passed through the
+real Edge workload manager against N-API `3231ebc` and Wasmer `dd7c498` with
+`EDGEJS_HOST_NAPI_COMPAT_OK`. It covers imports, explicit serializer denial,
+syntax errors, constructor no-execution, source-backed execution, and cache
+status. The same rebuilt guest also passed the ESM import loader smoke with
+`EDGEJS_LOADER_OK=42`; both exited successfully and drained Edge's live
+instance registry.
+
 | Boundary | Status | Implementation |
 | --- | --- | --- |
 | A1: wire descriptors | ✅ | Native descriptors are separated from fixed-width wasm32 layouts, with compile-time C/C++ and Rust size checks and named Rust offsets. |

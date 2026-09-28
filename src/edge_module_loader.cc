@@ -3234,6 +3234,7 @@ static napi_value EnsureNodeBuffer(napi_env env, napi_value view) {
 // Compiles script text and returns its serialized code cache (replaces the
 // removed unofficial_napi_contextify_create_cached_data). Leaves the compile
 // exception pending on syntax errors.
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
 static bool CreateScriptCachedDataBuffer(napi_env env,
                                          napi_value code,
                                          napi_value filename,
@@ -3260,6 +3261,7 @@ static bool CreateScriptCachedDataBuffer(napi_env env,
   *buffer_out = EnsureNodeBuffer(env, *buffer_out);
   return *buffer_out != nullptr;
 }
+#endif
 
 static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callback_info info) {
   size_t argc = 8;
@@ -3302,7 +3304,6 @@ static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callbac
   if (argc >= 8) host_defined_option_id = argv[7];
   if (host_defined_option_id != nullptr) {
     SetContextifyHostDefinedOption(env, this_arg, host_defined_option_id);
-    TrackContextifyScript(env, this_arg, host_defined_option_id);
   } else {
     SetHostDefinedOptionSymbol(env, this_arg, host_defined_option_id);
   }
@@ -3317,6 +3318,7 @@ static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callbac
   // Validate user cachedData (and report rejection honestly), then compile —
   // which doubles as Node's constructor-time syntax validation.
   bool cached_data_rejected = false;
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
   EdgeBytecode script_bytecode;
   EdgeBufferLease cached_bytes;
   const uint8_t* cache_data = nullptr;
@@ -3342,6 +3344,24 @@ static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callbac
       !script_bytecode) {
     return nullptr;  // Preserve the syntax error.
   }
+#else
+  // The shared host denies persistent bytecode handles because their native
+  // source and cache copies have no lasting workload charge. Validate syntax
+  // through a transient, compile-only import before exposing a Script.
+  cached_data_rejected = has_cached_data_arg;
+  if (unofficial_napi_contextify_validate_script(env,
+                                                  code,
+                                                  filename,
+                                                  line_offset,
+                                                  column_offset,
+                                                  host_defined_option_id) != napi_ok) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) {
+      napi_throw_error(env, "ERR_UNSUPPORTED_OPERATION", "Script syntax validation is unavailable");
+    }
+    return nullptr;
+  }
+#endif
 
   if (has_cached_data_arg) {
     napi_value rejected = nullptr;
@@ -3351,6 +3371,7 @@ static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callbac
     }
   }
   if (produce_cached_data) {
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
     napi_value cache_buffer = nullptr;
     EdgeBufferLease produced_bytes;
     // Only report cachedDataProduced when the engine actually emitted bytes
@@ -3372,6 +3393,18 @@ static napi_value ContextifyScriptConstructorCallback(napi_env env, napi_callbac
     if (produced_ok) {
       napi_set_named_property(env, this_arg, "cachedData", cache_buffer);
     }
+#else
+    napi_value produced = nullptr;
+    napi_get_boolean(env, false, &produced);
+    if (produced != nullptr) {
+      napi_set_named_property(env, this_arg, "cachedDataProduced", produced);
+    }
+#endif
+  }
+  if (host_defined_option_id != nullptr) {
+    // A failed syntax check must not leave a tracked native reference to a
+    // constructor result that JavaScript never receives.
+    TrackContextifyScript(env, this_arg, host_defined_option_id);
   }
   return this_arg;
 }
@@ -3494,6 +3527,11 @@ static bool EvalEntryUsesModuleInputType(napi_env env) {
 }
 
 static napi_value ContextifyScriptCreateCachedDataCallback(napi_env env, napi_callback_info info) {
+#if !defined(EDGE_EMBEDDED_NAPI_PROVIDER)
+  (void)info;
+  napi_throw_error(env, "ERR_UNSUPPORTED_OPERATION", "Script cached data is unavailable in this runtime");
+  return nullptr;
+#else
   napi_value this_arg = nullptr;
   size_t argc = 0;
   if (napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr) != napi_ok || this_arg == nullptr) {
@@ -3521,6 +3559,7 @@ static napi_value ContextifyScriptCreateCachedDataCallback(napi_env env, napi_ca
     return nullptr;
   }
   return out;
+#endif
 }
 
 static napi_value ContextifyStartSigintWatchdogCallback(napi_env env, napi_callback_info /*info*/) {
@@ -3746,6 +3785,7 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
   const bool has_cached_data = cached_data != nullptr && !IsUndefinedValue(env, cached_data);
   EdgeBytecode fn_bytecode;
   bool cached_data_rejected = false;
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
   EdgeBufferLease cached_bytes;
   const uint8_t* cache_data = nullptr;
   size_t cache_size = 0;
@@ -3771,6 +3811,11 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
       return nullptr;  // Preserve the compile error.
     }
   }
+#else
+  // The host provider cannot retain bytecode. Its compile-function import
+  // still checks syntax and creates a live function from transient source.
+  cached_data_rejected = has_cached_data;
+#endif
 
   const unofficial_napi_js_source compile_source =
       fn_bytecode ? fn_bytecode.source() : unofficial_napi_js_source_from_text(code);
@@ -3797,10 +3842,11 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
       napi_set_named_property(env, out, "cachedDataRejected", rejected);
     }
   }
-  if (produce_cached_data && fn_bytecode) {
+  if (produce_cached_data) {
     napi_value cache_buffer = nullptr;
     EdgeBufferLease produced_bytes;
     bool produced_ok =
+        fn_bytecode &&
         fn_bytecode.Serialize(&cache_buffer) == napi_ok &&
         cache_buffer != nullptr &&
         AcquireArrayBufferView(env, cache_buffer, &produced_bytes) && produced_bytes.size() > 0;
