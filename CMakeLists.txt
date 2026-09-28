@@ -360,6 +360,11 @@ if(EDGE_BUILD_CLI)
   add_executable(edge
     ${EDGE_CLI_SOURCES}
   )
+  if(EDGE_IS_WASIX_TARGET AND EDGE_NAPI_PROVIDER STREQUAL "imports")
+    # The 0.4.3 WASIX sysroot reports a live child as a completed WNOHANG
+    # wait. Keep this object ahead of libc.a until the fixed libc is released.
+    target_sources(edge PRIVATE "${EDGE_ROOT}/wasix/waitpid_pending_compat.c")
+  endif()
   set_target_properties(edge PROPERTIES ENABLE_EXPORTS ON)
   target_include_directories(edge
     PRIVATE

@@ -367,7 +367,7 @@ build-wasix-napi-quickjs: build-quickjs-wasix
 build-napi-wasmer-cli:
 	cd $(NAPI_WASMER_DIR) && CARGO_TARGET_DIR="$(NAPI_WASMER_CARGO_TARGET_DIR)" ./cargo-standalone.sh build --locked --release --features cli --bin napi_wasmer
 
-test-wasix-napi: build-wasix-napi test-wasix-napi-cli
+test-wasix-napi: build-wasix-napi test-wasix-napi-cli test-wasix-waitpid
 
 test-wasix-napi-quickjs: build-wasix-napi-quickjs
 	$(MAKE) test-wasix-safe-mode WASIX_PACKAGE_DIR="$(CURDIR)/quickjs-wasm"
@@ -376,6 +376,10 @@ test-wasix-napi-cli: build-wasix build-napi-wasmer-cli
 	@output="$$($(NAPI_WASMER_BINARY) $(WASIX_EDGEJS_WASM) -e "$(WASIX_NAPI_SMOKE_JS)")"; \
 	printf '%s\n' "$$output"; \
 	printf '%s\n' "$$output" | grep -Fx "hello world!"
+
+# The WASIX 0.4.3 libc must not report a running child as reaped by WNOHANG.
+test-wasix-waitpid: build-wasix-napi
+	$(WASIX_V8_LANE_ENV) $(WASIX_QUICKJS_NODE_TEST_RUNNER) tests/js/wasix-waitpid-pending.js
 
 test-wasix-safe-mode:
 	python3 ./scripts/test-wasix-safe-mode.py --wasmer-bin "$(WASMER_BIN)" --package-dir "$(WASIX_PACKAGE_DIR)" $(WASIX_SAFE_MODE_ARGS)
