@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | **Status** | ✅ | Checkpoints A and B are implemented and verified locally on the Edge.js and N-API `codex/napi-surface-reduction` branches. |
 | **PRs** | [napi#59](https://github.com/wasmerio/napi/pull/59), [edgejs#147](https://github.com/wasmerio/edgejs/pull/147) | Review feedback is handled by ownership boundary, not comment order. |
-| **Invariant** | Provider-neutral Edge logic | `edgejs/lib` remains unchanged; Edge must not select providers with `#ifdef __wasi__`. |
+| **Invariant** | Provider-neutral Edge logic | The imported provider owns process-wide V8 state; JavaScript compatibility layers fail explicitly where metered host services are unavailable. |
 
 ## Checkpoint A implementation status
 
@@ -40,6 +40,14 @@ syntax errors, constructor no-execution, source-backed execution, and cache
 status. The same rebuilt guest also passed the ESM import loader smoke with
 `EDGEJS_LOADER_OK=42`; both exited successfully and drained Edge's live
 instance registry.
+
+The final clean WASIX build used the committed Edge.js branch and its N-API
+submodule at `c13f5d3`, producing guest SHA-256
+`901a369bedcfe3e6b0070ef0be2c9da1c022879f98dddc038d784bc2f8f3ccb6`.
+The import validator found 110 standard N-API and 68 extension imports, with
+no embedded engine. Against Edge's published Wasmer integration revision, the
+host compatibility probe and two-module ESM loader probe both passed through
+the workload manager, exited with code zero, and drained the live registry.
 
 | Boundary | Status | Implementation |
 | --- | --- | --- |
