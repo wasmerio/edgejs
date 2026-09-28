@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -62,6 +63,14 @@ def main() -> int:
         )
 
         base = [args.wasmer_bin, "run", "--stack-size", "4194304", str(package_dir)]
+        internal_version = run(
+            base + ["--command=edge-npm-internal", "--", "--version"],
+            cwd=project_dir,
+            timeout=args.timeout,
+        ).stdout.strip()
+        if re.fullmatch(r"\d+\.\d+\.\d+", internal_version) is None:
+            raise RuntimeError(f"internal npm alias did not start: {internal_version!r}")
+
         # A project registry verifies the fallback reads npm configuration;
         # a naive npm -> pnpm alias would recurse until the command times out.
         registry = "https://alias-registry.invalid/"

@@ -621,12 +621,11 @@ framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS WASIX' \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
-# All edge apps now run on the V8 WASIX lane (full parity with QuickJS): GuestHeap
-# removed the copy-layer corruption ("binary-garbage-as-JSON") and the N-API import
-# layers now re-raise guest WASI process exits (ECO-416), fixing js-etherpad's
-# unclean-exit and js-next-ssr/js-next-standalone. Only the docusaurus static sites
-# stay skipped here -- they fail to build on the Node.js reference itself (build
-# tooling), which QuickJS also skips via FRAMEWORK_TEST_NODE_SKIP.
+# GuestHeap removed the copy-layer corruption ("binary-garbage-as-JSON") and
+# the N-API import layers re-raise guest WASI process exits (ECO-416). Managed
+# V8 deliberately has no WebAssembly global until its allocations can be
+# charged; Astro SSR references it during module loading. The docusaurus
+# static sites fail to build on the Node.js reference itself.
 framework-test-v8-wasix: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
@@ -637,6 +636,7 @@ framework-test-v8-wasix: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
 		FRAMEWORK_TEST_SKIP_SAFE=1 \
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS V8 WASIX' \
 		FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
+		FRAMEWORK_TEST_EDGE_SKIP='js-astro-ssr-standalone' \
 		$(WASIX_V8_LANE_ENV) \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 

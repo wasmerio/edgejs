@@ -360,17 +360,20 @@ jobs:
           sysroot-tag: v2026-07-30.1
           version: v0.4.3
 
-      # See the quickjs-linux job for how Wasmer provisioning modes work. In
-      # source mode this builds the wasmer CLI (with LLVM, since the WASIX
-      # runner scripts pass --llvm); the release C-API headers still serve the
-      # edge compile, as WASIX resolves the symbols at runtime via the host.
+      # See the quickjs-linux job for how Wasmer provisioning modes work. Pin
+      # the source CLI to the child-wait fix until it reaches a release: the
+      # released 7.4.2 CLI can panic when pnpm synchronously spawns its npm
+      # fallback. Explicit source, artifact, and release overrides retain
+      # their existing precedence. This source build includes LLVM for the
+      # WASIX runner; release C-API headers still serve the edge compile.
       - name: Resolve Wasmer provisioning
         id: wasmer-provision
         shell: bash
         env:
-          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF || (!vars.WASMER_ARTIFACT_RUN_ID && !vars.WASMER_RELEASE_VERSION && 'f45c39b0518fcc0f465ef6f1eab46ea68ecc0f76') || '' }}
           WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
           WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
         run: ./scripts/ci/provision-wasmer.sh resolve wasix
 
       # Explicit restore/save (not actions/cache) so the expensive source
@@ -387,7 +390,7 @@ jobs:
       - name: Provision Wasmer
         shell: bash
         env:
-          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF || (!vars.WASMER_ARTIFACT_RUN_ID && !vars.WASMER_RELEASE_VERSION && 'f45c39b0518fcc0f465ef6f1eab46ea68ecc0f76') || '' }}
           WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
           WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
           WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}

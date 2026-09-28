@@ -365,6 +365,9 @@ if(EDGE_BUILD_CLI)
     # wait. Keep this object ahead of libc.a until the fixed libc is released.
     target_sources(edge PRIVATE "${EDGE_ROOT}/wasix/waitpid_pending_compat.c")
   endif()
+  if(EDGE_IS_WASIX_TARGET AND EDGE_NAPI_PROVIDER STREQUAL "quickjs")
+    target_compile_definitions(edge PRIVATE EDGE_QUICKJS_WASIX_NPM_ALIAS=1)
+  endif()
   set_target_properties(edge PROPERTIES ENABLE_EXPORTS ON)
   target_include_directories(edge
     PRIVATE
