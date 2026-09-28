@@ -34,19 +34,22 @@ an unsupported serializer. The child-process serialization path remains
 unavailable on this provider.
 
 The focused `tests/js/host-imported-napi-compat.js` probe passed through the
-real Edge workload manager against N-API `3231ebc` and Wasmer `dd7c498` with
+real Edge workload manager against N-API `20a7866` and Wasmer `f6f03e6` with
 `EDGEJS_HOST_NAPI_COMPAT_OK`. It covers imports, explicit serializer denial,
-syntax errors, constructor no-execution, source-backed execution, and cache
-status. The same rebuilt guest also passed the ESM import loader smoke with
+syntax errors, constructor no-execution, source-backed execution, cache
+status, and `WebAssembly` denial in the root and `vm` contexts. The same
+rebuilt guest also passed the ESM import loader smoke with
 `EDGEJS_LOADER_OK=42`; both exited successfully and drained Edge's live
 instance registry.
 
 The final clean WASIX build used the committed Edge.js branch and its N-API
-submodule at `c13f5d3`, producing guest SHA-256
-`901a369bedcfe3e6b0070ef0be2c9da1c022879f98dddc038d784bc2f8f3ccb6`.
+submodule at `20a7866`, producing guest SHA-256
+`8309ddda50ac2516b09da9adaee8c54b6978b8b727aa978aa8e36aa243431809`.
 The import validator found 110 standard N-API and 68 extension imports, with
-no embedded engine. Against Edge's published Wasmer integration revision, the
-host compatibility probe and two-module ESM loader probe both passed through
+no embedded engine. The focused native Astro SSR framework test passed through
+Node.js and EdgeJS Native with HTTP 200 and no regression. Against Edge's
+published Wasmer integration revision `f6f03e6`, the host compatibility
+probe and two-module ESM loader probe both passed through
 the workload manager, exited with code zero, and drained the live registry.
 
 | Boundary | Status | Implementation |
