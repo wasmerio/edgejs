@@ -8,6 +8,8 @@ const vm = require('node:vm');
 const v8 = require('node:v8');
 const test = require('node:test');
 
+assert.equal(typeof WebAssembly, 'undefined');
+assert.equal(vm.runInNewContext('typeof WebAssembly'), 'undefined');
 assert.equal(typeof v8.getHeapStatistics, 'function');
 assert.equal(typeof test, 'function');
 assert.throws(() => new v8.Serializer(), /serialization is unavailable/);
