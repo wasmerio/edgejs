@@ -8,6 +8,18 @@
 
 ## Checkpoint A implementation status
 
+### Shared-host flag ownership (2026-09-28)
+
+When Edge.js imports N-API from a shared Wasmer host, its startup request must
+carry an empty `engine_flags` string. The host has already configured V8 for
+all workloads in that process, and changing process-wide flags from one guest
+would affect other instances. Embedded native providers retain the existing
+`BuildSupportedV8Flags` behavior. A rebuilt WASIX Edge.js guest with the
+empty request loaded a JavaScript module through the Edge workload manager and
+printed `EDGEJS_LOADER_OK=42`; the instance exited and its live registry
+drained. The previous guest sent default V8 flags and failed during runtime
+configuration before module loading.
+
 | Boundary | Status | Implementation |
 | --- | --- | --- |
 | A1: wire descriptors | ✅ | Native descriptors are separated from fixed-width wasm32 layouts, with compile-time C/C++ and Rust size checks and named Rust offsets. |

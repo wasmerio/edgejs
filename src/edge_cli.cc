@@ -146,8 +146,10 @@ struct RuntimeInitOptions {
   bool validate_openssl_csprng = true;
 };
 
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
 std::string BuildSupportedV8Flags(
     const std::vector<std::string>& raw_exec_argv);
+#endif
 
 void ResetSignalHandlersLikeNode() {
 #if !defined(_WIN32)
@@ -230,9 +232,15 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner,
 
   unofficial_napi_env_create_options create_options{};
   EdgeInitializeNapiEnvCreateOptions(&create_options);
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
   const std::string engine_flags = BuildSupportedV8Flags(
       options.raw_exec_argv != nullptr ? *options.raw_exec_argv
                                        : std::vector<std::string>{});
+#else
+  // Host-imported N-API shares one process with other workloads. The host
+  // owns V8's process-wide flags, so guest startup must send no flag changes.
+  const std::string engine_flags;
+#endif
   unofficial_napi_runtime_options runtime_options{};
   runtime_options.size = sizeof(runtime_options);
   runtime_options.version = UNOFFICIAL_NAPI_RUNTIME_OPTIONS_VERSION;
@@ -398,6 +406,7 @@ bool TokenHasInlineValue(const std::string& token) {
   return token.find('=') != std::string::npos;
 }
 
+#if defined(EDGE_EMBEDDED_NAPI_PROVIDER)
 bool IsSupportedV8ProfilerFlag(const std::string& token) {
   return token == "--prof" || token.rfind("--logfile=", 0) == 0 ||
          token.rfind("--prof-sampling-interval=", 0) == 0;
@@ -430,6 +439,7 @@ std::string BuildSupportedV8Flags(
   }
   return flags;
 }
+#endif
 
 bool OptionConsumesNextToken(const std::string& token) {
   static const std::unordered_set<std::string> kValueOptions = {
