@@ -13,41 +13,41 @@ description = "Edge.js with host-provided N-API and no embedded JavaScript engin
 "/usr/local/ssl" = "./ssl-certs"
 
 [[module]]
-name = "edgejs"
+name = "edge"
 source = "./build-wasix/edgejs.wasm"
 
 [[command]]
-name = "edgejs"
-module = "edgejs"
+name = "edge"
+module = "edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-atom = "edgejs"
+atom = "edge"
 # env = ["EDGEJS_LIB_DIR=/node-lib"]
 
 [[command]]
-name = "edge"
-module = "edgejs"
+name = "edgejs"
+module = "edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-atom = "edgejs"
+atom = "edge"
 
 [[command]]
 name = "node"
-module = "edgejs"
+module = "edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-atom = "edgejs"
+atom = "edge"
 
 [[command]]
 name = "pnpm"
-module = "edgejs"
+module = "edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-atom = "edgejs"
+atom = "edge"
 main-args = ["/pnpm/edge-pnpm.cjs"]
 env = [
   "HOME=/tmp",
@@ -63,11 +63,11 @@ env = [
 
 [[command]]
 name = "npm"
-module = "edgejs"
+module = "edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-atom = "edgejs"
+atom = "edge"
 main-args = ["/pnpm/edge-pnpm.cjs"]
 env = [
   "HOME=/tmp",
@@ -85,11 +85,11 @@ env = [
 # separate from the public npm alias so delegation cannot recurse into pnpm.
 [[command]]
 name = "edge-npm-internal"
-module = "edgejs"
+module = "edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-atom = "edgejs"
+atom = "edge"
 main-args = ["/npm/bin/npm-cli.js"]
 env = [
   "HOME=/tmp",

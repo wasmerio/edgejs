@@ -118,6 +118,8 @@ duplicating issue details.
 | 🟢 | High | [004_wasix_safe_mode_https_exit.md](wasmer-deploy/004_wasix_safe_mode_https_exit.md) | WASIX safe-mode HTTPS exits before callbacks |
 | 🟠 | High | [005_pnpm_cli_wasix_futimes.md](wasmer-deploy/005_pnpm_cli_wasix_futimes.md) | pnpm CLI WASIX filesystem fallbacks |
 
+### 🟢 [006_edge_command_package_naming.md](wasmer-deploy/006_edge_command_package_naming.md): canonical Edge command and package executable naming
+
 ### ▶️ [021_quickjs_upstream_sync.md](node-compat/napi/021_quickjs_upstream_sync.md): QuickJS upstream synchronization compatibility
 
 Overlapping coroutine GC, ArrayBuffer ownership, and lazy stack trace integration

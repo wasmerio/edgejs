@@ -217,7 +217,7 @@ plans/quickjs-wasm/development/troubleshooting/node-compat/deploy/024_gatsby_bas
 Most recent Wasmer deploy troubleshooting note:
 
 ```text
-plans/quickjs-wasm/development/troubleshooting/wasmer-deploy/005_pnpm_cli_wasix_futimes.md
+plans/quickjs-wasm/development/troubleshooting/wasmer-deploy/006_edge_command_package_naming.md
 ```
 
 Important commands:

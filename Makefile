@@ -535,7 +535,7 @@ dist-only:
 	rm -f $(ZIP_NAME)
 	mkdir -p $(DIST_BIN_DIR)
 	if [ "$(BUILD_DIR)" = "build-wasix" ] || [ "$(BUILD_DIR)" = "$(BUILD_QUICKJS_WASIX_DIR)" ]; then \
-		cp "$(BUILD_DIR)/edgejs.wasm" "$(DIST_BIN_DIR)/edgejs"; \
+		cp "$(BUILD_DIR)/edgejs.wasm" "$(DIST_BIN_DIR)/edge"; \
 		if [ "$(BUILD_DIR)" = "$(BUILD_QUICKJS_WASIX_DIR)" ]; then \
 			cp quickjs-wasm/wasmer.toml "$(DIST_DIR)/wasmer.toml"; \
 		else \
@@ -548,7 +548,7 @@ dist-only:
 		cp "$(WASIX_SSL_CERTS_DIR)/cacert.pem" "$(DIST_DIR)/ssl-certs/cacert.pem"; \
 		cp "$(WASIX_SSL_CERTS_DIR)/cert.pem" "$(DIST_DIR)/ssl-certs/cert.pem"; \
 		cp -R "$(WASIX_SSL_CERTS_DIR)/certs" "$(DIST_DIR)/ssl-certs/certs"; \
-		perl -0pi -e 's#^source = ".*"#source = "./bin/edgejs"#m; s#^"/(etc|npm|pnpm)" = ".*"#"/$$1" = "./$$1"#mg; s#^"/usr/local/ssl" = ".*"#"/usr/local/ssl" = "./ssl-certs"#m' "$(DIST_DIR)/wasmer.toml"; \
+		perl -0pi -e 's#^source = ".*"#source = "./bin/edge"#m; s#^"/(etc|npm|pnpm)" = ".*"#"/$$1" = "./$$1"#mg; s#^"/usr/local/ssl" = ".*"#"/usr/local/ssl" = "./ssl-certs"#m' "$(DIST_DIR)/wasmer.toml"; \
 	else \
 		cp "$(EDGE_BINARY)" "$(DIST_BIN_DIR)/edge"; \
 		cp "$(EDGEENV_BINARY)" "$(DIST_BIN_DIR)/edgeenv"; \
