@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -142,11 +143,29 @@ using HostentPtr = std::unique_ptr<hostent, HostentDeleter>;
 using AresDataPtr = std::unique_ptr<void, AresDataDeleter>;
 using AresStringPtr = std::unique_ptr<char, AresStringDeleter>;
 
+// A c-ares result held until the next loop turn. c-ares may invoke the query
+// callback synchronously from ares_query_dnsrec() (e.g. an immediate send
+// failure) or ares_gethostbyaddr() (an /etc/hosts hit), so, like Node, JS is
+// never called from inside the c-ares callback itself.
+struct PendingCompletion {
+  CaresReqWrap* req = nullptr;
+  int status = ARES_SUCCESS;
+  std::vector<unsigned char> wire;
+  std::vector<std::string> host_names;
+  bool from_host = false;
+};
+
 struct CaresEnvState {
   explicit CaresEnvState(napi_env /*env_in*/) {}
 
   std::unordered_set<ChannelWrap*> channels;
   bool cleanup_in_progress = false;
+  std::deque<PendingCompletion> pending_completions;
+  // The check handle dispatches pending completions after the poll phase; the
+  // idle handle keeps the loop alive and poll non-blocking while any are
+  // queued, mirroring Node's immediate queue.
+  uv_check_t* completion_check = nullptr;
+  uv_idle_t* completion_idle = nullptr;
 };
 
 int g_cares_library_refcount = 0;
@@ -170,7 +189,7 @@ void CompleteQuery(CaresReqWrap* req,
                    int status,
                    const unsigned char* buf,
                    int len,
-                   hostent* host,
+                   const std::vector<std::string>* host_names,
                    bool from_host);
 void CancelChannelRequests(ChannelWrap* channel);
 
@@ -1429,24 +1448,18 @@ int ParseSoaOnlyReply(napi_env env, const unsigned char* buf, int len, napi_valu
   return ARES_SUCCESS;
 }
 
-int ParseReverseHost(napi_env env, hostent* host, napi_value* out) {
+// `names` holds h_name followed by h_aliases, copied out of the hostent.
+int ParseReverseHost(napi_env env, const std::vector<std::string>* names, napi_value* out) {
   napi_value ret = nullptr;
   napi_create_array(env, &ret);
   std::unordered_set<std::string> seen;
-  if (host != nullptr && host->h_name != nullptr && host->h_name[0] != '\0') {
-    if (!AppendArrayValue(env, ret, MakeStringUtf8(env, host->h_name))) {
-      return ARES_ENOMEM;
-    }
-    seen.insert(host->h_name);
-  }
-  if (host != nullptr && host->h_aliases != nullptr) {
-    for (uint32_t i = 0; host->h_aliases[i] != nullptr; ++i) {
-      if (host->h_aliases[i] == nullptr || host->h_aliases[i][0] == '\0') continue;
-      if (seen.find(host->h_aliases[i]) != seen.end()) continue;
-      if (!AppendArrayValue(env, ret, MakeStringUtf8(env, host->h_aliases[i]))) {
+  if (names != nullptr) {
+    for (const std::string& name : *names) {
+      if (name.empty() || seen.find(name) != seen.end()) continue;
+      if (!AppendArrayValue(env, ret, MakeStringUtf8(env, name.c_str()))) {
         return ARES_ENOMEM;
       }
-      seen.insert(host->h_aliases[i]);
+      seen.insert(name);
     }
   }
   *out = ret;
@@ -1457,7 +1470,7 @@ void CompleteQuery(CaresReqWrap* req,
                    int status,
                    const unsigned char* buf,
                    int len,
-                   hostent* host,
+                   const std::vector<std::string>* host_names,
                    bool from_host) {
   if (req == nullptr) return;
 
@@ -1543,7 +1556,7 @@ void CompleteQuery(CaresReqWrap* req,
         parse_status = ParseSoaOnlyReply(env, buf, len, &result);
         break;
       case QueryKind::kReverse:
-        parse_status = from_host ? ParseReverseHost(env, host, &result) : ARES_EBADRESP;
+        parse_status = from_host ? ParseReverseHost(env, host_names, &result) : ARES_EBADRESP;
         break;
     }
 
@@ -1564,6 +1577,100 @@ void CompleteQuery(CaresReqWrap* req,
   }
 }
 
+void FinishPendingCompletion(PendingCompletion* completion) {
+  CompleteQuery(completion->req,
+                completion->status,
+                completion->wire.empty() ? nullptr : completion->wire.data(),
+                static_cast<int>(completion->wire.size()),
+                completion->from_host ? &completion->host_names : nullptr,
+                completion->from_host);
+}
+
+void StopCompletionHandles(CaresEnvState* state) {
+  if (state->completion_check != nullptr) uv_check_stop(state->completion_check);
+  if (state->completion_idle != nullptr) uv_idle_stop(state->completion_idle);
+}
+
+void CloseCompletionHandles(CaresEnvState* state) {
+  StopCompletionHandles(state);
+  if (state->completion_check != nullptr) {
+    state->completion_check->data = nullptr;
+    uv_close(reinterpret_cast<uv_handle_t*>(state->completion_check), [](uv_handle_t* handle) {
+      delete reinterpret_cast<uv_check_t*>(handle);
+    });
+    state->completion_check = nullptr;
+  }
+  if (state->completion_idle != nullptr) {
+    uv_close(reinterpret_cast<uv_handle_t*>(state->completion_idle), [](uv_handle_t* handle) {
+      delete reinterpret_cast<uv_idle_t*>(handle);
+    });
+    state->completion_idle = nullptr;
+  }
+}
+
+void DispatchPendingCompletions(uv_check_t* handle) {
+  auto env = static_cast<napi_env>(handle->data);
+  if (env == nullptr) return;
+  CaresEnvState* state = GetCaresState(env);
+  if (state == nullptr) return;
+
+  // Completions queued by JS callbacks below run on the next loop turn.
+  std::deque<PendingCompletion> batch;
+  batch.swap(state->pending_completions);
+  StopCompletionHandles(state);
+  for (PendingCompletion& completion : batch) {
+    FinishPendingCompletion(&completion);
+  }
+}
+
+bool StartCompletionHandles(napi_env env) {
+  CaresEnvState& state = EnsureCaresState(env);
+  if (state.completion_check == nullptr) {
+    uv_loop_t* loop = EdgeGetEnvLoop(env);
+    if (loop == nullptr) return false;
+    auto* check = new uv_check_t();
+    if (uv_check_init(loop, check) != 0) {
+      delete check;
+      return false;
+    }
+    auto* idle = new uv_idle_t();
+    if (uv_idle_init(loop, idle) != 0) {
+      delete idle;
+      uv_close(reinterpret_cast<uv_handle_t*>(check), [](uv_handle_t* handle) {
+        delete reinterpret_cast<uv_check_t*>(handle);
+      });
+      return false;
+    }
+    check->data = env;
+    uv_unref(reinterpret_cast<uv_handle_t*>(check));
+    state.completion_check = check;
+    state.completion_idle = idle;
+  }
+  uv_check_start(state.completion_check, DispatchPendingCompletions);
+  uv_idle_start(state.completion_idle, [](uv_idle_t* /*handle*/) {});
+  return true;
+}
+
+void QueueCompletion(PendingCompletion completion) {
+  CaresReqWrap* req = completion.req;
+  // Leave active_reqs now so the cancel paths do not complete the request a
+  // second time. The channel's activity count is only released once the
+  // completion is dispatched, which keeps the channel alive until then.
+  if (ChannelWrap* channel = req->channel; channel != nullptr) {
+    channel->query_last_ok = (completion.status != ARES_ECONNREFUSED);
+    channel->active_reqs.erase(req);
+  }
+
+  napi_env env = req->env;
+  // During env teardown the loop may not turn again, and CompleteQuery skips
+  // JS in that state anyway.
+  if (env == nullptr || EnvCleanupInProgress(env) || !StartCompletionHandles(env)) {
+    FinishPendingCompletion(&completion);
+    return;
+  }
+  EnsureCaresState(env).pending_completions.push_back(std::move(completion));
+}
+
 void OnDnsQueryComplete(void* arg,
                         ares_status_t status,
                         size_t /*timeouts*/,
@@ -1571,24 +1678,21 @@ void OnDnsQueryComplete(void* arg,
   auto* req = static_cast<CaresReqWrap*>(arg);
   if (req == nullptr) return;
 
-  unsigned char* wire = nullptr;
-  size_t wire_len = 0;
-  int parse_status = status;
+  PendingCompletion completion;
+  completion.req = req;
+  completion.status = status;
 
   if (status == ARES_SUCCESS) {
-    parse_status = ares_dns_write(dnsrec, &wire, &wire_len);
+    unsigned char* wire = nullptr;
+    size_t wire_len = 0;
+    completion.status = ares_dns_write(dnsrec, &wire, &wire_len);
+    if (wire != nullptr) {
+      completion.wire.assign(wire, wire + wire_len);
+      ares_free_string(reinterpret_cast<char*>(wire));
+    }
   }
 
-  CompleteQuery(req,
-                parse_status,
-                wire,
-                static_cast<int>(wire_len),
-                nullptr,
-                false);
-
-  if (wire != nullptr) {
-    ares_free_string(reinterpret_cast<char*>(wire));
-  }
+  QueueCompletion(std::move(completion));
 }
 
 void OnReverseQueryComplete(void* arg,
@@ -1597,7 +1701,20 @@ void OnReverseQueryComplete(void* arg,
                             hostent* host) {
   auto* req = static_cast<CaresReqWrap*>(arg);
   if (req == nullptr) return;
-  CompleteQuery(req, status, nullptr, 0, host, true);
+
+  PendingCompletion completion;
+  completion.req = req;
+  completion.status = status;
+  completion.from_host = true;
+  // c-ares frees the hostent once this callback returns.
+  if (host != nullptr) {
+    if (host->h_name != nullptr) completion.host_names.emplace_back(host->h_name);
+    for (char** alias = host->h_aliases; alias != nullptr && *alias != nullptr; ++alias) {
+      completion.host_names.emplace_back(*alias);
+    }
+  }
+
+  QueueCompletion(std::move(completion));
 }
 
 int DispatchQuery(ChannelWrap* channel, CaresReqWrap* req, const QueryMethodData* method) {
@@ -1659,6 +1776,13 @@ void OnCaresEnvCleanup(void* arg) {
   CaresEnvState* state = GetCaresState(env);
   if (state == nullptr) return;
   state->cleanup_in_progress = true;
+
+  std::deque<PendingCompletion> pending;
+  pending.swap(state->pending_completions);
+  for (PendingCompletion& completion : pending) {
+    FinishPendingCompletion(&completion);
+  }
+  CloseCompletionHandles(state);
 
   std::vector<ChannelWrap*> channels;
   channels.reserve(state->channels.size());
