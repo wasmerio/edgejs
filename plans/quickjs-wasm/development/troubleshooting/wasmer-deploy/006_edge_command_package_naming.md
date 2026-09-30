@@ -2,7 +2,7 @@
 
 | | | Remarks |
 | --- | --- | --- |
-| **Status** | 🟢 | Naming fixed; both `0.2.5` review builds validated. Publication awaits user review. |
+| **Status** | 🟢 | Naming fixed and pushed to main; `0.2.5` published and verified in three registry/package pairs; existing staging QuickJS release skipped. |
 | **Severity** | Low | Both packages already have an `edge` entrypoint, but the standard package exposes an `edgejs` atom and distributions contain `bin/edgejs`. |
 
 ## Request and baseline
@@ -95,22 +95,50 @@ wasmer run --experimental-napi --stack-size 4194304 dist/review-0.2.5/edgejs-0.2
 wasmer run --stack-size 4194304 dist/review-0.2.5/edgejs-quickjs-0.2.5.webc --command edge -- -p process.execPath
 ```
 
-## Publication handoff
+## Publication completed: 2026-09-30
 
-No package was published. The user explicitly requested review first.
-wasmer.io reports both canonical packages at `0.2.4`, so the candidates use the
-next patch `0.2.5`. wasmer.wtf could not be queried because
-`https://registry.wasmer.wtf/graphql` timed out; recheck both registries and
-version availability after approval before publishing.
+The user approved direct publication and requested the commit on main. Fix
+`c65459b4f05f2346ae5afc3da3f8b924346caa7a` was pushed directly to `origin/main`
+without force. The user then clarified: use `0.2.5` everywhere, and skip any
+registry/package pair where that exact version already exists.
 
-`wasmer publish --dry-run` validates the local standard package, then fails
-because the new hash is absent in the registry and cannot be tagged. This is
-not a successful remote publish rehearsal; the successful local package builds
-and WEBC execution are the validation evidence.
+Registry/authentication rechecks succeeded. Both standard registries and
+production QuickJS were at `0.2.4`; staging QuickJS already had `0.2.5`.
+Exact-version queries confirmed absence for the three new publication targets.
 
-After approval, publish the reviewed package directories (with their explicit
-`wasmer/*` names and `0.2.5` versions) to each registry. Do not use root source
-metadata, the unrelated local QuickJS `0.2.0` version, or nightly runtime-version
-overrides. Verify each uploaded package's atom, entrypoint, version, and command
-execution. The unrelated QuickJS npm/config CI failure remains a release caveat;
-this change modifies packaging only and does not claim to repair it.
+| Registry | Package/version | Result |
+| --- | --- | --- |
+| wasmer.wtf | [wasmer/edgejs@0.2.5](https://wasmer.wtf/wasmer/edgejs@0.2.5) | Published and verified. |
+| wasmer.io | [wasmer/edgejs@0.2.5](https://wasmer.io/wasmer/edgejs@0.2.5) | Published and verified. |
+| wasmer.io | [wasmer/edgejs-quickjs@0.2.5](https://wasmer.io/wasmer/edgejs-quickjs@0.2.5) | Published and verified. |
+| wasmer.wtf | [wasmer/edgejs-quickjs@0.2.5](https://wasmer.wtf/wasmer/edgejs-quickjs@0.2.5) | Skipped because the exact version already existed; not overwritten or claimed to contain this fix. |
+
+Published from `dist/release-2026-09-30/edgejs` and `edgejs-quickjs`, copies
+of the reviewed directories with explicit canonical package names and `0.2.5`
+versions. Guest binaries retain the reviewed hashes above. Commands:
+
+```sh
+wasmer publish dist/release-2026-09-30/edgejs --registry wasmer.wtf --version 0.2.5 --non-interactive --wait=container
+wasmer publish dist/release-2026-09-30/edgejs --registry wasmer.io --version 0.2.5 --non-interactive --wait=container
+wasmer publish dist/release-2026-09-30/edgejs-quickjs --registry wasmer.io --version 0.2.5 --non-interactive --wait=container
+```
+
+All three commands completed successfully. Production emitted a harmless local
+cache-invalidation warning; downloading/querying the exact published versions
+confirmed successful publication.
+
+All three new packages were downloaded back from their registries with
+`wasmer package download --validate`. Each downloaded WEBC has exactly the
+`edge` atom, entrypoint `edge`, and the expected guest SHA-256. Six executions
+(default and explicit `--command edge` for all three downloaded packages)
+passed and returned `/bin/edge` for `process.execPath`.
+
+Release outputs and records are under `dist/release-2026-09-30/`, including
+`publication.json`, `published-verification.json`, and
+`published-quickjs-verification.json`. Downloaded registry containers are under
+`/private/tmp/edge-command-review/published-*.webc`.
+
+The unrelated QuickJS npm/config CI failure remains a release caveat; this
+change modifies packaging only and does not claim to repair it. The earlier
+`--dry-run` attempt failed because an unpublished hash could not be tagged;
+actual successful publications and downloaded-container checks supersede it.
