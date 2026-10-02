@@ -1,4 +1,4 @@
-.PHONY: build build-edge build-edge-quickjs-cli build-wasix validate-wasix-imports test-wasix-import-validator build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-quickjs-lang test-wasix-quickjs-intl test-intl test-lang test-wasix-v8-only test-wasix-v8-intl test-wasix-v8-lang framework-test-v8-wasix standalone-build-test-v8-wasix test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
+.PHONY: build build-edge build-edge-quickjs-cli build-wasix validate-wasix-imports test-wasix-import-validator build-quickjs-wasix build-napi build-napi-quickjs build-native-v8 build-native-quickjs build-wasix-napi build-wasix-napi-quickjs build-napi-wasmer-cli test-wasix-napi test-wasix-napi-quickjs test-wasix-napi-cli test-wasix-safe-mode test-wasix-quickjs-only test-quickjs-intl test-quickjs-lang test-wasix-quickjs-intl test-intl test-lang test-wasix-v8-only test-wasix-v8-intl test-wasix-v8-lang test-wasix-v8-process test-wasix-quickjs-process framework-test-v8-wasix standalone-build-test-v8-wasix test test-only check-portability clean clean-napi-quickjs clean-edge-quickjs-cli clean-dist dist dist-only framework-test framework-test-quickjs-native framework-test-quickjs-wasix framework-test-run framework-test-reset standalone-build-test standalone-build-test-run standalone-build-test-quickjs-native standalone-build-test-quickjs-wasix
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -487,6 +487,32 @@ test-wasix-v8-lang: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
 	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
 	done
 	@echo "[lang v8 wasix] all language tests passed"
+
+# edgejs-owned WASIX process tests (tests/js): child_process behaviour that
+# depends on libuv-wasix and wasix-libc (stdio wiring, descriptor inheritance).
+# Self-contained like the lang tests; run under both WASIX lanes.
+WASIX_PROCESS_TESTS := \
+  wasix-stdio-parent-close
+
+test-wasix-v8-process: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
+		echo "error: $(WASIX_V8_RUNNER_BIN) is required for test-wasix-v8-process" >&2; exit 1; }
+	@set -e; for t in $(WASIX_PROCESS_TESTS); do \
+	  echo "[process v8 wasix] $$t"; \
+	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
+	done
+	@echo "[process v8 wasix] all process tests passed"
+
+test-wasix-quickjs-process:
+	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
+		echo "error: $(WASMER_BIN) is required for test-wasix-quickjs-process" >&2; exit 1; }
+	@set -e; for t in $(WASIX_PROCESS_TESTS); do \
+	  echo "[process wasix] $$t"; \
+	  WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" \
+	    WASIX_EDGEJS_WORKSPACE_DIRS="test,tests,lib,deps,assets,build-quickjs-wasix" \
+	    "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
+	done
+	@echo "[process wasix] all process tests passed"
 
 test-bytecode-cache:
 	EDGE_BIN=$(EDGE_BINARY) ./scripts/test-bytecode-cache.sh
