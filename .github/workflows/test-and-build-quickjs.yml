@@ -357,7 +357,7 @@ jobs:
         uses: wasix-org/wasixcc@v0.4.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          sysroot-tag: v2026-07-30.1
+          sysroot-tag: v2026-10-02.1
           version: v0.4.3
 
       # See the quickjs-linux job for how Wasmer provisioning modes work. In
