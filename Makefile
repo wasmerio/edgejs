@@ -509,6 +509,7 @@ test-wasix-quickjs-process:
 	@set -e; for t in $(WASIX_PROCESS_TESTS); do \
 	  echo "[process wasix] $$t"; \
 	  WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" \
+	    WASIX_EDGEJS_WORKSPACE_DIRS="test,tests,lib,deps,assets,build-quickjs-wasix" \
 	    "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
 	done
 	@echo "[process wasix] all process tests passed"
