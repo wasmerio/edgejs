@@ -348,6 +348,12 @@ jobs:
           set -euo pipefail
           make test-wasix-v8-intl
 
+      - name: Test child processes (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-v8-process
+
       - name: Test framework apps (V8 WASIX)
         shell: bash
         run: |

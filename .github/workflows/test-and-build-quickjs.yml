@@ -425,6 +425,12 @@ jobs:
           set -euo pipefail
           make test-wasix-quickjs-intl
 
+      - name: Test child processes (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-quickjs-process
+
       - name: Smoke test npm/pnpm aliases (QuickJS WASIX)
         shell: bash
         run: make test-wasix-pnpm WASIX_PACKAGE_DIR="$PWD/quickjs-wasm"
