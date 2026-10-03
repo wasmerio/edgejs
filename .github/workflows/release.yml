@@ -1,0 +1,236 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and finish publishing (for example v0.2.6)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  # Serialize automatic and manual recovery runs, including the same draft tag.
+  group: ${{ github.event_name == 'pull_request' && format('release-validation-{0}', github.event.pull_request.number) || 'edgejs-release' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test release archive and publication boundaries
+        run: python3 -m unittest discover -s scripts/ci -p test_release.py
+      - name: Validate release-please config and actual version updaters
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "${RUNNER_TEMP}/release-please-validation" --no-audit --no-fund \
+            release-please@17.3.0 ajv@8.17.1
+          RELEASE_PLEASE_MODULES="${RUNNER_TEMP}/release-please-validation/node_modules" \
+            node scripts/ci/verify-release-please.cjs
+
+  release-please:
+    needs: validate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@v4.4.1
+        id: release
+        with:
+          # A PAT lets the release PR trigger normal pull_request checks.
+          token: ${{ secrets.RELEASE_PLEASE_GH_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  metadata:
+    needs: [validate, release-please]
+    if: >-
+      always() && needs.validate.result == 'success' &&
+      ((github.event_name == 'push' && needs.release-please.outputs.created == 'true') ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag }}
+      RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || needs.release-please.outputs.sha }}
+
+      - name: Validate release source and existing GitHub release
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Recovery may finish a draft, but must never replace a completed release.
+          test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = true
+          version="$(python3 scripts/ci/release.py version --tag "${RELEASE_TAG}")"
+          sha="$(git rev-parse HEAD)"
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}"
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "${sha}"
+          if [[ -n "${RELEASE_SHA}" && "${sha}" != "${RELEASE_SHA}" ]]; then
+            echo 'Release tag/source commit mismatch' >&2
+            exit 1
+          fi
+          {
+            echo "tag=${RELEASE_TAG}"
+            echo "sha=${sha}"
+            echo "version=${version}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build-v8:
+    needs: metadata
+    uses: ./.github/workflows/test-and-build.yml
+    with:
+      ref: ${{ needs.metadata.outputs.sha }}
+      release: true
+    secrets: inherit
+
+  build-quickjs:
+    needs: metadata
+    uses: ./.github/workflows/test-and-build-quickjs.yml
+    with:
+      ref: ${{ needs.metadata.outputs.sha }}
+      release: true
+    secrets: inherit
+
+  assets:
+    needs: [metadata, build-v8, build-quickjs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: edge-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Prepare and verify all six release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release.py prepare --assets release-assets --version "${RELEASE_VERSION}"
+          unzip -q release-assets/edge-linux-amd64.zip -d "${RUNNER_TEMP}/edge-v8"
+          unzip -q release-assets/edge-quickjs-linux-amd64.zip -d "${RUNNER_TEMP}/edge-quickjs"
+          for backend in v8 quickjs; do
+            actual="$("${RUNNER_TEMP}/edge-${backend}/bin/edge" -p process.versions.edge)"
+            test "${actual}" = "${RELEASE_VERSION}"
+          done
+
+      - name: Install Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSfL https://get.wasmer.io | sh -s "v7.4.2"
+          echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
+
+      - name: Validate registry packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          for package in edgejs edgejs-quickjs; do
+            wasmer package build --check "release-assets/packages/${package}"
+          done
+
+      - name: Upload release assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = true
+          gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            release-assets/*.zip release-assets/SHA256SUMS
+
+      - name: Save verified packages for registry publishing
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: release-assets/packages
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [metadata, assets]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - registry: wasmer.wtf
+            token: DEV_BACKEND_CIUSER_TOKEN
+          - registry: wasmer.io
+            token: PROD_BACKEND_CIUSER_TOKEN
+    env:
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      WASMER_TOKEN: ${{ secrets[matrix.token] }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: release-packages
+
+      - name: Install Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSfL https://get.wasmer.io | sh -s "v7.4.2"
+          echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
+
+      - name: Publish both packages to registry
+        env:
+          RELEASE_REGISTRY: ${{ matrix.registry }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release.py publish --packages release-packages \
+            --registry "${RELEASE_REGISTRY}" --version "${RELEASE_VERSION}"
+
+  finish:
+    needs: [metadata, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish completed GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest

@@ -37,8 +37,9 @@ endif()
 # leading zero -- e.g. 0692402 -- is a *numeric* identifier, and semver forbids
 # leading zeros on those, so `wasmer publish --version=0.0.0-0692402` is
 # rejected outright. Roughly 1 commit in 270 hits this.
+option(EDGE_RELEASE_BUILD "Build a stable version without a Git suffix" "$ENV{EDGE_RELEASE_BUILD}")
 set(EDGE_VERSION_SUFFIX "")
-if(NOT EDGE_VERSION_COMMIT STREQUAL "unknown")
+if(NOT EDGE_RELEASE_BUILD AND NOT EDGE_VERSION_COMMIT STREQUAL "unknown")
   set(EDGE_VERSION_SUFFIX "-g${EDGE_VERSION_COMMIT}")
 endif()
 if(EXISTS "${PROJECT_ROOT}/napi/v8/cmake/NapiBuildCache.cmake")

@@ -114,3 +114,44 @@ The smoke test checks pnpm 10.34.5, installs React 19.2.8 from the registry in
 a fresh mounted project, verifies `package.json` and `pnpm-lock.yaml`, asserts
 that `node_modules/react` is a real directory, and resolves the installed
 version through the packaged Edge QuickJS command. The target passes.
+
+## 2026-10-02: private npm subprocess entrypoint
+
+GitHub Actions run `37078796961`, job `111074548689`, failed in
+`make test-wasix-pnpm` while executing the public alias's delegated
+`npm config get registry` command. The exact failure reproduced locally with
+Wasmer 7.4.2:
+
+```text
+Error: Cannot find module '/home/config'
+```
+
+pnpm starts `/bin/edge-npm-internal config get registry` with `spawnSync`.
+When this private package command is launched as a subprocess, its manifest
+`main-args = ["/npm/bin/npm-cli.js"]` are not prepended. Edge therefore treats
+`config` as its script. A diagnostic confirmed that explicitly starting
+`process.execPath /npm/bin/npm-cli.js config get registry` reaches npm.
+
+Action plan: keep this adaptation in the shared pnpm launcher, translate only
+the private npm fallback on WASIX, preserve spawn options and arguments, and
+verify through the existing package smoke. There is no native crash to inspect
+with LLDB or shared runtime semantic change to make.
+
+`quickjs-wasm/pnpm/edge-pnpm.cjs` now wraps `child_process.spawnSync` before
+loading pnpm. For the exact `/bin/edge-npm-internal` target on `process.platform
+=== 'wasi'`, it starts the interpreter with npm's explicit script entrypoint.
+Both standard and QuickJS manifests mount this same launcher. Public npm/pnpm
+aliases still run pnpm, and unrelated subprocesses retain their original
+behavior.
+
+Verified with the existing embedded QuickJS WASIX artifact and Wasmer 7.4.2:
+
+```sh
+python3 scripts/test-wasix-pnpm.py --package-dir quickjs-wasm --timeout 90
+```
+
+The complete test passes: both command versions, delegated project `.npmrc`
+registry lookups, store paths, React online installation, offline frozen
+installation, package scripts under both aliases, and direct Edge resolution.
+New artifacts are built and verified by the integration task:
+[`dev_011_wasix_ci_release`](../../dev_011_wasix_ci_release/001_build_and_toolchain.md).

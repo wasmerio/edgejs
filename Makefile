@@ -70,10 +70,10 @@ EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || printf unknown)
 EDGE_VERSION_BASE := $(EDGE_VERSION_MAJOR).$(EDGE_VERSION_MINOR).$(EDGE_VERSION_PATCH)
-ifneq ($(filter 1 true TRUE yes YES,$(IS_FINAL_RELEASE)),)
+ifneq ($(filter 1 true TRUE yes YES,$(IS_FINAL_RELEASE) $(EDGE_RELEASE_BUILD)),)
 EDGE_PACKAGE_VERSION := $(EDGE_VERSION_BASE)
 else
-EDGE_PACKAGE_VERSION := $(EDGE_VERSION_BASE)-$(EDGE_VERSION_COMMIT)
+EDGE_PACKAGE_VERSION := $(EDGE_VERSION_BASE)-g$(EDGE_VERSION_COMMIT)
 endif
 EDGE_WASMER_PACKAGE ?= wasmer/edgejs@=$(EDGE_PACKAGE_VERSION)
 
