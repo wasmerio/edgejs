@@ -346,6 +346,79 @@ TEST_F(Test1CliPhase01, CompatWrappedCommandsUseParentBinCompatFromBuildTreeExec
 #endif
 }
 
+TEST_F(Test1CliPhase01, SafeModeNormalizesExactWasmerPackageReference) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "safe mode subprocess check is POSIX-oriented";
+#else
+  namespace fs = std::filesystem;
+  const auto edge_path = ResolveBuiltEdgeBinary();
+  ASSERT_FALSE(edge_path.empty()) << "Failed to resolve built edge binary";
+
+  const auto temp_root = fs::temp_directory_path() / "edge_phase01_safe_mode_exact_ref";
+  const auto fake_wasmer = temp_root / "wasmer";
+  const auto fake_log = temp_root / "wasmer.log";
+  std::error_code ec;
+  fs::remove_all(temp_root, ec);
+  fs::create_directories(temp_root, ec);
+  ASSERT_FALSE(ec) << "Failed to create temp directory";
+
+  std::ofstream wasmer_out(fake_wasmer);
+  wasmer_out
+      << "#!/bin/sh\n"
+      << "printf '%s\\n' \"$*\" >> " << ShellSingleQuoted(fake_log.string()) << "\n"
+      << "if [ \"$1\" = \"--version\" ]; then\n"
+      << "  printf 'wasmer 7.1.0\\nfeatures: wasix napi_v10 napi_extension_wasmer_v0\\n'\n"
+      << "  exit 0\n"
+      << "fi\n"
+      << "if [ \"$1\" = \"run\" ]; then\n"
+      << "  printf 'run_package=%s\\n' \"$3\"\n"
+      << "  exit 0\n"
+      << "fi\n"
+      << "exit 64\n";
+  wasmer_out.close();
+  ASSERT_TRUE(wasmer_out.good()) << "Failed to write fake wasmer";
+  fs::permissions(
+      fake_wasmer,
+      fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec |
+          fs::perms::group_read | fs::perms::group_exec |
+          fs::perms::others_read | fs::perms::others_exec,
+      fs::perm_options::replace,
+      ec);
+  ASSERT_FALSE(ec) << "Failed to chmod fake wasmer";
+
+  const CommandResult result = RunBuiltBinaryAndCapture(
+      edge_path,
+      {
+          "--safe",
+          "--wasmer-bin",
+          fake_wasmer.string(),
+          "--wasmer-package",
+          "wasmer/edgejs@=0.0.0-test",
+          "-e",
+          "console.log('ok')",
+      },
+      "edge_phase01_safe_mode_exact_ref");
+  ASSERT_NE(result.status, -1);
+  ASSERT_TRUE(WIFEXITED(result.status)) << "status=" << result.status;
+  EXPECT_EQ(WEXITSTATUS(result.status), 0) << "stderr=" << result.stderr_output;
+  EXPECT_TRUE(result.stderr_output.empty()) << "stderr=" << result.stderr_output;
+
+  std::ifstream log_in(fake_log);
+  const std::string log_output((std::istreambuf_iterator<char>(log_in)),
+                               std::istreambuf_iterator<char>());
+  fs::remove_all(temp_root, ec);
+
+  EXPECT_NE(log_output.find("--version -v"), std::string::npos) << log_output;
+  EXPECT_EQ(log_output.find("package download"), std::string::npos) << log_output;
+  EXPECT_NE(result.stdout_output.find("run_package="), std::string::npos)
+      << result.stdout_output;
+  EXPECT_NE(result.stdout_output.find("run_package=wasmer/edgejs@0.0.0-test"),
+            std::string::npos)
+      << result.stdout_output;
+  EXPECT_EQ(result.stdout_output.find("@="), std::string::npos) << result.stdout_output;
+#endif
+}
+
 TEST_F(Test1CliPhase01, EdgeenvAlwaysPrefixesPathAndBypassesCliParsing) {
 #if defined(_WIN32)
   GTEST_SKIP() << "compat wrapper subprocess check is POSIX-oriented";

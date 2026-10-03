@@ -40,9 +40,19 @@ std::string ResolveWasmerBinary(std::string_view wasmer_bin) {
   return "wasmer";
 }
 
+std::string NormalizeWasmerPackageReference(std::string wasmer_package) {
+  const size_t exact_version_marker = wasmer_package.find("@=");
+  if (exact_version_marker != std::string::npos) {
+    wasmer_package.erase(exact_version_marker + 1, 1);
+  }
+  return wasmer_package;
+}
+
 std::string ResolveWasmerPackage(std::string_view wasmer_package) {
-  if (!wasmer_package.empty()) return std::string(wasmer_package);
-  return EDGE_DEFAULT_WASMER_PACKAGE;
+  if (!wasmer_package.empty()) {
+    return NormalizeWasmerPackageReference(std::string(wasmer_package));
+  }
+  return NormalizeWasmerPackageReference(EDGE_DEFAULT_WASMER_PACKAGE);
 }
 
 std::string BuildEdgeBinaryPath() {
