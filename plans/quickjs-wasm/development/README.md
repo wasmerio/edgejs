@@ -67,3 +67,7 @@ canonical home for known incompatibilities once a troubleshooting page exists.
 - `🟢`: resolved or stable.
 - `🟠`: accepted with caveats, partial compatibility, or retained limitation.
 - `🔴`: unresolved blocker.
+
+## Latest build and release work
+
+[dev_011_wasix_ci_release](dev_011_wasix_ci_release/) tracks the latest-main and WASIX toolchain rebuild, bundled npm CI fix, and release-please publishing support.

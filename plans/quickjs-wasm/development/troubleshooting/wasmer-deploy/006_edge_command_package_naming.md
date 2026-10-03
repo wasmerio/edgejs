@@ -142,3 +142,7 @@ The unrelated QuickJS npm/config CI failure remains a release caveat; this
 change modifies packaging only and does not claim to repair it. The earlier
 `--dry-run` attempt failed because an unpublished hash could not be tagged;
 actual successful publications and downloaded-container checks supersede it.
+
+## Follow-up: bundled npm CI repair (2026-10-02)
+
+The npm/config caveat recorded during the September publication is now repaired by the package-local launcher adaptation tracked in [005_pnpm_cli_wasix_futimes.md](005_pnpm_cli_wasix_futimes.md). This preserves the historical publication evidence above; new release automation and rebuilt-artifact verification are tracked in [dev_011_wasix_ci_release](../../dev_011_wasix_ci_release/).

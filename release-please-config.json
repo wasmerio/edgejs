@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "9bff8bc6103622550c1099bae891713c8c370242",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "version-file": "VERSION.txt",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "draft": true,
+      "force-tag-creation": true,
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        { "type": "generic", "path": "src/edge_version.h" },
+        { "type": "toml", "path": "wasmer.toml", "jsonpath": "$.package.version" },
+        { "type": "toml", "path": "quickjs-wasm/wasmer.toml", "jsonpath": "$.package.version" }
+      ]
+    }
+  }
+}
