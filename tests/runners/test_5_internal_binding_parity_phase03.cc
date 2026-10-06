@@ -7,6 +7,74 @@
 
 class Test5InternalBindingParityPhase03 : public FixtureTestBase {};
 
+TEST_F(Test5InternalBindingParityPhase03, EncodingResultsRemainCoherentAcrossCalls) {
+  EnvScope s(runtime_.get());
+  std::string error;
+  const int exit_code = EdgeRunScriptSource(s.env, R"JS(
+const assert = require('assert');
+const encoder = new TextEncoder();
+const binding = internalBinding('encoding_binding');
+const results = binding.encodeIntoResults;
+const cases = [
+  ['abc', 8, 3, [97, 98, 99]],
+  ['\u00e9', 1, 0, []],
+  ['\u00e9', 2, 1, [195, 169]],
+  ['\ud83d\ude00x', 4, 2, [240, 159, 152, 128]],
+  ['\ud83d\ude00x', 5, 3, [240, 159, 152, 128, 120]],
+  ['\ud800', 3, 1, [239, 191, 189]],
+  ['\udc00', 2, 0, []],
+  ['', 8, 0, []],
+  ['a', 0, 0, []],
+];
+for (let iteration = 0; iteration < 100; iteration++) {
+  for (const [input, capacity, read, bytes] of cases) {
+    const backing = new Uint8Array(capacity + 2).fill(0x7f);
+    const destination = backing.subarray(1, 1 + capacity);
+    assert.deepStrictEqual(encoder.encodeInto(input, destination), {
+      read, written: bytes.length,
+    });
+    assert.deepStrictEqual(Array.from(results), [read, bytes.length]);
+    assert.deepStrictEqual(Array.from(destination.subarray(0, bytes.length)), bytes);
+    assert.ok(destination.subarray(bytes.length).every(byte => byte === 0x7f));
+    assert.strictEqual(backing[0], 0x7f);
+    assert.strictEqual(backing[backing.length - 1], 0x7f);
+  }
+}
+// Counts beyond a small fragment still reuse one equal numeric value, while
+// Unicode keeps the independent UTF-16 and UTF-8 counts.
+assert.deepStrictEqual(encoder.encodeInto('a'.repeat(70000), new Uint8Array(70000)), {
+  read: 70000, written: 70000,
+});
+assert.deepStrictEqual(Array.from(results), [70000, 70000]);
+assert.deepStrictEqual(encoder.encodeInto('\u00e9'.repeat(1000), new Uint8Array(2000)), {
+  read: 1000, written: 2000,
+});
+assert.deepStrictEqual(Array.from(results), [1000, 2000]);
+binding.encodeInto('abc', new Uint8Array(8));
+assert.deepStrictEqual(Array.from(results), [3, 3]);
+// Internal binding failures reset the shared result slots, even after a
+// successful invocation. Public argument validation happens before the binding.
+binding.encodeInto({}, new Uint8Array(8));
+assert.deepStrictEqual(Array.from(results), [0, 0]);
+assert.throws(() => binding.encodeInto('abc', new Uint16Array(8)), {
+  code: 'ERR_INVALID_ARG_TYPE',
+});
+assert.deepStrictEqual(Array.from(results), [0, 0]);
+assert.deepStrictEqual(encoder.encodeInto('z', new Uint8Array(1)), {
+  read: 1, written: 1,
+});
+assert.deepStrictEqual(Array.from(results), [1, 1]);
+// The results view and destination may share backing storage when callers
+// exercise the internal binding directly. The final counters still win.
+binding.encodeInto('ab', new Uint8Array(results.buffer));
+assert.deepStrictEqual(Array.from(results), [2, 2]);
+binding.encodeInto('x', new Uint8Array(1));
+assert.deepStrictEqual(Array.from(results), [1, 1]);
+)JS", &error);
+  EXPECT_EQ(exit_code, 0) << "error=" << error;
+  EXPECT_TRUE(error.empty());
+}
+
 namespace {
 
 napi_value TestDOMExceptionConstructor(napi_env env, napi_callback_info) {

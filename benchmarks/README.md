@@ -14,6 +14,28 @@ The benchmark files are intentionally simple and focused. They are meant to be e
 
 ## Current workloads
 
+### `text-encoder-encode-into`
+
+Runs eight warmed batches of 8,888 `TextEncoder.encodeInto()` calls using short
+ASCII and Unicode fragments, a shared encoder, and a reused destination. This
+isolates encoding binding overhead encountered by streamed Astro templates.
+It reports per-batch milliseconds and a deterministic encoded-byte checksum;
+each batch has checksum `88868`. It excludes startup, HTTP transport, and
+destination allocation. The investigation's HTTP fixture used a different
+16-character ASCII input and read-plus-written checksum `284416`; its numbers must not be compared
+with this mixed-input workload as though they were the same benchmark.
+
+Run the same file with each runtime or guest build being compared:
+
+```sh
+node benchmarks/workloads/text-encoder-encode-into.js
+./build-edge/edge benchmarks/workloads/text-encoder-encode-into.js
+```
+
+For WASIX comparisons, execute the file through the same Wasmer/Edge host and
+compiler configuration for both guest builds. Use Release builds, prewarm the
+guest, keep cgroup settings identical, and avoid simultaneous compiler jobs.
+
 ### `empty-startup`
 
 Runs an empty script.

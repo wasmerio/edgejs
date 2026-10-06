@@ -83,18 +83,23 @@ napi_value GetEncodeIntoResultsArray(napi_env env, EncodingBindingState* state) 
   return arr;
 }
 
-void UpdateEncodeIntoResults(napi_env env, EncodingBindingState* state, uint32_t read, uint32_t written) {
-  napi_value arr = GetEncodeIntoResultsArray(env, state);
+void UpdateEncodeIntoResults(napi_env env, napi_value arr, uint32_t read, uint32_t written) {
   if (arr == nullptr) return;
 
   napi_value v_read = nullptr;
   napi_value v_written = nullptr;
-  if (napi_create_uint32(env, read, &v_read) == napi_ok && v_read != nullptr) {
+  const bool read_created = napi_create_uint32(env, read, &v_read) == napi_ok && v_read != nullptr;
+  if (read_created) {
     napi_set_element(env, arr, 0, v_read);
   }
-  if (napi_create_uint32(env, written, &v_written) == napi_ok && v_written != nullptr) {
-    napi_set_element(env, arr, 1, v_written);
+  // ASCII and the initial reset have equal counts. Reuse the number handle
+  // instead of crossing the guest/host bridge to create it twice.
+  if (read == written && read_created) {
+    v_written = v_read;
+  } else if (napi_create_uint32(env, written, &v_written) != napi_ok) {
+    return;
   }
+  if (v_written != nullptr) napi_set_element(env, arr, 1, v_written);
 }
 
 size_t WriteCodePointUtf8(uint32_t cp, char* out) {
@@ -275,7 +280,10 @@ napi_value BindingEncodeInto(napi_env env, napi_callback_info info) {
   }
 
   auto* state = static_cast<EncodingBindingState*>(data);
-  UpdateEncodeIntoResults(env, state, 0, 0);
+  // This local handle remains valid for the callback; resolve the private
+  // results array once and preserve its reset before validation or writes.
+  napi_value results = GetEncodeIntoResultsArray(env, state);
+  UpdateEncodeIntoResults(env, results, 0, 0);
 
   size_t utf16_len = 0;
   if (napi_get_value_string_utf16(env, argv[0], nullptr, 0, &utf16_len) != napi_ok) {
@@ -340,7 +348,7 @@ napi_value BindingEncodeInto(napi_env env, napi_callback_info info) {
   }
 
   if (!destination.Release(written != 0)) return GetUndefined(env);
-  UpdateEncodeIntoResults(env, state, read, written);
+  UpdateEncodeIntoResults(env, results, read, written);
   return GetUndefined(env);
 }
 

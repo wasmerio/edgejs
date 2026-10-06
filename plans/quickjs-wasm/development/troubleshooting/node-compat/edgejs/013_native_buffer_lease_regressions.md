@@ -108,3 +108,42 @@ N-API QuickJS provider suite: 71 passed, 0 failed
 
 The existing 30 native compatibility exclusions are unchanged. No file under
 `lib/` changed, and no new platform conditional was introduced.
+
+## Follow-up: streamed SSR encoding overhead (2026-10-06)
+
+An Astro dashboard fixture makes 8,888 `TextEncoder.encodeInto()` calls per
+render, mostly for strings shorter than 16 characters. Updating the shared
+`Uint32Array(2)` result through `napi_create_uint32()` and `napi_set_element()`
+twice per call requires ten guest-to-host imports, including reference lookups.
+These result updates alone account for 88,880 imports per fixture request.
+
+The optimization resolves the binding-owned results array once per callback
+and shares the numeric value between equal result slots. The initial reset
+uses one zero handle; ASCII's equal UTF-16/UTF-8 counts also use one handle.
+Result bookkeeping falls from ten imports to seven for ASCII and eight for
+unequal Unicode counts. Destination bytes retain their existing scoped lease,
+and the reset still occurs before validation and destination writes.
+
+Verification on a Release Edge host with otherwise identical latest-main
+Release WASIX guests and production-style cgroups:
+
+- Public and internal encoding regressions pass, including 900 repeated cases,
+  large equal/unequal counts, Unicode, lone surrogates, partial destinations,
+  offset views, internal errors/reset/recovery, shared-result coherence, and
+  result/destination backing-store aliasing.
+- A constant-buffer HTTP microbenchmark performs 8,888 calls per request.
+  Sixty interleaved pairs give baseline median 37.349 ms and optimized median
+  33.823 ms, a 9.4% reduction; checksum 284416 matches in every response.
+- Initial full-dashboard body completion median improves from 70.56 ms to
+  66.44 ms (5.8%). This is a separate workload from the encoding microbenchmark.
+- Sustained full-dashboard requests expose native foreground-GC checkpoint
+  stalls in both guest versions. This guest change does not resolve those
+  stalls and makes no tail-latency claim.
+- Both Release WASIX artifacts pass the imported-N-API dispatch guard.
+
+The persistent mixed-input benchmark is
+`benchmarks/workloads/text-encoder-encode-into.js`; each batch has checksum
+88868. Commands and measurement controls are in `benchmarks/README.md`.
+The added native C++ parity case was not executed through its native CTest
+target; the equivalent assertions were exercised by the actual Release WASIX
+guest through the host's public/internal regression routes.
