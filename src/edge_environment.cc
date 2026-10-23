@@ -32,24 +32,10 @@ struct DetachedSlotState {
 std::unordered_map<napi_env, DetachedSlotState> g_detached_slots;
 std::atomic<uint64_t> g_callback_trace_sequence{0};
 
-void AttachedEnvAssignContextToken(napi_env env, void* token, void* /*data*/) {
-  if (auto* environment = edge::Environment::Get(env); environment != nullptr) {
-    environment->AssignToContext(token);
-  }
-}
-
-void AttachedEnvUnassignContextToken(napi_env env, void* token, void* /*data*/) {
-  if (auto* environment = edge::Environment::Get(env); environment != nullptr) {
-    environment->UnassignFromContext(token);
-  }
-}
-
 bool RegisterAttachedEnvHooks(napi_env env) {
   unofficial_napi_env_hooks hooks{};
   hooks.size = sizeof(hooks);
   hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
-  hooks.context_token_assign_callback = AttachedEnvAssignContextToken;
-  hooks.context_token_unassign_callback = AttachedEnvUnassignContextToken;
   hooks.fatal_error_callback = EdgeFatalErrorReportCallback;
   hooks.oom_error_callback = EdgeOomErrorReportCallback;
   if (EdgeRuntimePlatformPrepareEnvHooks(env, &hooks) != napi_ok) return false;
@@ -1513,24 +1499,6 @@ StreamBaseState* Environment::stream_base_state() {
 
 PrincipalRealmShim* Environment::principal_realm() {
   return &principal_realm_;
-}
-
-void Environment::AssignToContext(void* token) {
-  if (token == nullptr) return;
-  std::lock_guard<std::mutex> lock(mutex_);
-  attached_contexts_.emplace(token);
-}
-
-void Environment::UnassignFromContext(void* token) {
-  if (token == nullptr) return;
-  std::lock_guard<std::mutex> lock(mutex_);
-  attached_contexts_.erase(token);
-}
-
-bool Environment::HasAttachedContext(void* token) const {
-  if (token == nullptr) return false;
-  std::lock_guard<std::mutex> lock(mutex_);
-  return attached_contexts_.find(token) != attached_contexts_.end();
 }
 
 SlotEntry Environment::GetSlot(size_t slot_id) const {
