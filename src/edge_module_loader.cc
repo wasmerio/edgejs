@@ -18,6 +18,7 @@
 #include "edge_pipe_wrap.h"
 #include "edge_process.h"
 #include "edge_process_wrap.h"
+#include "edge_realm.h"
 #include "edge_signal_wrap.h"
 #include "edge_spawn_sync.h"
 #include "edge_stream_wrap.h"
@@ -3427,11 +3428,19 @@ static napi_value ContextifyScriptRunInContextCallback(napi_env env, napi_callba
     napi_get_value_int32(env, column_offset_value, &column_offset);
   }
 
+  // The script runs in the realm of the contextified sandbox, or in this
+  // env's realm when there is none.
+  napi_env run_env = EdgeRealmEnvForContext(env, sandbox);
+  if (run_env == nullptr) {
+    ClearContextifyHostDefinedOptionProperties(env, this_arg);
+    return nullptr;
+  }
+
   napi_value result = nullptr;
   const unofficial_napi_js_source run_source =
       unofficial_napi_js_source_from_text(code_value);
-  const napi_status st = unofficial_napi_contextify_run_script(env,
-                                                               sandbox,
+  const napi_status st = unofficial_napi_contextify_run_script(run_env,
+                                                               nullptr,
                                                                &run_source,
                                                                filename_value,
                                                                line_offset,
@@ -3650,17 +3659,20 @@ static napi_value ContextifyMakeContextCallback(napi_env env, napi_callback_info
     napi_get_undefined(env, &host_defined_option_id);
   }
 
+  // A symbol (vm.constants.DONT_CONTEXTIFY) asks for a realm with a fresh
+  // global and no sandbox.
+  unofficial_napi_realm_options options;
+  unofficial_napi_realm_options_init(&options);
+  options.sandbox_or_null = type == napi_symbol ? nullptr : sandbox_or_symbol;
+  options.name = name;
+  options.origin = origin;
+  options.host_defined_option_id = host_defined_option_id;
+  options.allow_code_gen_strings = allow_strings;
+  options.allow_code_gen_wasm = allow_wasm;
+  options.own_microtask_queue = own_microtask_queue;
+  napi_env realm = nullptr;
   napi_value out = nullptr;
-  if (unofficial_napi_contextify_make_context(env,
-                                              sandbox_or_symbol,
-                                              name,
-                                              origin,
-                                              allow_strings,
-                                              allow_wasm,
-                                              own_microtask_queue,
-                                              host_defined_option_id,
-                                              &out) != napi_ok ||
-      out == nullptr) {
+  if (unofficial_napi_create_realm(env, &options, &realm, &out) != napi_ok || out == nullptr) {
     return nullptr;
   }
 
@@ -3740,6 +3752,13 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
     napi_get_undefined(env, &host_defined_option_id);
   }
 
+  // The function is compiled in the parsing context's realm, or in this env's
+  // realm when there is none.
+  napi_env compile_env = EdgeRealmEnvForContext(env, parsing_context);
+  if (compile_env == nullptr) return nullptr;
+  napi_value no_context = nullptr;
+  napi_get_undefined(env, &no_context);
+
   // vm.compileFunction cache handling uses one provider-owned open
   // transaction. The artifact is opened only when cached data must be
   // validated or fresh cached data must be produced.
@@ -3755,7 +3774,7 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
     cache_size = cached_bytes.size();
   }
   if (has_cached_data || produce_cached_data) {
-    if (fn_bytecode.Open(env,
+    if (fn_bytecode.Open(compile_env,
                          code,
                          filename,
                          unofficial_napi_bytecode_shape_cjs_function,
@@ -3776,12 +3795,12 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
       fn_bytecode ? fn_bytecode.source() : unofficial_napi_js_source_from_text(code);
   napi_value out = nullptr;
   const napi_status compile_status =
-      unofficial_napi_contextify_compile_function(env,
+      unofficial_napi_contextify_compile_function(compile_env,
                                                   &compile_source,
                                                   filename,
                                                   line_offset,
                                                   column_offset,
-                                                  parsing_context,
+                                                  no_context,
                                                   context_extensions,
                                                   params,
                                                   host_defined_option_id,
