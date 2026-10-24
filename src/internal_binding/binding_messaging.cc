@@ -4724,18 +4724,17 @@ napi_value CreateMovedMessagePortWrapperInContext(napi_env env,
   const unofficial_napi_js_source run_source = unofficial_napi_js_source_from_text(source);
   const napi_status status = run_env == nullptr
                                  ? napi_invalid_arg
-                                 : unofficial_napi_contextify_run_script(run_env,
-                                                                   nullptr,
-                                                                   &run_source,
-                                                                   filename,
-                                                                   0,
-                                                                   0,
-                                                                   -1,
-                                                                   true,
-                                                                   false,
-                                                                   false,
-                                                                   undefined,
-                                                                   &out);
+                                 : unofficial_napi_run_script(run_env,
+                                                              &run_source,
+                                                              filename,
+                                                              0,
+                                                              0,
+                                                              -1,
+                                                              true,
+                                                              false,
+                                                              false,
+                                                              undefined,
+                                                              &out);
 
   DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativePort);
   DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeMove);
