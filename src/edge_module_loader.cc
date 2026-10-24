@@ -1279,16 +1279,15 @@ static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_in
   napi_value compile_result = nullptr;
   const unofficial_napi_js_source compile_source =
       builtin_bytecode ? builtin_bytecode.source() : unofficial_napi_js_source_from_text(code);
-  const napi_status compile_status = unofficial_napi_contextify_compile_function(env,
-                                                                                 &compile_source,
-                                                                                 filename,
-                                                                                 0,
-                                                                                 0,
-                                                                                 undefined,
-                                                                                 undefined,
-                                                                                 params,
-                                                                                 undefined,
-                                                                                 &compile_result);
+  const napi_status compile_status = unofficial_napi_compile_function(env,
+                                                                      &compile_source,
+                                                                      filename,
+                                                                      0,
+                                                                      0,
+                                                                      undefined,
+                                                                      params,
+                                                                      undefined,
+                                                                      &compile_result);
   if (compile_status != napi_ok || compile_result == nullptr) {
     return nullptr;
   }
@@ -1726,16 +1725,15 @@ static bool ExecuteBuiltinFromNative(napi_env env, ModuleLoaderState* state, con
   const unofficial_napi_js_source compile_source =
       builtin_bytecode ? builtin_bytecode.source() : unofficial_napi_js_source_from_text(code);
   const napi_status compile_status =
-      unofficial_napi_contextify_compile_function(env,
-                                                  &compile_source,
-                                                  filename,
-                                                  0,
-                                                  0,
-                                                  undefined,
-                                                  undefined,
-                                                  params,
-                                                  undefined,
-                                                  &compile_result);
+      unofficial_napi_compile_function(env,
+                                       &compile_source,
+                                       filename,
+                                       0,
+                                       0,
+                                       undefined,
+                                       params,
+                                       undefined,
+                                       &compile_result);
   if (compile_status != napi_ok ||
       compile_result == nullptr) {
     std::string message = "contextify compile failed";
@@ -3439,18 +3437,17 @@ static napi_value ContextifyScriptRunInContextCallback(napi_env env, napi_callba
   napi_value result = nullptr;
   const unofficial_napi_js_source run_source =
       unofficial_napi_js_source_from_text(code_value);
-  const napi_status st = unofficial_napi_contextify_run_script(run_env,
-                                                               nullptr,
-                                                               &run_source,
-                                                               filename_value,
-                                                               line_offset,
-                                                               column_offset,
-                                                               timeout,
-                                                               display_errors,
-                                                               break_on_sigint,
-                                                               break_on_first_line,
-                                                               host_defined_option_id,
-                                                               &result);
+  const napi_status st = unofficial_napi_run_script(run_env,
+                                                    &run_source,
+                                                    filename_value,
+                                                    line_offset,
+                                                    column_offset,
+                                                    timeout,
+                                                    display_errors,
+                                                    break_on_sigint,
+                                                    break_on_first_line,
+                                                    host_defined_option_id,
+                                                    &result);
   ClearContextifyHostDefinedOptionProperties(env, this_arg);
   if (st != napi_ok || result == nullptr) {
     return nullptr;
@@ -3756,8 +3753,6 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
   // realm when there is none.
   napi_env compile_env = EdgeRealmEnvForContext(env, parsing_context);
   if (compile_env == nullptr) return nullptr;
-  napi_value no_context = nullptr;
-  napi_get_undefined(env, &no_context);
 
   // vm.compileFunction cache handling uses one provider-owned open
   // transaction. The artifact is opened only when cached data must be
@@ -3795,16 +3790,15 @@ static napi_value ContextifyCompileFunctionCallback(napi_env env, napi_callback_
       fn_bytecode ? fn_bytecode.source() : unofficial_napi_js_source_from_text(code);
   napi_value out = nullptr;
   const napi_status compile_status =
-      unofficial_napi_contextify_compile_function(compile_env,
-                                                  &compile_source,
-                                                  filename,
-                                                  line_offset,
-                                                  column_offset,
-                                                  no_context,
-                                                  context_extensions,
-                                                  params,
-                                                  host_defined_option_id,
-                                                  &out);
+      unofficial_napi_compile_function(compile_env,
+                                       &compile_source,
+                                       filename,
+                                       line_offset,
+                                       column_offset,
+                                       context_extensions,
+                                       params,
+                                       host_defined_option_id,
+                                       &out);
   if (compile_status != napi_ok || out == nullptr) {
     return nullptr;
   }
@@ -3935,16 +3929,15 @@ static napi_value ContextifyCompileFunctionForCJSLoaderCallback(napi_env env, na
   const unofficial_napi_js_source compile_source =
       cjs_bytecode ? cjs_bytecode.source() : unofficial_napi_js_source_from_text(code);
   napi_value compile_result = nullptr;
-  napi_status status = unofficial_napi_contextify_compile_function(env,
-                                                                   &compile_source,
-                                                                   filename,
-                                                                   0,
-                                                                   0,
-                                                                   undefined,
-                                                                   undefined,
-                                                                   params,
-                                                                   host_defined_option_id,
-                                                                   &compile_result);
+  napi_status status = unofficial_napi_compile_function(env,
+                                                        &compile_source,
+                                                        filename,
+                                                        0,
+                                                        0,
+                                                        undefined,
+                                                        params,
+                                                        host_defined_option_id,
+                                                        &compile_result);
   if (status == napi_ok && compile_result != nullptr) {
     return CreateContextifyCjsLoaderResult(env, compile_result, false);
   }
@@ -5096,18 +5089,17 @@ bool EvaluateJsModule(napi_env env,
       if (wrapper_bytecode) {
         const unofficial_napi_js_source js_source = wrapper_bytecode.source();
         const napi_status run_status =
-            unofficial_napi_contextify_run_script(env,
-                                                  nullptr,
-                                                  &js_source,
-                                                  source_url_value,
-                                                  0,
-                                                  0,
-                                                  -1,
-                                                  false,
-                                                  false,
-                                                  false,
-                                                  undefined,
-                                                  &outer_fn);
+            unofficial_napi_run_script(env,
+                                       &js_source,
+                                       source_url_value,
+                                       0,
+                                       0,
+                                       -1,
+                                       false,
+                                       false,
+                                       false,
+                                       undefined,
+                                       &outer_fn);
         if (run_status != napi_ok || outer_fn == nullptr) {
           // Fall back to the plain path for exact error shaping.
           outer_fn = nullptr;

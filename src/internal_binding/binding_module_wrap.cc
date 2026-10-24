@@ -449,7 +449,6 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       create_options.kind = unofficial_napi_module_synthetic;
       create_options.wrapper = this_arg;
       create_options.url = argc >= 1 ? argv[0] : nullptr;
-      create_options.context_or_undefined = nullptr;
       create_options.payload.synthetic.export_names = argv[2];
       create_options.payload.synthetic.synthetic_evaluation_steps = argv[3];
       unofficial_napi_module_create_result create_result{};
@@ -591,7 +590,6 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       create_options.kind = unofficial_napi_module_source_text;
       create_options.wrapper = this_arg;
       create_options.url = argc >= 1 ? argv[0] : nullptr;
-      create_options.context_or_undefined = nullptr;
       create_options.payload.source_text.source = &module_source;
       create_options.payload.source_text.line_offset = line_offset;
       create_options.payload.source_text.column_offset = column_offset;
