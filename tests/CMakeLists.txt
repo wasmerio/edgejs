@@ -128,4 +128,9 @@ if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/crypto-hash-streaming.js"
   )
   set_tests_properties(edge.crypto_hash_streaming PROPERTIES TIMEOUT 60)
+  add_test(
+    NAME edge.child_exit_signal
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/child-exit-signal.js"
+  )
+  set_tests_properties(edge.child_exit_signal PROPERTIES TIMEOUT 60)
 endif()
