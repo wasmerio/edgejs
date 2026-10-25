@@ -288,10 +288,24 @@ Worker* UnwrapWorker(napi_env env, napi_value this_arg) {
 void RemoveWorkerFromRegistry(Worker* worker);
 void CloseWorkerMessagePort(Worker* worker);
 
-napi_env GetWorkerThreadEnv(Worker* worker) {
-  if (worker == nullptr || worker->thread_data == nullptr) return nullptr;
+// Runs `fn(env)` with the worker thread's env while holding worker->mutex.
+// The worker thread clears thread_data->env under that mutex before it
+// releases the env, so another thread may use the env only this way: a raw
+// env read and used after the lock is dropped can already be freed.
+// Returns false when the worker has no env (not attached yet, or tearing it
+// down). `fn` must not block or take worker->mutex.
+template <typename Fn>
+bool WithWorkerThreadEnv(Worker* worker, Fn&& fn) {
+  if (worker == nullptr || worker->thread_data == nullptr) return false;
   std::lock_guard<std::mutex> lock(worker->mutex);
-  return worker->thread_data->env;
+  napi_env env = worker->thread_data->env;
+  if (env == nullptr) return false;
+  fn(env);
+  return true;
+}
+
+bool HasWorkerThreadEnv(Worker* worker) {
+  return WithWorkerThreadEnv(worker, [](napi_env) {});
 }
 
 bool JoinWorkerThread(Worker* worker) {
@@ -304,14 +318,17 @@ bool JoinWorkerThread(Worker* worker) {
 void RequestWorkerStop(Worker* worker) {
   if (worker == nullptr || !worker->started.load(std::memory_order_acquire)) return;
   worker->stop_requested.store(true, std::memory_order_release);
-  napi_env worker_env = GetWorkerThreadEnv(worker);
-  if (worker_env != nullptr) {
+  (void)WithWorkerThreadEnv(worker, [](napi_env worker_env) {
     EdgeWorkerEnvRequestStop(worker_env);
     (void)unofficial_napi_terminate_execution(worker_env);
-  }
-  if (worker->thread_data != nullptr &&
-      worker->thread_data->stop_async_initialized.load(std::memory_order_acquire)) {
-    uv_async_send(&worker->thread_data->stop_async);
+  });
+  if (worker->thread_data != nullptr) {
+    // The worker thread closes stop_async under the same mutex, before its
+    // loop goes away.
+    std::lock_guard<std::mutex> lock(worker->mutex);
+    if (worker->thread_data->stop_async_initialized.load(std::memory_order_acquire)) {
+      uv_async_send(&worker->thread_data->stop_async);
+    }
   }
 }
 
@@ -663,7 +680,7 @@ bool WorkerCanAcceptTask(Worker* wrap) {
       !wrap->completion_async_initialized.load(std::memory_order_acquire)) {
     return false;
   }
-  return GetWorkerThreadEnv(wrap) != nullptr;
+  return HasWorkerThreadEnv(wrap);
 }
 
 HeapSnapshotHandleWrap* UnwrapHeapSnapshotHandle(napi_env env, napi_value value) {
@@ -996,15 +1013,15 @@ void OnWorkerCompletionAsync(uv_async_t* handle) {
 
 bool QueueWorkerTask(Worker* wrap, std::unique_ptr<WorkerTask> task) {
   if (wrap == nullptr || task == nullptr || !WorkerCanAcceptTask(wrap)) return false;
-  napi_env worker_env = GetWorkerThreadEnv(wrap);
-  if (worker_env == nullptr) return false;
   WorkerTask* raw_task = task.release();
   napi_status status = napi_generic_failure;
-  if (auto* environment = EdgeEnvironmentGet(worker_env); environment != nullptr) {
-    status = environment->RequestInterrupt(OnWorkerTaskInterrupt, raw_task);
-  } else {
-    status = unofficial_napi_request_interrupt(worker_env, OnWorkerTaskInterrupt, raw_task);
-  }
+  (void)WithWorkerThreadEnv(wrap, [&](napi_env worker_env) {
+    if (auto* environment = EdgeEnvironmentGet(worker_env); environment != nullptr) {
+      status = environment->RequestInterrupt(OnWorkerTaskInterrupt, raw_task);
+    } else {
+      status = unofficial_napi_request_interrupt(worker_env, OnWorkerTaskInterrupt, raw_task);
+    }
+  });
   if (status != napi_ok) {
     task.reset(raw_task);
     return false;
@@ -1294,9 +1311,18 @@ void WorkerThreadMain(Worker* wrap, uintptr_t stack_top) {
 
 cleanup_worker_env:
   uv_loop_t* shutdown_loop = nullptr;
-  if (thread_data != nullptr &&
-      thread_data->stop_async_initialized.exchange(false, std::memory_order_acq_rel)) {
-    uv_close(reinterpret_cast<uv_handle_t*>(&thread_data->stop_async), nullptr);
+  if (thread_data != nullptr) {
+    // Other threads reach this env only under wrap->mutex (see
+    // WithWorkerThreadEnv), so after this block none can terminate it or
+    // queue work on it while it is cleaned up and released. A stop request
+    // that already terminated execution set stop_requested first, so the
+    // check below cancels it.
+    std::lock_guard<std::mutex> lock(wrap->mutex);
+    thread_data->env = nullptr;
+    thread_data->owner = nullptr;
+    if (thread_data->stop_async_initialized.exchange(false, std::memory_order_acq_rel)) {
+      uv_close(reinterpret_cast<uv_handle_t*>(&thread_data->stop_async), nullptr);
+    }
   }
 
   if (wrap->stop_requested.load(std::memory_order_acquire)) {
@@ -1643,18 +1669,19 @@ napi_value WorkerImplLoopIdleTime(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, nullptr, &this_arg, nullptr);
   Worker* wrap = UnwrapWorker(env, this_arg);
   if (wrap == nullptr) return Undefined(env);
-  napi_env worker_env = GetWorkerThreadEnv(wrap);
-  if (worker_env == nullptr) {
-    napi_value out = nullptr;
-    napi_create_int32(env, -1, &out);
-    return out != nullptr ? out : Undefined(env);
-  }
-  uv_loop_t* loop = EdgeGetEnvLoop(worker_env);
+  double idle_time_ms = -1;
+  const bool has_env = WithWorkerThreadEnv(wrap, [&](napi_env worker_env) {
+    uv_loop_t* loop = EdgeGetEnvLoop(worker_env);
+    if (loop != nullptr) {
+      idle_time_ms = static_cast<double>(uv_metrics_idle_time(loop)) / 1e6;
+    }
+  });
   napi_value out = nullptr;
-  napi_create_double(
-      env,
-      loop != nullptr ? static_cast<double>(uv_metrics_idle_time(loop)) / 1e6 : -1,
-      &out);
+  if (!has_env) {
+    napi_create_int32(env, -1, &out);
+  } else {
+    napi_create_double(env, idle_time_ms, &out);
+  }
   return out != nullptr ? out : Undefined(env);
 }
 
@@ -1868,13 +1895,12 @@ std::vector<EdgeWorkerReportEntry> EdgeWorkerCollectReports(napi_env env) {
   for (Worker* wrap : wraps) {
     if (wrap == nullptr || !wrap->started.load(std::memory_order_acquire)) continue;
 
-    napi_env worker_env = GetWorkerThreadEnv(wrap);
+    if (!HasWorkerThreadEnv(wrap)) continue;
     std::string thread_name;
     {
       std::lock_guard<std::mutex> lock(wrap->mutex);
       thread_name = wrap->thread_name;
     }
-    if (worker_env == nullptr) continue;
 
     auto* task = new (std::nothrow) WorkerReportTask();
     if (task == nullptr) continue;
@@ -1887,11 +1913,13 @@ std::vector<EdgeWorkerReportEntry> EdgeWorkerCollectReports(napi_env env) {
       state.pending += 1;
     }
     napi_status status = napi_generic_failure;
-    if (auto* environment = EdgeEnvironmentGet(worker_env); environment != nullptr) {
-      status = environment->RequestInterrupt(OnWorkerReportInterrupt, task);
-    } else {
-      status = unofficial_napi_request_interrupt(worker_env, OnWorkerReportInterrupt, task);
-    }
+    (void)WithWorkerThreadEnv(wrap, [&](napi_env worker_env) {
+      if (auto* environment = EdgeEnvironmentGet(worker_env); environment != nullptr) {
+        status = environment->RequestInterrupt(OnWorkerReportInterrupt, task);
+      } else {
+        status = unofficial_napi_request_interrupt(worker_env, OnWorkerReportInterrupt, task);
+      }
+    });
     if (status != napi_ok) {
       CompleteWorkerReportTask(task, {});
     }
