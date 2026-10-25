@@ -128,4 +128,9 @@ if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/crypto-hash-streaming.js"
   )
   set_tests_properties(edge.crypto_hash_streaming PROPERTIES TIMEOUT 60)
+  add_test(
+    NAME edge.http2_worker_teardown_streams
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/http2-worker-teardown-streams.js"
+  )
+  set_tests_properties(edge.http2_worker_teardown_streams PROPERTIES TIMEOUT 60)
 endif()

@@ -1372,9 +1372,37 @@ void CompletePendingPing(napi_env env, PendingPing* pending, bool ack, const uin
   DeletePendingPing(env, pending);
 }
 
+// True while the provider tears the env down. Every finalizer then runs in one
+// pass, in an unspecified order, and refcounts (active_ref, session_ref_held,
+// parent_handle_ref) no longer keep a peer alive.
+bool InEnvTeardown(napi_env env) {
+  auto* environment = EdgeEnvironmentGet(env);
+  return environment == nullptr || environment->cleanup_started();
+}
+
+// Finalizer-safe counterpart of RemoveStreamFromSession: drop only the
+// session <-> stream links. No JS (MaybeInvokeGracefulClose) and no napi calls
+// on the session's refs, since the session is being torn down too. Session and
+// stream each unlink the other before they are freed, so whichever finalizer
+// runs second finds no link and touches nothing.
+void UnlinkStreamFromSessionForFinalize(Http2StreamWrap* stream) {
+  Http2SessionWrap* session = stream != nullptr ? stream->session : nullptr;
+  if (session == nullptr) return;
+  auto it = session->streams.find(stream->id);
+  if (it == session->streams.end() || it->second != stream) {
+    it = std::find_if(session->streams.begin(), session->streams.end(),
+                      [stream](const auto& entry) { return entry.second == stream; });
+  }
+  if (it != session->streams.end()) session->streams.erase(it);
+  stream->session = nullptr;
+  stream->session_ref_held = false;
+}
+
 void Http2SessionFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<Http2SessionWrap*>(data);
   if (wrap == nullptr) return;
+  // Every stream still in the map is alive: a finalized stream unlinks itself
+  // first (Http2StreamFinalize).
   for (auto& entry : wrap->streams) {
     if (entry.second != nullptr) {
       entry.second->session = nullptr;
@@ -1388,13 +1416,16 @@ void Http2SessionFinalize(napi_env env, void* data, void* /*hint*/) {
   // Remove via parent_stream_listener_base, not parent_stream_base: several
   // paths null parent_stream_base (its "native parent usable" meaning) without
   // unregistering the listener, so it can be null here while the listener is
-  // still registered. parent_handle_ref keeps the parent base alive until just
-  // below, so the removal is safe. (A no-op if an earlier path already removed
-  // it.)
-  if (wrap->parent_stream_listener_base != nullptr) {
+  // still registered. Outside teardown, parent_handle_ref keeps the parent base
+  // alive until just below, so the removal is safe. (A no-op if an earlier path
+  // already removed it.) During env teardown the parent may already have been
+  // finalized and freed together with its listener chain, and nothing drives
+  // this listener again, so drop it without walking (as TlsWrapFinalize does).
+  if (wrap->parent_stream_listener_base != nullptr && !InEnvTeardown(env)) {
     (void)EdgeStreamBaseRemoveListener(wrap->parent_stream_listener_base, &wrap->parent_stream_listener);
-    wrap->parent_stream_listener_base = nullptr;
   }
+  wrap->parent_stream_listener_base = nullptr;
+  wrap->parent_stream_listener.previous = nullptr;
   wrap->parent_stream_base = nullptr;
   wrap->parent_stream_listener.env = nullptr;
   wrap->parent_stream_listener.on_alloc = nullptr;
@@ -1414,6 +1445,10 @@ void Http2SessionFinalize(napi_env env, void* data, void* /*hint*/) {
 void Http2StreamFinalize(napi_env env, void* data, void* /*hint*/) {
   auto* wrap = static_cast<Http2StreamWrap*>(data);
   if (wrap == nullptr) return;
+  // Normally active_ref keeps a stream alive while it is in session->streams,
+  // so this is a no-op; in env teardown the stream can be finalized first and
+  // must not leave a dangling pointer in its session's map.
+  UnlinkStreamFromSessionForFinalize(wrap);
   EdgeStreamBaseFinalize(&wrap->base);
   for (auto& chunk : wrap->outbound_chunks) DeleteRefIfPresent(env, &chunk.req_ref);
   DeleteRefIfPresent(env, &wrap->shutdown_req_ref);
