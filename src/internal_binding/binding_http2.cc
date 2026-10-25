@@ -1156,8 +1156,7 @@ bool ParsePackedHeaders(napi_env env,
     if (ptr > end) break;
     // JS only sends NGHTTP2_NV_FLAG_NONE or NGHTTP2_NV_FLAG_NO_INDEX. Keep
     // only that bit: `storage` dies when the caller returns, so nghttp2 must
-    // always copy, and a header containing NUL shifts this parse so that the
-    // "flag" byte is ordinary header data (':' has NO_COPY_NAME's bit set).
+    // always copy the header.
     const uint8_t flags =
         ptr < end ? static_cast<uint8_t>(*ptr++) & NGHTTP2_NV_FLAG_NO_INDEX : 0;
 
@@ -1172,6 +1171,17 @@ bool ParsePackedHeaders(napi_env env,
         header_value.size(),
         flags,
     });
+  }
+
+  // Like Node's NgHeaders: a value containing NUL splits the packed string
+  // into more entries than JS counted, and the entries parsed above are then
+  // misaligned (a header byte read as flags, the rest of a value as a name).
+  // Submit a single invalid header instead, so nghttp2 rejects the frame.
+  if (ptr < end) {
+    static uint8_t kInvalidHeader = '\0';
+    out->assign(1, nghttp2_nv{&kInvalidHeader, &kInvalidHeader, 1, 1, NGHTTP2_NV_FLAG_NONE});
+    storage->clear();
+    return true;
   }
 
   return out->size() == count;
