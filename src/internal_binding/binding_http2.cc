@@ -1154,7 +1154,12 @@ bool ParsePackedHeaders(napi_env env,
     size_t value_len = std::strlen(value_ptr);
     ptr += value_len + 1;
     if (ptr > end) break;
-    const uint8_t flags = ptr < end ? static_cast<uint8_t>(*ptr++) : 0;
+    // JS only sends NGHTTP2_NV_FLAG_NONE or NGHTTP2_NV_FLAG_NO_INDEX. Keep
+    // only that bit: `storage` dies when the caller returns, so nghttp2 must
+    // always copy, and a header containing NUL shifts this parse so that the
+    // "flag" byte is ordinary header data (':' has NO_COPY_NAME's bit set).
+    const uint8_t flags =
+        ptr < end ? static_cast<uint8_t>(*ptr++) & NGHTTP2_NV_FLAG_NO_INDEX : 0;
 
     storage->emplace_back(name_ptr, name_len);
     storage->emplace_back(value_ptr, value_len);
