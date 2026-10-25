@@ -128,4 +128,9 @@ if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/crypto-hash-streaming.js"
   )
   set_tests_properties(edge.crypto_hash_streaming PROPERTIES TIMEOUT 60)
+  add_test(
+    NAME edge.messageport_stopped_port_idle
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/messageport-stopped-port-idle.js"
+  )
+  set_tests_properties(edge.messageport_stopped_port_idle PROPERTIES TIMEOUT 60)
 endif()
