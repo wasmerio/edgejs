@@ -22,6 +22,7 @@
 #include "edge_handle_scope.h"
 #include "edge_handle_wrap.h"
 #include "edge_runtime.h"
+#include "edge_signal_names.h"
 #include "edge_stream_base.h"
 
 namespace {
@@ -187,30 +188,8 @@ void DeleteProcessWrap(void* data) {
 }
 
 const char* SignalNameFromNumber(int sig) {
-  switch (sig) {
-    case 0:
-      return "";
-    case SIGTERM:
-      return "SIGTERM";
-    case SIGKILL:
-      return "SIGKILL";
-    case SIGINT:
-      return "SIGINT";
-    case SIGHUP:
-      return "SIGHUP";
-    case SIGQUIT:
-      return "SIGQUIT";
-    case SIGABRT:
-      return "SIGABRT";
-    case SIGALRM:
-      return "SIGALRM";
-    case SIGUSR1:
-      return "SIGUSR1";
-    case SIGUSR2:
-      return "SIGUSR2";
-    default:
-      return "";
-  }
+  const char* name = EdgeSignalName(sig);
+  return name != nullptr ? name : "";
 }
 
 bool ParseStringArray(napi_env env, napi_value value, std::vector<std::string>* storage, std::vector<char*>* out) {

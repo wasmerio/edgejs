@@ -15,6 +15,7 @@
 #include <uv.h>
 
 #include "edge_buffer_lease.h"
+#include "edge_signal_names.h"
 
 namespace {
 
@@ -525,22 +526,7 @@ bool ParseSpawnOptions(napi_env env, napi_value value, SpawnOptions* out) {
 }
 
 const char* SignalName(int signum) {
-  switch (signum) {
-    case SIGTERM: return "SIGTERM";
-    case SIGKILL: return "SIGKILL";
-    case SIGINT: return "SIGINT";
-    case SIGABRT: return "SIGABRT";
-    case SIGQUIT: return "SIGQUIT";
-    case SIGSEGV: return "SIGSEGV";
-    case SIGILL: return "SIGILL";
-#if defined(SIGTRAP)
-    case SIGTRAP: return "SIGTRAP";
-#endif
-#if defined(SIGBUS)
-    case SIGBUS: return "SIGBUS";
-#endif
-    default: return nullptr;
-  }
+  return EdgeSignalName(signum);
 }
 
 void UvCloseNoop(uv_handle_t* /*handle*/) {}
