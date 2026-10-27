@@ -139,6 +139,11 @@ if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
   )
   set_tests_properties(edge.http2_worker_teardown_streams PROPERTIES TIMEOUT 60)
   add_test(
+    NAME edge.messageport_stopped_port_idle
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/messageport-stopped-port-idle.js"
+  )
+  set_tests_properties(edge.messageport_stopped_port_idle PROPERTIES TIMEOUT 60)
+  add_test(
     NAME edge.child_exit_signal
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/child-exit-signal.js"
   )
