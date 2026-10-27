@@ -431,6 +431,13 @@ void Environment::unset_local_env_var(const std::string& key) {
 void Environment::RequestStop() {
   std::lock_guard<std::mutex> lock(mutex_);
   stop_requested_ = true;
+  // Like Node's Environment::ExitEnv(): once a worker is told to stop
+  // (terminate(), its own process.exit(), the heap limit), it must not call
+  // into JS again. The exception handlers cancel the termination when a stop
+  // is requested, so loops that re-enter JS while can_call_into_js() (the
+  // immediate check phase, for example) would otherwise keep the worker
+  // running.
+  stopping_ = true;
 }
 
 void Environment::Exit(int exit_code) {
