@@ -3508,7 +3508,16 @@ void ProcessQueuedMessages(MessagePortWrap* wrap, bool force, size_t processing_
     return;
   }
 
-  while (processing_limit-- > 0) {
+  // Like Node's MessagePort::OnMessage(): re-arm the async handle only when
+  // the per-turn budget runs out. Every other way out (queue empty, port not
+  // receiving, close message) waits for the next enqueue, start() or drain,
+  // which signal the handle themselves. Re-arming whenever the queue was
+  // non-empty made a stopped port with queued messages spin forever.
+  while (true) {
+    if (processing_limit-- == 0) {
+      if (!force) TriggerPortAsync(wrap);
+      return;
+    }
     QueuedMessage next;
     bool have_message = false;
     {
@@ -3579,17 +3588,6 @@ void ProcessQueuedMessages(MessagePortWrap* wrap, bool force, size_t processing_
                         self,
                         message_error != nullptr ? message_error : Undefined(wrap->handle_wrap.env),
                         "messageerror");
-    }
-  }
-
-  if (!force && wrap->data) {
-    bool has_queued_messages = false;
-    {
-      std::lock_guard<std::mutex> lock(wrap->data->mutex);
-      has_queued_messages = !wrap->data->queued_messages.empty();
-    }
-    if (has_queued_messages) {
-      TriggerPortAsync(wrap->data);
     }
   }
 }
