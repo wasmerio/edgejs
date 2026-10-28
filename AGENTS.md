@@ -211,7 +211,7 @@ plans/quickjs-wasm/development/troubleshooting/node-test/018_tls_securecontext_s
 Most recent Node compatibility troubleshooting note:
 
 ```text
-plans/quickjs-wasm/development/troubleshooting/node-compat/deploy/024_gatsby_baseline_builds.md
+plans/quickjs-wasm/development/troubleshooting/node-compat/napi/022_host_js_import_attributes.md
 ```
 
 Most recent Wasmer deploy troubleshooting note:

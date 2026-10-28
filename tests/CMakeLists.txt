@@ -148,4 +148,9 @@ if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/child-exit-signal.js"
   )
   set_tests_properties(edge.child_exit_signal PROPERTIES TIMEOUT 60)
+  add_test(
+    NAME edge.esm_json_import_attributes
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/esm-json-import-attributes.mjs"
+  )
+  set_tests_properties(edge.esm_json_import_attributes PROPERTIES TIMEOUT 60)
 endif()
