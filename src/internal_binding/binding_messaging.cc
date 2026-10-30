@@ -18,6 +18,7 @@
 
 #include "binding_registry/binding_registry.h"
 #include "edge_environment.h"
+#include "edge_realm.h"
 #include "edge_util.h"
 #include "internal_binding/helpers.h"
 #include "unofficial_napi.h"
@@ -4715,10 +4716,14 @@ napi_value CreateMovedMessagePortWrapperInContext(napi_env env,
     return nullptr;
   }
 
+  // The wrapper runs in the contextified object's realm.
+  napi_env run_env = EdgeRealmEnvForContext(env, contextified_object);
   napi_value out = nullptr;
   const unofficial_napi_js_source run_source = unofficial_napi_js_source_from_text(source);
-  const napi_status status = unofficial_napi_contextify_run_script(env,
-                                                                   contextified_object,
+  const napi_status status = run_env == nullptr
+                                 ? napi_invalid_arg
+                                 : unofficial_napi_contextify_run_script(run_env,
+                                                                   nullptr,
                                                                    &run_source,
                                                                    filename,
                                                                    0,

@@ -16,6 +16,7 @@
 #include "../edge_bytecode_cache.h"
 #include "../edge_module_loader.h"
 #include "../edge_path.h"
+#include "../edge_realm.h"
 #if defined(EDGE_WEBCONTAINER_COMPAT)
 #include "../edge_url.h"
 #endif
@@ -424,6 +425,10 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
   }
 
   auto* instance = new ModuleWrapInstance();
+  // The module lives in the realm of the context argument (a contextified
+  // object), or in this env's realm when there is none. Module handles work
+  // through any env of the engine instance, so later calls use `env`.
+  napi_env module_env = EdgeRealmEnvForContext(env, argc >= 2 ? argv[1] : nullptr);
 
   if (argc >= 1 && argv[0] != nullptr) {
     napi_valuetype url_type = napi_undefined;
@@ -444,11 +449,12 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       create_options.kind = unofficial_napi_module_synthetic;
       create_options.wrapper = this_arg;
       create_options.url = argc >= 1 ? argv[0] : nullptr;
-      create_options.context_or_undefined = argc >= 2 ? argv[1] : nullptr;
+      create_options.context_or_undefined = nullptr;
       create_options.payload.synthetic.export_names = argv[2];
       create_options.payload.synthetic.synthetic_evaluation_steps = argv[3];
       unofficial_napi_module_create_result create_result{};
-      if (unofficial_napi_module_wrap_create(env,
+      if (module_env == nullptr ||
+          unofficial_napi_module_wrap_create(module_env,
                                              &create_options,
                                              &create_result) != napi_ok ||
           !AdoptModuleCreationResult(env, create_result, instance)) {
@@ -487,8 +493,9 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
         bool rejected = true;
         EdgeBufferLease data;
         const bool has_bytes = AcquireArrayBufferView(env, arg5, &data) && data.size() > 0;
+        // Opened through the module's realm env, which compiles it.
         const napi_status open_status = module_bytecode.Open(
-            env,
+            module_env == nullptr ? env : module_env,
             argv[2],
             argc >= 1 ? argv[0] : nullptr,
             unofficial_napi_bytecode_shape_module,
@@ -584,14 +591,16 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       create_options.kind = unofficial_napi_module_source_text;
       create_options.wrapper = this_arg;
       create_options.url = argc >= 1 ? argv[0] : nullptr;
-      create_options.context_or_undefined = argc >= 2 ? argv[1] : nullptr;
+      create_options.context_or_undefined = nullptr;
       create_options.payload.source_text.source = &module_source;
       create_options.payload.source_text.line_offset = line_offset;
       create_options.payload.source_text.column_offset = column_offset;
       create_options.payload.source_text.host_defined_option_id = host_defined_option;
       unofficial_napi_module_create_result create_result{};
-      const napi_status create_status = unofficial_napi_module_wrap_create(
-          env, &create_options, &create_result);
+      const napi_status create_status =
+          module_env == nullptr ? napi_invalid_arg
+                                : unofficial_napi_module_wrap_create(
+                                      module_env, &create_options, &create_result);
       if (create_status != napi_ok ||
           !AdoptModuleCreationResult(env, create_result, instance)) {
         napi_value err = nullptr;

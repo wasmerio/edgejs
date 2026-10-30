@@ -325,10 +325,6 @@ class Environment {
   StreamBaseState* stream_base_state();
   PrincipalRealmShim* principal_realm();
 
-  void AssignToContext(void* token);
-  void UnassignFromContext(void* token);
-  bool HasAttachedContext(void* token) const;
-
   SlotEntry GetSlot(size_t slot_id) const;
   void SetSlot(size_t slot_id, void* data, void (*deleter)(void* data) = nullptr);
   void ClearSlot(size_t slot_id);
@@ -395,7 +391,6 @@ class Environment {
   TimeoutInfo timeout_info_;
   StreamBaseState stream_base_state_;
   PrincipalRealmShim principal_realm_;
-  std::unordered_set<void*> attached_contexts_;
   std::unordered_map<size_t, SlotEntry> slots_;
   uv_async_t threadsafe_immediate_async_{};
   bool threadsafe_immediate_async_initialized_ = false;
