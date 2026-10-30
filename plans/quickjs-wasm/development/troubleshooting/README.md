@@ -34,6 +34,7 @@ duplicating issue details.
 | 🟠 | Medium | [013_v8_shaped_callsite_methods.md](node-compat/napi/013_v8_shaped_callsite_methods.md) | V8-shaped CallSite methods |
 | 🟠 | Medium | [014_lifetime_tracing.md](node-compat/napi/014_lifetime_tracing.md) | QuickJS N-API lifetime tracing |
 | 🟢 | High | [020_imported_napi_browser_pnpm_terminal_loss.md](node-compat/napi/020_imported_napi_browser_pnpm_terminal_loss.md) | Browser pnpm terminal loss |
+| ▶️ | High | [022_host_js_import_attributes.md](node-compat/napi/022_host_js_import_attributes.md) | Host-JS module requests drop import attributes |
 | 🟠 | Medium | [003_minimal_intl_fallback.md](node-compat/edgejs/003_minimal_intl_fallback.md) | Minimal `Intl.DateTimeFormat` fallback |
 | 🟠 | Medium | [004_native_inspector_stub.md](node-compat/edgejs/004_native_inspector_stub.md) | Native unavailable `inspector` stub |
 | 🟠 | High | [010_stream_wrapper_unwrap_fallback.md](node-compat/edgejs/010_stream_wrapper_unwrap_fallback.md) | Stream wrapper unwrap fallback |
@@ -124,3 +125,9 @@ duplicating issue details.
 
 Overlapping coroutine GC, ArrayBuffer ownership, and lazy stack trace integration
 while adopting upstream QuickJS-NG master; validation across all three repos.
+
+### ▶️ [022_host_js_import_attributes.md](node-compat/napi/022_host_js_import_attributes.md): host-JS module requests drop import attributes
+
+`wasmer_napi_compile_module` in the N-API host-JS provider discarded parsed
+`with { type: 'json' }` attributes, so the deployed runtime threw
+`ERR_IMPORT_ATTRIBUTE_MISSING` for JSON imports (wasmerio/edgejs#175).
