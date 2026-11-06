@@ -51,6 +51,8 @@ duplicating issue details.
 
 ### 🟢 [024_gatsby_baseline_builds.md](node-compat/deploy/024_gatsby_baseline_builds.md): Gatsby baseline build failures
 
+### 🟢 [024_async_store_nonblocking_lock.md](node-compat/napi/024_async_store_nonblocking_lock.md): async store nonblocking callback acquisition
+
 ## Node Test
 
 | Status | Severity | Issue | Topic |

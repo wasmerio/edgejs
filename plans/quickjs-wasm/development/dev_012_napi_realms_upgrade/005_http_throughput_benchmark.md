@@ -89,3 +89,80 @@ python3 benchmarks/bench-http-throughput.py \
 Benchmark code/results are a follow-up commit in PR 179. A later N-API
 test-only correction accepts V8's direct exception when a standalone synthetic
 evaluation callback throws; it does not change the benchmarked runtime code.
+
+## LLVM follow-up
+
+User requested the same comparison with LLVM, then asked to update Wasmer to
+latest because current Wasmer uses LLVM 23. Confirmed main at
+`4434ce07535d0322308ed89c4f3407cd46cbbea8` uses `llvm23-1-prefer-static` and
+Rust 1.99. Update the N-API standalone source pin and lockfile, align the Rust
+toolchain and native concurrency CI, and add an optional `cli-llvm` build
+feature selecting `LLVM::default()`. Keep both guest atoms, V8 provider,
+workload and load-generator settings unchanged. Separate compiler caches so a
+cached Cranelift artifact cannot be mistaken for LLVM output. Compile/warm
+both guests before timing, stop builds, then repeat three alternating
+measurements and retain validation and hashes. Record LLVM version,
+optimization defaults, results and caveats here. The previous Wasmer/Cranelift
+results remain historical; updating Wasmer also changes the runtime version.
+
+### LLVM 23 and latest Wasmer results
+
+Built native runners from N-API `201ab932e16fefcd2f55fc61c7276d4df372ff97`,
+with Wasmer main `4434ce07535d0322308ed89c4f3407cd46cbbea8`, Rust 1.99,
+and the refreshed locked dependencies. LLVM is Homebrew 23.1.4, linked
+statically with `LLVM_SYS_231_STRICT_VERSIONING=1`. Wasmer's default LLVM
+configuration uses aggressive/O3 optimization and M0. JavaScript still runs
+on the same V8 custom build 11.9.9. Both original guest atoms and their hashes
+are unchanged. The native build command enables `cli-llvm` for LLVM and
+`cli` for Cranelift; see `napi/docs/cli.md`.
+
+Used the same machine, workload and Autocannon settings as above. Both guests
+were compiled and warmed before measuring; fresh cache root
+`/private/tmp/edgejs-http-llvm-tools/cache` contains separate compiler
+subdirectories (LLVM artifacts about 67 MB, Cranelift about 92 MB). LLVM's
+six alternating trials preceded Cranelift's six alternating trials. No
+builds or other benchmarks ran during those windows.
+
+| Compiler | Guest | Trial 1 req/s | Trial 2 req/s | Trial 3 req/s | Median req/s |
+| --- | --- | ---: | ---: | ---: | ---: |
+| LLVM 23 | Published | 40,784.0 | 42,022.4 | 41,955.2 | **41,955.2** |
+| LLVM 23 | Current | 42,227.2 | 40,950.4 | 39,820.81 | **40,950.4** |
+| Cranelift | Published | 41,049.6 | 40,284.81 | 41,785.6 | **41,049.6** |
+| Cranelift | Current | 42,547.2 | 43,446.4 | 43,052.8 | **43,052.8** |
+
+All twelve measured runs have zero HTTP errors, timeouts, non-2xx responses
+and body mismatches. LLVM's current-versus-published median is 2.39% lower,
+with overlapping run ranges. Cranelift's is 4.88% higher. Current LLVM is
+4.88% below current Cranelift. This quick sequential comparison shows no
+LLVM throughput advantage; three repeats do not support broad performance
+claims. Historical Cranelift measurements used older Wasmer and Rust/
+dependency versions, so their lower rates cannot be attributed to the
+compiler alone.
+
+Raw local samples are `benchmarks/results/http-throughput-{llvm23-latest,
+cranelift-latest}-2026-11-06.json`; the committed portable summary is
+`benchmarks/results/http-throughput-wasmer-latest-2026-11-06-summary.json`.
+Runner SHA-256 values:
+
+- LLVM: `1d0095f2c0b82ae810af111b4ade07c236d6d44c6c62cd09f8bf893770765d05`.
+- Cranelift: `01e8bae6d06aa931efd5d51f624b20b5ad32a80f72d7cc40bf7a05178e4f312a`.
+
+Latest-Wasmer native provider validation passes 90 tests, with one existing
+ignored test: library, concurrency, foreground waker, guest callbacks/cache,
+memory and memory pressure. The complete public realm fixture passes on both
+new CLI variants with `--experimental-vm-modules`.
+
+Updating the JavaScript-host bridge additionally requires public nonblocking
+store acquisition and new memory-view accessors; issue
+[024](../troubleshooting/node-compat/napi/024_async_store_nonblocking_lock.md)
+records that work. The native timings above use immutable Wasmer main before
+the additional API required by the host-JS bridge.
+
+Final N-API pin `4179e538007b12b4b28cd8f1bc521990e09e0a3b` includes the
+adapter and pins Wasmer descendant `a021148`. Final native LLVM build,
+90 native tests (one existing ignored), public realm fixture, 40 wasm library
+tests and 41 Node host-context tests pass. The additional upstream API has
+6/6 native and 2/2 wasm ownership/contention checks, plus a successful Wasmer
+CLI build. Timed samples retain their original immutable source identities.
+The API addition is [Wasmer PR 7143](https://github.com/wasmerio/wasmer/pull/7143);
+its full `make lint` also passes.

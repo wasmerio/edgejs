@@ -192,6 +192,11 @@ current guest and warm both compilation caches before collecting timed samples;
 avoid concurrent builds or benchmarks. This measures guest-version throughput with the provider
 held constant; it excludes startup, compilation, TLS and framework overhead.
 
+For LLVM, build the N-API runner with `--features cli-llvm` and LLVM 23.1
+(`LLVM_SYS_231_PREFIX` points to that installation). See `napi/docs/cli.md`.
+Pass that binary as `--runner` and use a fresh `WASMER_NAPI_CACHE_DIR` when
+changing Wasmer revisions. The CLI separates LLVM and Cranelift cache entries.
+
 ### `timers-settimeout-chain`
 
 Chains 200 sequential `setTimeout(fn, 0)` calls. Each callback fires, increments a counter, and schedules the next timer. Prints a deterministic checksum when the chain completes.

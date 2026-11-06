@@ -211,7 +211,7 @@ plans/quickjs-wasm/development/troubleshooting/node-test/018_tls_securecontext_s
 Most recent Node compatibility troubleshooting note:
 
 ```text
-plans/quickjs-wasm/development/troubleshooting/node-compat/napi/023_imported_cache_buffer_callback_reentry.md
+plans/quickjs-wasm/development/troubleshooting/node-compat/napi/024_async_store_nonblocking_lock.md
 ```
 
 Most recent Wasmer deploy troubleshooting note:

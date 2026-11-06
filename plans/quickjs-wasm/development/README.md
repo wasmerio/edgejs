@@ -46,6 +46,8 @@ also has a troubleshooting page, treat the troubleshooting page as canonical.
 
 - [N-API realms upgrade](dev_012_napi_realms_upgrade/001_runtime_integration.md):
   explicit realm integration, Node vm compatibility coverage and WASIX ABI audit.
+  [HTTP benchmarks](dev_012_napi_realms_upgrade/005_http_throughput_benchmark.md)
+  compare published/current guests with Cranelift and LLVM 23 on current Wasmer.
 
 Development task directories preserve task-scoped context. They are not the
 canonical home for known incompatibilities once a troubleshooting page exists.

@@ -45,7 +45,7 @@ relevant runtime suites, then record exact results and limitations here.
   (issue 015).
 
 The Edge gitlink includes two published dependency fixes, atop N-API main
-`18209d2`, in `07771a409d15cc72b98203fba074bd8b5a4a412a` on branch
+`18209d2`, in `4179e538007b12b4b28cd8f1bc521990e09e0a3b` on branch
 `codex/edgejs-realms-integration`: QuickJS module sandbox synchronization with
 explicit synthetic/import-meta host callback boundaries, and guarded
 imported-cache Buffer callbacks (issue 023). Their provider-owned C++/Rust
@@ -59,6 +59,14 @@ V8 reports a standalone synthetic evaluation callback's exception directly,
 whereas source-root evaluation yields a rejected promise. Reproduced the
 exact CI failure with the pinned V8 11.9.9 build and inspected it in LLDB
 before adapting that test expectation. Runtime behavior is unchanged.
+
+The HTTP benchmark follow-up upgrades the standalone Wasmer dependency to
+current main `4434ce0` plus the nonblocking async-store API fix `a021148`.
+Rust and concurrency CI use 1.99; optional `cli-llvm` selects LLVM 23 with
+compiler-specific caches. Host-JS adapters use public store handles, explicit
+parking and current memory-buffer accessors. Issue 024 records the additional
+callback ownership regression and upstream fix; subtask 005 records exact
+benchmark versions, settings and results.
 
 ## Verification
 

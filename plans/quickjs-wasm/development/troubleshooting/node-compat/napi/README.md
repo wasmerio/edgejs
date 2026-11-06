@@ -25,3 +25,5 @@ severity, and links.
 | 🟠 | Medium | [013_v8_shaped_callsite_methods.md](013_v8_shaped_callsite_methods.md) | V8-shaped CallSite methods |
 | 🟠 | Medium | [014_lifetime_tracing.md](014_lifetime_tracing.md) | QuickJS N-API lifetime tracing |
 | 🟢 | High | [020_imported_napi_browser_pnpm_terminal_loss.md](020_imported_napi_browser_pnpm_terminal_loss.md) | Browser pnpm terminal loss |
+
+### 🟢 [024_async_store_nonblocking_lock.md](024_async_store_nonblocking_lock.md): async store nonblocking callback acquisition
