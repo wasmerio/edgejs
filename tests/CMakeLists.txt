@@ -124,6 +124,11 @@ add_test(
 
 if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
   add_test(
+    NAME edge.napi_realms
+    COMMAND $<TARGET_FILE:edge> --experimental-vm-modules "${EDGE_ROOT}/tests/js/napi-realms.js"
+  )
+  set_tests_properties(edge.napi_realms PROPERTIES TIMEOUT 60)
+  add_test(
     NAME edge.crypto_hash_streaming
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/crypto-hash-streaming.js"
   )

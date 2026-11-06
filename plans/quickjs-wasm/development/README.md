@@ -44,6 +44,9 @@ also has a troubleshooting page, treat the troubleshooting page as canonical.
 
 ## Development Task Notes
 
+- [N-API realms upgrade](dev_012_napi_realms_upgrade/001_runtime_integration.md):
+  explicit realm integration, Node vm compatibility coverage and WASIX ABI audit.
+
 Development task directories preserve task-scoped context. They are not the
 canonical home for known incompatibilities once a troubleshooting page exists.
 

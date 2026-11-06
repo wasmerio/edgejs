@@ -1,12 +1,15 @@
 #include <cstdlib>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "test_env.h"
 #include "edge_path.h"
+#include "edge_env_loop.h"
 #include "edge_runtime.h"
 #include "edge_runtime_platform.h"
 #include "edge_task_queue.h"
@@ -584,6 +587,105 @@ TEST_F(Test0RuntimePhase01, NativeImmediateQueueRunsBeforeJsImmediatesAndDrainsN
   EXPECT_EQ(order[1], 2);
   EXPECT_FALSE(EdgeRuntimePlatformHasImmediateTasks(s.env));
   EXPECT_FALSE(EdgeRuntimePlatformHasRefedImmediateTasks(s.env));
+}
+
+TEST_F(Test0RuntimePhase01, ForegroundHookDefersCrossThreadWorkAndCleansItOnce) {
+  struct Task {
+    std::vector<int> order;
+    std::thread::id owning_thread = std::this_thread::get_id();
+    napi_env env = nullptr;
+  } task;
+  EnvScope s(runtime_.get());
+  task.env = s.env;
+  unofficial_napi_env_hooks hooks{};
+  ASSERT_EQ(EdgeRuntimePlatformPrepareEnvHooks(s.env, &hooks), napi_ok);
+  napi_status submitted = napi_generic_failure;
+  std::thread producer([&]() {
+    submitted = hooks.enqueue_foreground_task_callback(
+        hooks.data,
+        [](napi_env env, void* data) {
+          auto* task = static_cast<Task*>(data);
+          EXPECT_EQ(env, task->env);
+          EXPECT_EQ(std::this_thread::get_id(), task->owning_thread);
+          task->order.push_back(1);
+        },
+        &task,
+        [](napi_env env, void* data) {
+          auto* task = static_cast<Task*>(data);
+          EXPECT_EQ(env, task->env);
+          task->order.push_back(2);
+        },
+        0);
+  });
+  producer.join();
+  ASSERT_EQ(submitted, napi_ok);
+  EXPECT_TRUE(task.order.empty());
+  ASSERT_EQ(EdgeRuntimePlatformDrainTasks(s.env), napi_ok);
+  EXPECT_EQ(task.order, (std::vector<int>{1, 2}));
+  ASSERT_EQ(EdgeRuntimePlatformDrainTasks(s.env), napi_ok);
+  EXPECT_EQ(task.order, (std::vector<int>{1, 2}));
+}
+
+TEST_F(Test0RuntimePhase01, DelayedForegroundHookCleansBeforeTheNextTimerRuns) {
+  std::vector<int> order;
+  EnvScope s(runtime_.get());
+  unofficial_napi_env_hooks hooks{};
+  ASSERT_EQ(EdgeRuntimePlatformPrepareEnvHooks(s.env, &hooks), napi_ok);
+  ASSERT_EQ(EdgeRuntimePlatformAddRef(s.env), napi_ok);
+  ASSERT_EQ(hooks.enqueue_foreground_task_callback(
+                hooks.data,
+                [](napi_env, void* data) { static_cast<std::vector<int>*>(data)->push_back(1); },
+                &order,
+                [](napi_env, void* data) { static_cast<std::vector<int>*>(data)->push_back(2); },
+                1),
+            napi_ok);
+  ASSERT_EQ(hooks.enqueue_foreground_task_callback(
+                hooks.data,
+                [](napi_env, void* data) {
+                  auto* order = static_cast<std::vector<int>*>(data);
+                  EXPECT_EQ(*order, (std::vector<int>{1, 2}));
+                  order->push_back(3);
+                },
+                &order,
+                [](napi_env, void* data) { static_cast<std::vector<int>*>(data)->push_back(4); },
+                1),
+            napi_ok);
+  EXPECT_TRUE(order.empty());
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  (void)uv_run(EdgeGetEnvLoop(s.env), UV_RUN_NOWAIT);
+  EXPECT_EQ(order, (std::vector<int>{1, 2, 3, 4}));
+  ASSERT_EQ(EdgeRuntimePlatformReleaseRef(s.env), napi_ok);
+}
+
+TEST_F(Test0RuntimePhase01, ForegroundHookCleansDroppedAndRefusedTasksWithTheirEnv) {
+  struct Task {
+    napi_env env = nullptr;
+    size_t cleaned = 0;
+  } task;
+  EnvScope s(runtime_.get());
+  task.env = s.env;
+  unofficial_napi_env_hooks hooks{};
+  ASSERT_EQ(EdgeRuntimePlatformPrepareEnvHooks(s.env, &hooks), napi_ok);
+  const auto callback = [](napi_env, void*) { ADD_FAILURE() << "dropped task ran"; };
+  const auto cleanup = [](napi_env env, void* data) {
+    auto* task = static_cast<Task*>(data);
+    EXPECT_EQ(env, task->env);
+    ++task->cleaned;
+  };
+  ASSERT_EQ(hooks.enqueue_foreground_task_callback(hooks.data, callback, &task, cleanup, 0),
+            napi_ok);
+  ASSERT_EQ(hooks.enqueue_foreground_task_callback(hooks.data, callback, &task, cleanup, 60000),
+            napi_ok);
+  EdgeRunRuntimePlatformEnvCleanup(s.env);
+  EXPECT_EQ(task.cleaned, 2u);
+  EXPECT_EQ(hooks.enqueue_foreground_task_callback(hooks.data, callback, &task, cleanup, 0),
+            napi_generic_failure);
+  EXPECT_EQ(task.cleaned, 3u);
+  EXPECT_EQ(hooks.enqueue_foreground_task_callback(hooks.data, nullptr, &task, cleanup, 0),
+            napi_invalid_arg);
+  EXPECT_EQ(task.cleaned, 4u);
+  (void)uv_run(EdgeGetEnvLoop(s.env), UV_RUN_NOWAIT);
+  EXPECT_EQ(task.cleaned, 4u);
 }
 
 TEST_F(Test0RuntimePhase01, ZlibWriteResultStateCanBeDestroyedAndRecreatedAcrossEnvs) {

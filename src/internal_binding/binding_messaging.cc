@@ -18,6 +18,7 @@
 
 #include "binding_registry/binding_registry.h"
 #include "edge_environment.h"
+#include "edge_realm.h"
 #include "edge_util.h"
 #include "internal_binding/helpers.h"
 #include "unofficial_napi.h"
@@ -4717,18 +4718,22 @@ napi_value CreateMovedMessagePortWrapperInContext(napi_env env,
 
   napi_value out = nullptr;
   const unofficial_napi_js_source run_source = unofficial_napi_js_source_from_text(source);
-  const napi_status status = unofficial_napi_contextify_run_script(env,
-                                                                   contextified_object,
-                                                                   &run_source,
-                                                                   filename,
-                                                                   0,
-                                                                   0,
-                                                                   -1,
-                                                                   true,
-                                                                   false,
-                                                                   false,
-                                                                   undefined,
-                                                                   &out);
+  unofficial_napi_realm realm = nullptr;
+  napi_status status = EdgeGetRealmForContext(env, contextified_object, &realm);
+  if (status == napi_ok) {
+    status = unofficial_napi_run_script(env,
+                                        realm,
+                                        &run_source,
+                                        filename,
+                                        0,
+                                        0,
+                                        -1,
+                                        true,
+                                        false,
+                                        false,
+                                        undefined,
+                                        &out);
+  }
 
   DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativePort);
   DeleteNamedPropertyIfPresent(env, contextified_object, kTempNativeMove);

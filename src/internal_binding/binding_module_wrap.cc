@@ -10,6 +10,7 @@
 
 #include "edge_buffer_lease.h"
 #include "edge_bytecode.h"
+#include "edge_realm.h"
 #include "edge_environment.h"
 #include "internal_binding/helpers.h"
 #include "unofficial_napi.h"
@@ -44,6 +45,7 @@ struct ModuleWrapInstance {
   napi_ref module_requests_ref = nullptr;
   unofficial_napi_module module_handle = nullptr;
   bool has_top_level_await = false;
+  bool synthetic = false;
 };
 
 struct ModuleWrapBindingState {
@@ -423,6 +425,10 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
+  unofficial_napi_realm realm = nullptr;
+  if (EdgeGetRealmForContext(env, argc >= 2 ? argv[1] : nullptr, &realm) != napi_ok) {
+    return nullptr;
+  }
   auto* instance = new ModuleWrapInstance();
 
   if (argc >= 1 && argv[0] != nullptr) {
@@ -436,6 +442,7 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
   const bool has_exports_array = argc >= 3 && argv[2] != nullptr;
   bool is_array = false;
   if (has_exports_array && napi_is_array(env, argv[2], &is_array) == napi_ok && is_array) {
+    instance->synthetic = true;
     SetNamedBool(env, this_arg, "synthetic", true);
     if (argc >= 4 && argv[3] != nullptr) {
       unofficial_napi_module_create_options create_options{};
@@ -444,7 +451,7 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       create_options.kind = unofficial_napi_module_synthetic;
       create_options.wrapper = this_arg;
       create_options.url = argc >= 1 ? argv[0] : nullptr;
-      create_options.context_or_undefined = argc >= 2 ? argv[1] : nullptr;
+      create_options.realm_or_null = realm;
       create_options.payload.synthetic.export_names = argv[2];
       create_options.payload.synthetic.synthetic_evaluation_steps = argv[3];
       unofficial_napi_module_create_result create_result{};
@@ -501,7 +508,8 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
             true,
             &rejected,
             nullptr,
-            false);
+            false,
+            realm);
         // SourceTextModule rejects invalid cachedData without paying for a
         // fallback artifact that the constructor is required to discard.
         rejected = open_status != napi_ok || rejected;
@@ -584,7 +592,7 @@ napi_value ModuleWrapCtor(napi_env env, napi_callback_info info) {
       create_options.kind = unofficial_napi_module_source_text;
       create_options.wrapper = this_arg;
       create_options.url = argc >= 1 ? argv[0] : nullptr;
-      create_options.context_or_undefined = argc >= 2 ? argv[1] : nullptr;
+      create_options.realm_or_null = realm;
       create_options.payload.source_text.source = &module_source;
       create_options.payload.source_text.line_offset = line_offset;
       create_options.payload.source_text.column_offset = column_offset;
@@ -630,6 +638,17 @@ napi_value ModuleWrapLink(napi_env env, napi_callback_info info) {
   }
   uint32_t length = 0;
   napi_get_array_length(env, argv[0], &length);
+  // BuiltinModule eagerly evaluates its dependency-free synthetic facade.
+  // Node's loader still calls link([]) when it later imports that builtin.
+  // There is no resolution work left for the provider in that case.
+  if (length == 0 && instance->synthetic) {
+    int32_t status = kUninstantiated;
+    if (unofficial_napi_module_wrap_get_state(
+            env, instance->module_handle, &status, nullptr, nullptr) != napi_ok) {
+      return nullptr;
+    }
+    if (status >= kInstantiated) return Undefined(env);
+  }
   std::vector<unofficial_napi_module> linked_handles(length, nullptr);
   for (uint32_t i = 0; i < length; ++i) {
     napi_value module_value = nullptr;

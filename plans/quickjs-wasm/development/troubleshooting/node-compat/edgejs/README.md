@@ -14,3 +14,6 @@ in EdgeJS itself rather than hidden behind removed N-API compatibility files.
 - [Native inspector stub](004_native_inspector_stub.md)
 - [Stream wrapper unwrap fallback](010_stream_wrapper_unwrap_fallback.md)
 - [Native buffer lease regressions](013_native_buffer_lease_regressions.md)
+- [Evaluated synthetic module linking](014_napi_realms_module_linking.md)
+- [V8 raw-test fork safety](015_v8_raw_test_fork_safety.md)
+- [QuickJS Wasmer host signals](016_quickjs_wasmer_host_signals.md)

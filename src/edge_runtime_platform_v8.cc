@@ -41,6 +41,8 @@ struct ScheduledForegroundTask {
   PlatformTaskState* state = nullptr;
   PlatformTask task;
   uv_timer_t timer{};
+  Clock::time_point due;
+  bool running = false;
 };
 
 struct DelayedPlatformTaskCompare {
@@ -72,7 +74,9 @@ struct PlatformTaskState {
     }
   }
 
-  napi_env env = nullptr;
+  // The provider may submit (and have us refuse) work during its release,
+  // after Edge's cleanup. Keep the env available for those cleanup callbacks.
+  const napi_env env;
   std::thread::id owning_thread;
   std::mutex foreground_mutex;
   size_t foreground_async_refs = 0;
@@ -138,9 +142,10 @@ void AssertOwningThread(const PlatformTaskState* state, const char* where) {
 
 void CleanupTask(napi_env env, PlatformTask* task) {
   if (task == nullptr) return;
-  if (task->cleanup != nullptr) {
-    task->cleanup(env, task->data);
-  }
+  const auto cleanup = task->cleanup;
+  void* data = task->data;
+  *task = {};
+  if (cleanup != nullptr) cleanup(env, data);
 }
 
 bool HasPendingException(napi_env env) {
@@ -181,12 +186,14 @@ void OnScheduledForegroundTaskClosed(uv_handle_t* handle) {
 void CloseScheduledForegroundTask(ScheduledForegroundTask* scheduled) {
   if (scheduled == nullptr) return;
   PlatformTaskState* state = scheduled->state;
+  if (!scheduled->running) {
+    CleanupTask(state != nullptr ? state->env : nullptr, &scheduled->task);
+  }
   uv_handle_t* handle = reinterpret_cast<uv_handle_t*>(&scheduled->timer);
   if (uv_is_closing(handle) != 0) {
     return;
   }
   if (state == nullptr) {
-    CleanupTask(state != nullptr ? state->env : nullptr, &scheduled->task);
     delete scheduled;
     return;
   }
@@ -201,12 +208,26 @@ void RunScheduledForegroundTask(uv_timer_t* handle) {
   if (state != nullptr &&
       !state->cleanup_started.load(std::memory_order_acquire) &&
       scheduled->task.callback != nullptr) {
+    // libuv's clock has millisecond precision. Check the monotonic deadline
+    // before invoking the task so a rounded timer never runs it early.
+    const auto remaining = scheduled->due - Clock::now();
+    if (remaining > Clock::duration::zero()) {
+      const auto delay = std::chrono::ceil<std::chrono::milliseconds>(remaining).count();
+      uv_update_time(handle->loop);
+      if (uv_timer_start(handle, RunScheduledForegroundTask, delay, 0) != 0) {
+        CloseScheduledForegroundTask(scheduled);
+      }
+      return;
+    }
     edge::HandleScope scope(state->env);
     if (!scope.is_open()) {
       CloseScheduledForegroundTask(scheduled);
       return;
     }
+    scheduled->running = true;
     scheduled->task.callback(state->env, scheduled->task.data);
+    scheduled->running = false;
+    CleanupTask(state->env, &scheduled->task);
     if (HasPendingException(state->env)) {
       bool handled = false;
       (void)EdgeHandlePendingExceptionNow(state->env, &handled);
@@ -221,8 +242,8 @@ void RunScheduledForegroundTask(uv_timer_t* handle) {
 bool ScheduleForegroundTaskTimer(PlatformTaskState* state,
                                  PlatformTask task,
                                  Clock::time_point due) {
-  if (state == nullptr) {
-    CleanupTask(nullptr, &task);
+  if (state == nullptr || state->cleanup_started.load(std::memory_order_acquire)) {
+    CleanupTask(state != nullptr ? state->env : nullptr, &task);
     return false;
   }
 
@@ -235,6 +256,7 @@ bool ScheduleForegroundTaskTimer(PlatformTaskState* state,
   auto* scheduled = new ScheduledForegroundTask();
   scheduled->state = state;
   scheduled->task = std::move(task);
+  scheduled->due = due;
   scheduled->timer.data = scheduled;
 
   if (uv_timer_init(loop, &scheduled->timer) != 0) {
@@ -247,7 +269,8 @@ bool ScheduleForegroundTaskTimer(PlatformTaskState* state,
   if (remaining < Clock::duration::zero()) {
     remaining = Clock::duration::zero();
   }
-  const auto delay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+  const auto delay_ms = std::chrono::ceil<std::chrono::milliseconds>(remaining).count();
+  uv_update_time(loop);
   if (uv_timer_start(&scheduled->timer,
                      RunScheduledForegroundTask,
                      static_cast<uint64_t>(delay_ms),
@@ -333,16 +356,30 @@ size_t DrainForegroundTasksFromState(PlatformTaskState* state,
     }
   }
 
+  const auto preserve_batch = [&]() {
+    if (state->cleanup_started.load(std::memory_order_acquire)) {
+      for (auto& task : batch) CleanupTask(state->env, &task);
+      batch.clear();
+      return;
+    }
+    std::lock_guard<std::mutex> lock(state->foreground_mutex);
+    while (!batch.empty()) {
+      state->foreground_tasks.push_front(std::move(batch.back()));
+      batch.pop_back();
+    }
+  };
+
   while (!batch.empty()) {
     PlatformTask task = std::move(batch.front());
     batch.pop_front();
-    if (task.callback == nullptr) {
+    if (task.callback == nullptr || state->cleanup_started.load(std::memory_order_acquire)) {
       CleanupTask(state->env, &task);
       continue;
     }
     edge::HandleScope scope(state->env);
     if (!scope.is_open()) {
       CleanupTask(state->env, &task);
+      preserve_batch();
       state->draining_foreground = false;
       if (status_out != nullptr) *status_out = scope.status();
       if (ran_out != nullptr) *ran_out = ran;
@@ -356,6 +393,7 @@ size_t DrainForegroundTasksFromState(PlatformTaskState* state,
       bool handled = false;
       (void)EdgeHandlePendingExceptionNow(state->env, &handled);
       if (HasPendingException(state->env)) {
+        preserve_batch();
         state->draining_foreground = false;
         if (status_out != nullptr) *status_out = napi_pending_exception;
         if (ran_out != nullptr) *ran_out = ran;
@@ -426,35 +464,33 @@ void OnPlatformEnvCleanup(void* arg) {
   if (state == nullptr) return;
   AssertOwningThread(state, "OnPlatformEnvCleanup");
 
-  state->cleanup_started.store(true, std::memory_order_release);
+  if (state->cleanup_started.exchange(true, std::memory_order_acq_rel)) return;
   state->foreground_async_refs = 0;
   while (!state->immediate_tasks.empty()) {
     PlatformTask task = std::move(state->immediate_tasks.front());
     state->immediate_tasks.pop_front();
     CleanupTask(env, &task);
   }
+  std::deque<PlatformTask> discarded_tasks;
+  std::vector<DelayedPlatformTask> discarded_delayed_tasks;
   {
     std::lock_guard<std::mutex> lock(state->foreground_mutex);
     state->foreground_async_pending = false;
-    while (!state->foreground_tasks.empty()) {
-      PlatformTask task = std::move(state->foreground_tasks.front());
-      state->foreground_tasks.pop_front();
-      CleanupTask(env, &task);
-    }
+    discarded_tasks.swap(state->foreground_tasks);
     while (!state->delayed_foreground_tasks.empty()) {
-      DelayedPlatformTask delayed =
-          std::move(const_cast<DelayedPlatformTask&>(state->delayed_foreground_tasks.top()));
+      discarded_delayed_tasks.push_back(
+          std::move(const_cast<DelayedPlatformTask&>(state->delayed_foreground_tasks.top())));
       state->delayed_foreground_tasks.pop();
-      CleanupTask(env, &delayed.task);
     }
   }
+  for (auto& task : discarded_tasks) CleanupTask(env, &task);
+  for (auto& delayed : discarded_delayed_tasks) CleanupTask(env, &delayed.task);
   std::vector<ScheduledForegroundTask*> scheduled_tasks = std::move(state->scheduled_foreground_tasks);
   state->scheduled_foreground_tasks.clear();
   for (ScheduledForegroundTask* scheduled : scheduled_tasks) {
     CloseScheduledForegroundTask(scheduled);
   }
   state->refed_immediate_count = 0;
-  state->env = nullptr;
 
   CloseHandleIfInitialized(state,
                            reinterpret_cast<uv_handle_t*>(&state->foreground_async),
@@ -474,7 +510,10 @@ napi_status EnqueueForegroundTaskFromEngine(void* target,
                                            unofficial_napi_foreground_task_cleanup cleanup,
                                            uint64_t delay_millis) {
   auto* state = static_cast<PlatformTaskState*>(target);
-  if (state == nullptr || callback == nullptr) return napi_invalid_arg;
+  if (state == nullptr || callback == nullptr) {
+    if (cleanup != nullptr) cleanup(state != nullptr ? state->env : nullptr, data);
+    return napi_invalid_arg;
+  }
   if (state->cleanup_started.load(std::memory_order_acquire)) {
     if (cleanup != nullptr) cleanup(state->env, data);
     return napi_generic_failure;
@@ -499,38 +538,34 @@ napi_status EnqueueForegroundTaskFromEngine(void* target,
            napi_generic_failure;
   }
 
-  bool should_signal = false;
   int signal_rc = 0;
   {
     std::lock_guard<std::mutex> lock(state->foreground_mutex);
     if (state->cleanup_started.load(std::memory_order_acquire) ||
         !state->foreground_async_initialized) {
-      CleanupTask(state->env, &task);
-      return napi_generic_failure;
-    }
-
-    if (delay_millis == 0) {
-      state->foreground_tasks.push_back(std::move(task));
+      signal_rc = UV_ECANCELED;
     } else {
-      DelayedPlatformTask delayed;
-      delayed.task = std::move(task);
-      delayed.seq = state->next_foreground_seq++;
-      delayed.due = Clock::now() + std::chrono::milliseconds(delay_millis);
-      state->delayed_foreground_tasks.push(std::move(delayed));
-    }
-
-    state->foreground_async_pending = true;
-    should_signal = true;
-
-    if (should_signal) {
+      // Wake the loop before handing the task to its queues. The loop takes
+      // this mutex before draining, so it cannot miss the insertion. A failed
+      // wakeup refuses the task without leaving a callback runnable later.
       signal_rc = uv_async_send(&state->foreground_async);
-      if (signal_rc != 0) {
-        state->foreground_async_pending = false;
+      if (signal_rc == 0) {
+        if (delay_millis == 0) {
+          state->foreground_tasks.push_back(std::move(task));
+        } else {
+          DelayedPlatformTask delayed;
+          delayed.task = std::move(task);
+          delayed.seq = state->next_foreground_seq++;
+          delayed.due = Clock::now() + std::chrono::milliseconds(delay_millis);
+          state->delayed_foreground_tasks.push(std::move(delayed));
+        }
+        state->foreground_async_pending = true;
       }
     }
   }
 
-  if (should_signal && signal_rc != 0) {
+  if (signal_rc != 0) {
+    CleanupTask(state->env, &task);
     return napi_generic_failure;
   }
   return napi_ok;
