@@ -86,14 +86,15 @@ Assignments and integrity-level updates bypass initialization as required.
 C-function-data records expose their creation realm to the existing internal
 realm lookup; general native invocation behavior is unchanged.
 
-N-API [PR 137](https://github.com/wasmerio/napi/pull/137) is updated in place
-at `4d8aba2`, based on current main `49ae989`, and pins merged QuickJS
-`fcf1604`. Its native wrappers, argument
+N-API [PR 137](https://github.com/wasmerio/napi/pull/137) was merged as
+`d3daed7` on November 6, 2026, and pins merged QuickJS `fcf1604`.
+Its tree is identical to the tested feature head `4d8aba2`, based on
+main `49ae989`. Its native wrappers, argument
 validation, filtered enumeration and readonly lazy writes remain. Serializer,
 clone/message and SAB work is removed, including the additional V8 exception
 changes. The small V8 changes required by current-main realm/termination
-integration remain. N-API PR 137 must land before folding its pin into Edge
-main; the QuickJS dependency has landed.
+integration remain. Both dependency PRs have landed; Edge PR 179 now pins
+the merged N-API commit.
 
 ## Reduced implementation verification
 
@@ -157,3 +158,17 @@ GitHub immediately refreshed the base to `49ae989` and now reports exactly
 `4d8aba2`; no source, branch history, dependency pin or test changed. The
 429-addition count refers to the separate QuickJS engine PR, not the N-API
 API/bridge/provider/conformance-test PR.
+
+## Merged N-API pin
+
+After the user merged N-API PR 137, fetched main and verified that
+`git diff --exit-code 4d8aba2 d3daed7` is empty. Edge PR 179 advances the
+N-API gitlink to merge commit `d3daed7b0674849e1b854203cb3f92124da158ff`;
+the nested QuickJS pin remains merged `fcf1604`.
+
+Reran the focused engine lazy-property regression, all 21 shared QuickJS
+lazy-property tests, and the native Edge public realm fixture (including VM
+modules): all pass. The existing binaries match the unchanged source tree;
+the broader verification above still applies. Updated the Edge PR description
+to identify both merged dependencies. Its comparison base already matches
+remote main `e14880e`, so no comparison-base correction is needed.
