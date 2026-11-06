@@ -141,3 +141,5 @@ while adopting upstream QuickJS-NG master; validation across all three repos.
 ### 🟠 [016_quickjs_wasmer_host_signals.md](node-compat/edgejs/016_quickjs_wasmer_host_signals.md): native QuickJS Wasmer host signal interception
 
 ### 🟢 [023_imported_cache_buffer_callback_reentry.md](node-compat/napi/023_imported_cache_buffer_callback_reentry.md): cache serialization guest callback reentry
+
+### 🟢 [025_lazy_property_realm_lifetime.md](node-compat/napi/025_lazy_property_realm_lifetime.md): lazy property realm lifetime and native integration

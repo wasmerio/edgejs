@@ -44,6 +44,9 @@ also has a troubleshooting page, treat the troubleshooting page as canonical.
 
 ## Development Task Notes
 
+- [QuickJS lazy data properties](dev_013_quickjs_lazy_properties/001_implementation.md):
+  engine-backed implementation and shared N-API PR 137 compatibility coverage.
+
 - [N-API realms upgrade](dev_012_napi_realms_upgrade/001_runtime_integration.md):
   explicit realm integration, Node vm compatibility coverage and WASIX ABI audit.
   [HTTP benchmarks](dev_012_napi_realms_upgrade/005_http_throughput_benchmark.md)
