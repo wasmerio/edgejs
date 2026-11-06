@@ -167,6 +167,31 @@ What it does not measure:
 - websocket behavior
 - framework or router overhead
 
+### `http-server-throughput`
+
+Serves a fixed 12-byte response over HTTP/1.1 without request logging. The
+separate `bench-http-throughput.py` harness compares two WASIX guests on the
+same N-API host, using Autocannon with 32 keep-alive connections, no pipelining,
+a 3-second warmup and three alternating 10-second measurements per guest.
+It validates status/body and rejects runs with HTTP errors or timeouts. The
+output includes raw measurements, medians and artifact SHA-256 hashes.
+
+```sh
+python3 benchmarks/bench-http-throughput.py \
+  --runner build-wasix-napi/target/release/napi_wasmer \
+  --published-wasm /tmp/edgejs-published/modules/edge \
+  --current-wasm build-wasix/edgejs.wasm \
+  --builtin-dir lib \
+  --autocannon /tmp/edgejs-http-benchmark-tools/node_modules/.bin/autocannon \
+  --output benchmarks/results/http-throughput.json
+```
+
+Download/unpack the exact baseline version with `wasmer package download`
+first; install Autocannon 9.0.0 in the indicated isolated prefix. Build the
+current guest and warm both compilation caches before collecting timed samples;
+avoid concurrent builds or benchmarks. This measures guest-version throughput with the provider
+held constant; it excludes startup, compilation, TLS and framework overhead.
+
 ### `timers-settimeout-chain`
 
 Chains 200 sequential `setTimeout(fn, 0)` calls. Each callback fires, increments a counter, and schedules the next timer. Prints a deterministic checksum when the chain completes.

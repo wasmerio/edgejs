@@ -45,7 +45,7 @@ relevant runtime suites, then record exact results and limitations here.
   (issue 015).
 
 The Edge gitlink includes two published dependency fixes, atop N-API main
-`18209d2`, in `469bf1011a4b091a7a0f60c12c1a5c5344551574` on branch
+`18209d2`, in `07771a409d15cc72b98203fba074bd8b5a4a412a` on branch
 `codex/edgejs-realms-integration`: QuickJS module sandbox synchronization with
 explicit synthetic/import-meta host callback boundaries, and guarded
 imported-cache Buffer callbacks (issue 023). Their provider-owned C++/Rust
@@ -53,6 +53,12 @@ regressions also live inside N-API. The companion N-API PR must land before
 the dependency is folded back into main.
 
 Companion: [wasmerio/napi#140](https://github.com/wasmerio/napi/pull/140).
+
+The final dependency commit also corrects a provider-owned regression test:
+V8 reports a standalone synthetic evaluation callback's exception directly,
+whereas source-root evaluation yields a rejected promise. Reproduced the
+exact CI failure with the pinned V8 11.9.9 build and inspected it in LLDB
+before adapting that test expectation. Runtime behavior is unchanged.
 
 ## Verification
 
@@ -64,7 +70,7 @@ Companion: [wasmerio/napi#140](https://github.com/wasmerio/napi/pull/140).
 | QuickJS `make test-quickjs-only TEST_JOBS=4` | 1,741 passed, zero failures; existing configured worker/TLS skips retained |
 | Public realm fixture | Pass on Node 26.0.0, native V8, native QuickJS, embedded QuickJS WASIX and imported-N-API V8 WASIX |
 | Bytecode-cache end-to-end suites | Both native providers pass |
-| N-API-owned QuickJS module-state runner | 31/31 pass |
+| N-API-owned module-state runner | V8 30/30 and QuickJS 31/31 pass |
 | N-API-owned imported cache callback regressions | 3/3 pass |
 | Foreground task contract | Three new regressions and existing nested-immediate case pass |
 | Final V8 Edge-owned CTest | 1,431 passed, 18 existing skips, one intermittent IPC failure out of 1,450 |
