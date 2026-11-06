@@ -72,7 +72,8 @@ trimmed implementation and record its exact results below before publishing.
 
 ## Reduced implementation and review
 
-QuickJS [PR 12](https://github.com/wasmerio/quickjs/pull/12) now contains
+QuickJS [PR 12](https://github.com/wasmerio/quickjs/pull/12) was merged as
+`fcf1604` on November 6, 2026. Its tree is identical to the tested head
 `42b41e5`: 429 additions and 9 removals in four files. The original expansion
 was 937 additions and 52 removals. `quickjs-libc.c`, all object writers,
 serialization ownership and SAB APIs match the baseline exactly. Engine tests
@@ -86,12 +87,13 @@ C-function-data records expose their creation realm to the existing internal
 realm lookup; general native invocation behavior is unchanged.
 
 N-API [PR 137](https://github.com/wasmerio/napi/pull/137) is updated in place
-at `d9566d8`, based on current main `49ae989`. Its native wrappers, argument
+at `4d8aba2`, based on current main `49ae989`, and pins merged QuickJS
+`fcf1604`. Its native wrappers, argument
 validation, filtered enumeration and readonly lazy writes remain. Serializer,
 clone/message and SAB work is removed, including the additional V8 exception
 changes. The small V8 changes required by current-main realm/termination
-integration remain. Both dependency PRs must land before folding the pins into
-main.
+integration remain. N-API PR 137 must land before folding its pin into Edge
+main; the QuickJS dependency has landed.
 
 ## Reduced implementation verification
 
@@ -124,3 +126,12 @@ assertion and sanitizer-only `bug904.js` assertion reproduce on clean engine
 master. No repository test exclusions were added. The raw QuickJS typed-array
 `NaN` definition gap predates this work; lazy API validation rejects it correctly.
 Serialization of unmaterialized lazy properties is deliberately outside this PR.
+
+## Merged QuickJS pin
+
+After the user merged QuickJS PR 12, fetched master and verified that
+`git diff --exit-code 42b41e5 fcf1604` is empty. N-API commit `4d8aba2`
+advances only the engine gitlink to the merge commit. The focused engine
+lazy-property regression and all 21 shared QuickJS lazy tests pass again.
+No implementation changed, so the broader source-tree verification above
+still applies. Edge PR 179 follows the updated N-API feature-branch pin.
