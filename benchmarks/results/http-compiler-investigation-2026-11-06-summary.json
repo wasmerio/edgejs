@@ -1,0 +1,580 @@
+{
+  "date_utc": "2026-11-06T19:07:48Z",
+  "machine": "Apple M5 Max, 18 logical CPUs",
+  "host": "macOS-27.0-arm64-arm-64bit",
+  "guest_edge_source": "71e7a9458969f74af7ede7be964f0359acf46e46",
+  "napi_source_base": "4179e538007b12b4b28cd8f1bc521990e09e0a3b",
+  "napi_source_change": "Runtime backend selection from the same native executable; optimization defaults unchanged",
+  "wasmer_source": "a021148d9829695134936a2524c2bf0a8306bc34",
+  "llvm_version": "23.1.4",
+  "rust_toolchain": "1.99",
+  "value_engine": "V8 custom build 11.9.9",
+  "config": {
+    "rounds": 6,
+    "warmup_seconds": 10,
+    "duration_seconds": 15,
+    "connections": 32,
+    "pipelining": 1,
+    "compiler_environment_variable": "WASMER_NAPI_COMPILER",
+    "pair_orders": [
+      [
+        "llvm",
+        "cranelift"
+      ],
+      [
+        "cranelift",
+        "llvm"
+      ],
+      [
+        "llvm",
+        "cranelift"
+      ],
+      [
+        "cranelift",
+        "llvm"
+      ],
+      [
+        "llvm",
+        "cranelift"
+      ],
+      [
+        "cranelift",
+        "llvm"
+      ]
+    ]
+  },
+  "artifacts": {
+    "runner": {
+      "sha256": "b8712f173c2f0dcbbdad868e7c361cd80465adbe613466976c8a3d60e663f447"
+    },
+    "guest": {
+      "sha256": "99636f01b39b4d4f5f77c20610309d1702fd9b338daca050bf5eaea1bc23439f"
+    },
+    "workload": {
+      "sha256": "acae992b65898912e04323dbf30734d72ef242ac4df89a39eb54defcf3a7f538"
+    },
+    "harness": {
+      "sha256": "f1d39c344c4f6d669ad10c7e3314d2fce497c6549cf6762e1c80f5bef97143e2"
+    },
+    "comparison": {
+      "sha256": "074dca7c8ab917f227c92d0c2297288bcd5e0630cbf67a771b0901250d2ea951"
+    }
+  },
+  "tool_versions": {
+    "python": "3.9.6",
+    "node": {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "exit_code": 0,
+      "output": "v26.0.0"
+    },
+    "autocannon": {
+      "command": [
+        "/private/tmp/edgejs-http-benchmark-tools/node_modules/autocannon/autocannon.js",
+        "--version"
+      ],
+      "exit_code": 0,
+      "output": "autocannon v9.0.0\nnode v26.0.0"
+    }
+  },
+  "runs": [
+    {
+      "compiler": "llvm",
+      "pair": 1,
+      "requests_per_second": 43789.87,
+      "requests": 656844,
+      "server_cpu_seconds": 22.040000000000003,
+      "server_cpu_us_per_request": 33.55439038797645,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "cranelift",
+      "pair": 1,
+      "requests_per_second": 42808.54,
+      "requests": 642193,
+      "server_cpu_seconds": 21.930000000000003,
+      "server_cpu_us_per_request": 34.14861264448539,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "cranelift",
+      "pair": 2,
+      "requests_per_second": 39504,
+      "requests": 592584,
+      "server_cpu_seconds": 21.549999999999997,
+      "server_cpu_us_per_request": 36.36615230920848,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "llvm",
+      "pair": 2,
+      "requests_per_second": 39960.54,
+      "requests": 599382,
+      "server_cpu_seconds": 21.699999999999996,
+      "server_cpu_us_per_request": 36.20395674211103,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "llvm",
+      "pair": 3,
+      "requests_per_second": 41697.07,
+      "requests": 625420,
+      "server_cpu_seconds": 21.77,
+      "server_cpu_us_per_request": 34.80860861501071,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "cranelift",
+      "pair": 3,
+      "requests_per_second": 40103.47,
+      "requests": 601590,
+      "server_cpu_seconds": 21.6,
+      "server_cpu_us_per_request": 35.904852141824165,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "cranelift",
+      "pair": 4,
+      "requests_per_second": 41517.87,
+      "requests": 622733,
+      "server_cpu_seconds": 21.9,
+      "server_cpu_us_per_request": 35.16755977280793,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "llvm",
+      "pair": 4,
+      "requests_per_second": 41630.94,
+      "requests": 624428,
+      "server_cpu_seconds": 21.909999999999997,
+      "server_cpu_us_per_request": 35.08811264068875,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "llvm",
+      "pair": 5,
+      "requests_per_second": 41673.6,
+      "requests": 625062,
+      "server_cpu_seconds": 21.949999999999996,
+      "server_cpu_us_per_request": 35.11651644156899,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "cranelift",
+      "pair": 5,
+      "requests_per_second": 41586.14,
+      "requests": 623776,
+      "server_cpu_seconds": 21.83,
+      "server_cpu_us_per_request": 34.99653721848869,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "cranelift",
+      "pair": 6,
+      "requests_per_second": 40116.27,
+      "requests": 601737,
+      "server_cpu_seconds": 21.770000000000003,
+      "server_cpu_us_per_request": 36.17859629705337,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "compiler": "llvm",
+      "pair": 6,
+      "requests_per_second": 42249.6,
+      "requests": 633736,
+      "server_cpu_seconds": 21.979999999999997,
+      "server_cpu_us_per_request": 34.68321193683173,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    }
+  ],
+  "summary": {
+    "backends": {
+      "llvm": {
+        "requests_per_second": {
+          "values": [
+            43789.87,
+            39960.54,
+            41697.07,
+            41630.94,
+            41673.6,
+            42249.6
+          ],
+          "median": 41685.335,
+          "min": 39960.54,
+          "max": 43789.87
+        },
+        "server_cpu_us_per_request": {
+          "values": [
+            33.55439038797645,
+            36.20395674211103,
+            34.80860861501071,
+            35.08811264068875,
+            35.11651644156899,
+            34.68321193683173
+          ],
+          "median": 34.94836062784973,
+          "min": 33.55439038797645,
+          "max": 36.20395674211103
+        }
+      },
+      "cranelift": {
+        "requests_per_second": {
+          "values": [
+            42808.54,
+            39504,
+            40103.47,
+            41517.87,
+            41586.14,
+            40116.27
+          ],
+          "median": 40817.07,
+          "min": 39504,
+          "max": 42808.54
+        },
+        "server_cpu_us_per_request": {
+          "values": [
+            34.14861264448539,
+            36.36615230920848,
+            35.904852141824165,
+            35.16755977280793,
+            34.99653721848869,
+            36.17859629705337
+          ],
+          "median": 35.53620595731604,
+          "min": 34.14861264448539,
+          "max": 36.36615230920848
+        }
+      }
+    },
+    "pairs": [
+      {
+        "trial": 1,
+        "requests_per_second": {
+          "llvm": 43789.87,
+          "cranelift": 42808.54
+        },
+        "llvm_over_cranelift_ratio": 1.0229236970006452
+      },
+      {
+        "trial": 2,
+        "requests_per_second": {
+          "llvm": 39960.54,
+          "cranelift": 39504
+        },
+        "llvm_over_cranelift_ratio": 1.0115568043742407
+      },
+      {
+        "trial": 3,
+        "requests_per_second": {
+          "llvm": 41697.07,
+          "cranelift": 40103.47
+        },
+        "llvm_over_cranelift_ratio": 1.0397372097726207
+      },
+      {
+        "trial": 4,
+        "requests_per_second": {
+          "llvm": 41630.94,
+          "cranelift": 41517.87
+        },
+        "llvm_over_cranelift_ratio": 1.0027234056082357
+      },
+      {
+        "trial": 5,
+        "requests_per_second": {
+          "llvm": 41673.6,
+          "cranelift": 41586.14
+        },
+        "llvm_over_cranelift_ratio": 1.002103104543966
+      },
+      {
+        "trial": 6,
+        "requests_per_second": {
+          "llvm": 42249.6,
+          "cranelift": 40116.27
+        },
+        "llvm_over_cranelift_ratio": 1.0531786728925696
+      }
+    ],
+    "paired_inference": {
+      "method": "paired percentile bootstrap of median log(LLVM/Cranelift throughput)",
+      "pair_count": 6,
+      "bootstrap_samples": 10000,
+      "random_seed": 20261106,
+      "llvm_over_cranelift_ratio": 1.0172243735069746,
+      "ratio_95_percent_interval": [
+        1.0024132070952134,
+        1.0464363596250619
+      ],
+      "change_percent": 1.7224373506974588,
+      "change_percent_95_percent_interval": [
+        0.2413207095213421,
+        4.643635962506187
+      ],
+      "caveat": "Single-host short runs; few pairs give uncertain bootstrap coverage. Pair resampling assumes independent pairs and does not remove thermal drift, shared client/server contention or other systematic bias."
+    }
+  },
+  "profiles": {
+    "method": "Exclusive execution-thread snapshot counts from separate 10-second sample runs; stack residence, not CPU percentages",
+    "thread": "TokioTaskManager Thread Pool_thread_1",
+    "counts": {
+      "cranelift": {
+        "snapshots": 4628,
+        "native_v8_builtins": 745,
+        "napi": 791,
+        "wasix_virtual_io": 289,
+        "socket_send_recv": 753,
+        "wasmer_coroutine_store": 715,
+        "other_named_system": 708,
+        "unresolved_pc": 627
+      },
+      "llvm": {
+        "snapshots": 4721,
+        "native_v8_builtins": 773,
+        "napi": 837,
+        "wasix_virtual_io": 258,
+        "socket_send_recv": 788,
+        "wasmer_coroutine_store": 660,
+        "other_named_system": 773,
+        "unresolved_pc": 632
+      }
+    },
+    "limitations": "Unresolved PCs include both V8 JS and Wasm JIT code. Most other threads were parked. Profiling throughput excluded."
+  },
+  "guest_only_control": {
+    "config": {
+      "pairs": 4,
+      "warmup_pairs": 1,
+      "integer_iterations": 1000000000,
+      "memory_iterations": 300000000,
+      "memory_bytes": 1048576
+    },
+    "timing_scope": "Guest CLOCK_MONOTONIC around each kernel; excludes startup, compilation, fd_write, and final full-memory checksum pass. No NAPI/JavaScript calls.",
+    "contaminated": false,
+    "summary": {
+      "dependent_integer": {
+        "backends": {
+          "llvm": {
+            "durations_ns": [
+              1577439000,
+              1573275000,
+              1588612000,
+              1622089000
+            ],
+            "median_ns": 1583025500.0,
+            "min_ns": 1573275000,
+            "max_ns": 1622089000
+          },
+          "cranelift": {
+            "durations_ns": [
+              1758215000,
+              1759623000,
+              1767625000,
+              1776539000
+            ],
+            "median_ns": 1763624000.0,
+            "min_ns": 1758215000,
+            "max_ns": 1776539000
+          }
+        },
+        "pairs": [
+          {
+            "trial": 1,
+            "llvm_over_cranelift_duration_ratio": 0.8971820852398598
+          },
+          {
+            "trial": 2,
+            "llvm_over_cranelift_duration_ratio": 0.8940977698063733
+          },
+          {
+            "trial": 3,
+            "llvm_over_cranelift_duration_ratio": 0.8987268227140938
+          },
+          {
+            "trial": 4,
+            "llvm_over_cranelift_duration_ratio": 0.9130612950236386
+          }
+        ],
+        "median_paired_llvm_duration_change_percent": -10.204554602302318
+      },
+      "linear_memory": {
+        "backends": {
+          "llvm": {
+            "durations_ns": [
+              413478000,
+              412591000,
+              414370000,
+              415869000
+            ],
+            "median_ns": 413924000.0,
+            "min_ns": 412591000,
+            "max_ns": 415869000
+          },
+          "cranelift": {
+            "durations_ns": [
+              416896000,
+              412503000,
+              413556000,
+              425471000
+            ],
+            "median_ns": 415226000.0,
+            "min_ns": 412503000,
+            "max_ns": 425471000
+          }
+        },
+        "pairs": [
+          {
+            "trial": 1,
+            "llvm_over_cranelift_duration_ratio": 0.9918013125575683
+          },
+          {
+            "trial": 2,
+            "llvm_over_cranelift_duration_ratio": 1.0002133317818294
+          },
+          {
+            "trial": 3,
+            "llvm_over_cranelift_duration_ratio": 1.0019682944994148
+          },
+          {
+            "trial": 4,
+            "llvm_over_cranelift_duration_ratio": 0.9774320694007347
+          }
+        ],
+        "median_paired_llvm_duration_change_percent": -0.39926778303012167
+      }
+    },
+    "checksums": {
+      "dependent_integer": "28da266f33491738",
+      "linear_memory": "e45951a4c6bbb05f"
+    },
+    "wat_lines": [
+      "(module",
+      "  (import \"wasi_snapshot_preview1\" \"clock_time_get\"",
+      "    (func $clock_time_get (param i32 i64 i32) (result i32)))",
+      "  (import \"wasi_snapshot_preview1\" \"fd_write\"",
+      "    (func $fd_write (param i32 i32 i32 i32) (result i32)))",
+      "  (memory (export \"memory\") 17)",
+      "  (data (i32.const 64) \"WCTL\")",
+      "",
+      "  (func $now (result i64)",
+      "    (if (call $clock_time_get (i32.const 1) (i64.const 1) (i32.const 16))",
+      "      (then unreachable))",
+      "    (i64.load (i32.const 16)))",
+      "",
+      "  ;; A 48-byte little-endian record: magic, kernel id, iterations,",
+      "  ;; monotonic start ns, end ns, checksum, memory bytes. All stdout is binary.",
+      "  (func $emit (param $id i32) (param $iterations i64) (param $start i64)",
+      "      (param $end i64) (param $checksum i64) (param $memory_bytes i64)",
+      "    (i32.store (i32.const 68) (local.get $id))",
+      "    (i64.store (i32.const 72) (local.get $iterations))",
+      "    (i64.store (i32.const 80) (local.get $start))",
+      "    (i64.store (i32.const 88) (local.get $end))",
+      "    (i64.store (i32.const 96) (local.get $checksum))",
+      "    (i64.store (i32.const 104) (local.get $memory_bytes))",
+      "    (i32.store (i32.const 0) (i32.const 64))",
+      "    (i32.store (i32.const 4) (i32.const 48))",
+      "    (if (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8))",
+      "      (then unreachable))",
+      "    (if (i32.ne (i32.load (i32.const 8)) (i32.const 48)) (then unreachable)))",
+      "",
+      "  (func (export \"_start\")",
+      "    (local $start i64) (local $end i64) (local $state i64) (local $checksum i64)",
+      "    (local $remaining i32) (local $index i32) (local $state32 i32)",
+      "    (local $address i32) (local $value i32) (local $offset i32)",
+      "",
+      "    ;; Serial xorshift recurrence plus the iteration counter prevents",
+      "    ;; independent/vectorized iterations and a simple arithmetic-series fold.",
+      "    (local.set $start (call $now))",
+      "    (local.set $state (i64.const 88172645463325252))",
+      "    (local.set $remaining (i32.const 1000000000))",
+      "    (loop $integer",
+      "      (local.set $state (i64.xor (local.get $state)",
+      "        (i64.shl (local.get $state) (i64.const 13))))",
+      "      (local.set $state (i64.xor (local.get $state)",
+      "        (i64.shr_u (local.get $state) (i64.const 7))))",
+      "      (local.set $state (i64.xor (local.get $state)",
+      "        (i64.shl (local.get $state) (i64.const 17))))",
+      "      (local.set $state (i64.add (local.get $state)",
+      "        (i64.extend_i32_u (local.get $remaining))))",
+      "      (local.set $remaining (i32.sub (local.get $remaining) (i32.const 1)))",
+      "      (br_if $integer (local.get $remaining)))",
+      "    (local.set $end (call $now))",
+      "    (call $emit (i32.const 1) (i64.const 1000000000)",
+      "      (local.get $start) (local.get $end) (local.get $state) (i64.const 0))",
+      "",
+      "    ;; Cyclic load/modify/store over a 1 MiB array by default. Each new",
+      "    ;; value depends on the old memory value, state and iteration counter.",
+      "    (local.set $state32 (i32.wrap_i64 (local.get $state)))",
+      "    (local.set $start (call $now))",
+      "    (loop $memory",
+      "      (local.set $address (i32.add (i32.const 65536)",
+      "        (i32.and (i32.shl (local.get $index) (i32.const 2))",
+      "          (i32.const 1048572))))",
+      "      (local.set $value (i32.add",
+      "        (i32.rotl (i32.xor (i32.load (local.get $address)) (local.get $state32))",
+      "          (i32.const 7)) (local.get $index)))",
+      "      (i32.store (local.get $address) (local.get $value))",
+      "      (local.set $state32 (i32.add",
+      "        (i32.rotl (i32.xor (local.get $state32) (local.get $value)) (i32.const 11))",
+      "        (i32.const 2654435769)))",
+      "      (local.set $index (i32.add (local.get $index) (i32.const 1)))",
+      "      (br_if $memory (i32.lt_u (local.get $index) (i32.const 300000000))))",
+      "    (local.set $end (call $now))",
+      "",
+      "    ;; Digest every final array word outside the timed window. This makes",
+      "    ;; final stores observable as well as the loop's dependent state.",
+      "    (local.set $checksum (i64.extend_i32_u (local.get $state32)))",
+      "    (loop $digest",
+      "      (local.set $checksum (i64.xor",
+      "        (i64.rotl (local.get $checksum) (i64.const 5))",
+      "        (i64.extend_i32_u (i32.load",
+      "          (i32.add (i32.const 65536) (local.get $offset))))))",
+      "      (local.set $offset (i32.add (local.get $offset) (i32.const 4)))",
+      "      (br_if $digest (i32.lt_u (local.get $offset) (i32.const 1048576))))",
+      "    (call $emit (i32.const 2) (i64.const 300000000)",
+      "      (local.get $start) (local.get $end) (local.get $checksum)",
+      "      (i64.const 1048576)))",
+      ")"
+    ]
+  },
+  "interpretation": "Initial grouped slowdown did not reproduce: LLVM won all six pairs using one executable. Small sample on an active desktop; do not infer a universal compiler speedup or attribute the historical number to a specific confound. Two later diagnostic attempts using the original executables overlapped external builds and are excluded.",
+  "napi_source": "7ac28da0e76f3e12c7090c05dde7968453198559"
+}

@@ -63,7 +63,16 @@ def load(args, port, duration):
     return data
 
 
-def run(args, label, wasm, trial):
+def process_cpu_seconds(pid):
+    value = subprocess.check_output(['ps', '-p', str(pid), '-o', 'time='], text=True).strip()
+    days, clock = value.split('-', 1) if '-' in value else ('0', value)
+    seconds = 0.0
+    for part in clock.split(':'):
+        seconds = seconds * 60 + float(part)
+    return int(days) * 86400 + seconds
+
+
+def run(args, label, wasm, trial, compiler=None):
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
@@ -73,16 +82,24 @@ def run(args, label, wasm, trial):
                '--program-name', 'edge', '--env', f'PORT={port}',
                '--env', 'EDGE_BYTECODE_CACHE=0', '--', '/app/' + args.workload.name]
     with log.open('w') as output:
+        environment = dict(os.environ)
+        if compiler is not None:
+            environment['WASMER_NAPI_COMPILER'] = compiler
         process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
+                                   start_new_session=True, env=environment)
         try:
             wait_ready(process, port, log)
             warmup = load(args, port, args.warmup)
+            cpu_before = process_cpu_seconds(process.pid)
             measured = load(args, port, args.duration)
+            cpu_seconds = process_cpu_seconds(process.pid) - cpu_before
             if process.poll() is not None:
                 raise RuntimeError(f"Server exited during measurement: {log.read_text()}")
             return {'label': label, 'trial': trial, 'server_command': command,
-                    'server_log': str(log), 'warmup': warmup, 'measured': measured}
+                    'server_log': str(log), 'compiler': compiler,
+                    'server_cpu_seconds': cpu_seconds,
+                    'server_cpu_us_per_request': cpu_seconds * 1e6 / measured['requests']['total'],
+                    'warmup': warmup, 'measured': measured}
         finally:
             stop(process)
 

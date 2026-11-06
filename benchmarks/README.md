@@ -197,6 +197,24 @@ For LLVM, build the N-API runner with `--features cli-llvm` and LLVM 23.1
 Pass that binary as `--runner` and use a fresh `WASMER_NAPI_CACHE_DIR` when
 changing Wasmer revisions. The CLI separates LLVM and Cranelift cache entries.
 
+To compare the compilers themselves, use one LLVM-enabled executable and
+one guest with the balanced-pair harness:
+
+```sh
+WASMER_NAPI_CACHE_DIR=/tmp/edgejs-compiler-comparison \
+python3 benchmarks/bench-http-compilers.py \
+  --runner build-wasix-napi/target/release/napi_wasmer \
+  --wasm build-wasix/edgejs.wasm --builtin-dir lib \
+  --autocannon /tmp/edgejs-http-benchmark-tools/node_modules/.bin/autocannon \
+  --output benchmarks/results/http-compilers.json
+```
+
+It selects `WASMER_NAPI_COMPILER` for each fresh server, defaults to six
+balanced pairs with 10-second warmups and 15-second measurements, and records
+throughput, server CPU cost and a paired bootstrap interval. Small desktop
+samples still need cautious interpretation. Prewarm both compiler caches and
+keep builds stopped; use a fresh cache root when changing optimization options.
+
 ### `timers-settimeout-chain`
 
 Chains 200 sequential `setTimeout(fn, 0)` calls. Each callback fires, increments a counter, and schedules the next timer. Prints a deterministic checksum when the chain completes.

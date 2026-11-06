@@ -166,3 +166,171 @@ tests and 41 Node host-context tests pass. The additional upstream API has
 CLI build. Timed samples retain their original immutable source identities.
 The API addition is [Wasmer PR 7143](https://github.com/wasmerio/wasmer/pull/7143);
 its full `make lint` also passes.
+
+## Investigation: LLVM versus Cranelift
+
+User requested an explanation for the lower LLVM result. First establish
+repeatability: the original compiler groups ran sequentially, with separate
+native executable images and short warmups. Use one LLVM-enabled runner with
+explicit runtime backend selection and compiler-specific caches; compare the
+unchanged current guest in balanced alternating order, with longer warmups.
+Record per-process CPU cost and individual measurements. Stop builds during
+timing. Profile each backend separately under the same load, excluding
+profiling overhead from reported throughput. Inspect concrete compiler
+defaults/code generation before changing optimization options. If a gap
+persists, vary one supported option at a time and rerun the paired checks.
+
+Ownership: primary owns runner selection, benchmark/profiling harness,
+measurements and this note. Integration-review worker audits compiler source
+and proposes narrow experiments read-only, with no builds during timing.
+Preserve both original result sets and their exact source identities.
+
+### Controlled backend comparison
+
+Added explicit `WASMER_NAPI_COMPILER=llvm|cranelift` selection to an
+LLVM-enabled runner. Both choices use the same native image and the selected
+compiler's own cache directory. Unknown values and unavailable LLVM fail
+explicitly. Neither backend's optimization defaults changed.
+
+Ran six fresh-server pairs with 10-second warmups and 15-second measurements,
+32 connections and no pipelining. Pair order alternates LLVM/Cranelift and
+Cranelift/LLVM. Both caches were compiled/warmed before timing; task-owned
+builds and other benchmarks were stopped during these windows. Host desktop activity was not
+disabled; `pmset -g therm` reported no recorded thermal/performance warnings.
+
+| Pair | LLVM req/s | Cranelift req/s | LLVM change |
+| --- | ---: | ---: | ---: |
+| 1 | 43,789.87 | 42,808.54 | +2.29% |
+| 2 | 39,960.54 | 39,504.00 | +1.16% |
+| 3 | 41,697.07 | 40,103.47 | +3.97% |
+| 4 | 41,630.94 | 41,517.87 | +0.27% |
+| 5 | 41,673.60 | 41,586.14 | +0.21% |
+| 6 | 42,249.60 | 40,116.27 | +5.32% |
+
+LLVM wins all six pairs. Overall medians are **41,685.335 LLVM** and
+**40,817.07 Cranelift** req/s. Median server CPU cost is 34.948 and 35.536
+microseconds/request respectively. All twelve measured runs have zero HTTP
+errors, timeouts, non-2xx responses or body mismatches.
+
+The median paired log-ratio estimates LLVM **1.72% faster**. A deterministic
+10,000-resample paired percentile bootstrap gives a 95% interval of
+**+0.24% to +4.64%**. Six pairs on one desktop are a small sample, and this
+interval does not remove systematic bias or establish a general speedup.
+The original 4.88% LLVM slowdown does not reproduce in this experiment.
+
+Reproduction uses `benchmarks/bench-http-compilers.py`, with raw local data
+in `benchmarks/results/http-compiler-paired-2026-11-06.json`. Exact runner
+SHA-256: `b8712f173c2f0dcbbdad868e7c361cd80465adbe613466976c8a3d60e663f447`.
+The guest, Wasmer revision `a021148`, V8 11.9.9 and LLVM 23.1.4 are unchanged.
+
+### Source audit
+
+At Wasmer `a021148` (compiler code identical to `4434ce0`):
+
+- Both backends use generic AArch64 target settings, rather than an Apple M5
+  scheduling model. NaN canonicalization is disabled in both.
+- The guest's budgeted tunables delegate to `BaseTunables`, which chooses
+  static guarded memory. LLVM uses volatile accesses for this memory and
+  inserts a volatile pre-load before ordinary stores to preserve partial-store
+  trap behavior (`compiler-llvm/src/translator/code.rs`, access annotations
+  around 1453 and stores around 1579). Cranelift lacks that pre-load.
+- LLVM enables M0 by default: a hidden heap-base argument with an entry
+  fallback and imported-call ABI dispatch. Cranelift uses a single import-call
+  path. Disabling M0 is a safe diagnostic option; relaxing volatile accesses
+  changes documented trap semantics and is unsuitable as an unqualified fix.
+- LLVM's aggressive target-machine setting uses a custom function IR pass
+  list, not a full default O3 pipeline. Each Wasm function is compiled in a
+  separate LLVM module, preventing cross-function inlining in this path.
+
+These are concrete code-generation differences, not measured causes of the
+original HTTP delta. No optimizer or memory-semantics changes were made.
+Changing options requires a fresh cache root: cached code is keyed by Wasm
+hash and compiler directory, not all current optimization settings.
+
+### Separate profiles and legacy-image diagnostics
+
+Captured `sample` profiles for each backend in separate fresh-server runs:
+10-second warmup, 20 seconds of client load and a 10-second/1 ms sampling
+window inside that load. Profiling throughput is excluded from the comparison.
+Both sampled loads had zero HTTP errors. Raw files are under
+`/private/tmp/edgejs-http-llvm-tools/profiles/`.
+
+The execution thread is `TokioTaskManager Thread Pool_thread_1`; the main
+thread and most other workers are parked. Exclusive leaf samples on that
+thread reconcile to 4,628 Cranelift and 4,721 LLVM snapshots:
+
+| Recognizable symbol family | Cranelift samples | LLVM samples |
+| --- | ---: | ---: |
+| Native V8 / builtins | 745 (16.10%) | 773 (16.37%) |
+| Rust/C++ N-API | 791 (17.09%) | 837 (17.73%) |
+| WASIX / virtual I/O | 289 (6.24%) | 258 (5.46%) |
+| Socket send/receive | 753 (16.27%) | 788 (16.69%) |
+| Wasmer / coroutine / store machinery | 715 (15.45%) | 660 (13.98%) |
+| Other named/system code | 708 (15.30%) | 773 (16.37%) |
+| Unresolved PCs | 627 (13.55%) | 632 (13.39%) |
+
+These are sampled stack-residence shares, **not CPU utilization percentages**.
+Unresolved PCs include both Wasm and V8 JavaScript JIT code, so exact guest
+ownership cannot be assigned. Both profiles show substantial shared host
+work: N-API/store bookkeeping, native V8 and socket I/O. LLVM compiles only
+the Wasm guest; JavaScript continues to use the same V8 engine. That limits
+the relevance of optimizing guest instructions for this small HTTP handler.
+Neither profile establishes a compiler-specific bottleneck or explains a
+roughly 2% throughput delta.
+
+The current guest has DWARF but no Wasm name section. Wasmer's perf-map emitter
+only records named functions, so enabling it alone would not resolve these
+guest PCs. No artifact-format changes were made for profiling.
+
+Two additional attempts to repeat the original separate-executable comparison
+encountered unrelated CMake/clang activity on the desktop. A one-second
+process monitor caught the second overlap. Both legacy-image diagnostics are
+excluded from inference; files are
+`benchmarks/results/http-compiler-old-images{-recheck}-2026-11-06.json` and
+`/private/tmp/edgejs-http-llvm-tools/old-images-recheck-monitor.json`.
+No unrelated processes were stopped. The six-pair comparison preceded these
+observed bursts, but its desktop-activity caveat remains.
+
+Conclusion: the initial short, grouped 4.88% slowdown is not a reliable
+compiler comparison. The same-executable, balanced, longer-warmup experiment
+puts LLVM slightly ahead. The data does not identify which initial confound
+(warmup, ordering, native executable layout or ambient activity) caused that
+historical number. Preserve it as an initial measurement, not a demonstrated
+LLVM regression. No unsafe optimization setting was enabled to alter results.
+
+### Guest-only control
+
+A supplementary WAT guest imports only WASI `clock_time_get` and `fd_write`:
+no JavaScript or N-API calls. It times a dependent integer recurrence and a
+cyclic linear-memory read/modify/write loop inside the guest, excluding startup
+and compilation. Outputs include checksums and a post-timing full-memory
+digest, preventing removal of the work. Four balanced measured pairs follow
+one warmup pair on the same runtime-selection executable.
+
+| Kernel | Work | LLVM median | Cranelift median | Paired LLVM duration change |
+| --- | --- | ---: | ---: | ---: |
+| Integer recurrence | 1 billion iterations | 1.5830255 s | 1.763624 s | -10.20% |
+| Linear memory | 300 million operations, 1 MiB | 0.413924 s | 0.415226 s | -0.40%; mixed pair signs |
+
+All ten processes return identical checksums: integer `28da266f33491738`,
+memory `e45951a4c6bbb05f`. A clean startup check and 21 one-second process
+snapshots observe no clang/rustc/CMake/Ninja activity. This is a narrow
+code-generation control, not an additional Edge HTTP or Node comparison.
+It supports a workload-dependent compiler benefit, rather than a universal
+LLVM slowdown. Source, driver, binary records and monitored results are under
+`/private/tmp/edgejs-http-llvm-tools/compute-control/`; the portable investigation
+summary retains the actual WAT source and duration samples.
+
+### Shipping and verification
+
+N-API `7ac28da0e76f3e12c7090c05dde7968453198559` contains the runtime
+compiler selector. The measured runner was built from that source change;
+the native host image, Wasmer dependency and optimizer defaults are identical
+across each measured pair. Both `cli` and `cli-llvm` Release builds pass.
+The full Edge public realm fixture passes with the ordinary Cranelift build
+and with each runtime selection in the LLVM-enabled build. Invalid compiler
+values and LLVM requests in builds without LLVM fail explicitly.
+
+The updated provider pin, balanced-pair harness and portable investigation
+summary are included in Edge PR 179 / N-API PR 140. The initial measurements
+remain recorded, with the stronger result and experimental limits above.

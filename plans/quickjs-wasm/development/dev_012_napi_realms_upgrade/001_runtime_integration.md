@@ -45,7 +45,7 @@ relevant runtime suites, then record exact results and limitations here.
   (issue 015).
 
 The Edge gitlink includes two published dependency fixes, atop N-API main
-`18209d2`, in `4179e538007b12b4b28cd8f1bc521990e09e0a3b` on branch
+`18209d2`, in `7ac28da0e76f3e12c7090c05dde7968453198559` on branch
 `codex/edgejs-realms-integration`: QuickJS module sandbox synchronization with
 explicit synthetic/import-meta host callback boundaries, and guarded
 imported-cache Buffer callbacks (issue 023). Their provider-owned C++/Rust
