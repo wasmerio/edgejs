@@ -51,6 +51,8 @@ duplicating issue details.
 
 ### 🟢 [024_gatsby_baseline_builds.md](node-compat/deploy/024_gatsby_baseline_builds.md): Gatsby baseline build failures
 
+### 🟢 [024_async_store_nonblocking_lock.md](node-compat/napi/024_async_store_nonblocking_lock.md): async store nonblocking callback acquisition
+
 ## Node Test
 
 | Status | Severity | Issue | Topic |
@@ -131,3 +133,13 @@ while adopting upstream QuickJS-NG master; validation across all three repos.
 `wasmer_napi_compile_module` in the N-API host-JS provider discarded parsed
 `with { type: 'json' }` attributes, so the deployed runtime threw
 `ERR_IMPORT_ATTRIBUTE_MISSING` for JSON imports (wasmerio/edgejs#175).
+
+### 🟢 [014_napi_realms_module_linking.md](node-compat/edgejs/014_napi_realms_module_linking.md): evaluated builtin synthetic module linking
+
+### 🟠 [015_v8_raw_test_fork_safety.md](node-compat/edgejs/015_v8_raw_test_fork_safety.md): fresh process isolation for V8 raw fixtures
+
+### 🟠 [016_quickjs_wasmer_host_signals.md](node-compat/edgejs/016_quickjs_wasmer_host_signals.md): native QuickJS Wasmer host signal interception
+
+### 🟢 [023_imported_cache_buffer_callback_reentry.md](node-compat/napi/023_imported_cache_buffer_callback_reentry.md): cache serialization guest callback reentry
+
+### 🟢 [025_lazy_property_realm_lifetime.md](node-compat/napi/025_lazy_property_realm_lifetime.md): lazy property realm lifetime and native integration

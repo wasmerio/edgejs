@@ -13,6 +13,7 @@
 #include <crt_externs.h>
 #endif
 #include <signal.h>
+#include <spawn.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/wait.h>
@@ -539,11 +540,39 @@ int RunRawNodeTestScriptInSubprocess(const char* node_test_relative_path,
   }
   return -1;
 #else
-  (void)ResolveEdgeCliPathForRawSubprocess;
   namespace fs = std::filesystem;
   const std::string rel_path = node_test_relative_path ? std::string(node_test_relative_path) : std::string();
   const bool has_suite_prefix = rel_path.find('/') != std::string::npos;
   const std::string script_rel = has_suite_prefix ? rel_path : ("parallel/" + rel_path);
+  constexpr const char* kRawChildEnv = "EDGE_RAW_NODE_TEST_CHILD";
+  if (const char* child_script = std::getenv(kRawChildEnv);
+      child_script != nullptr && script_rel == child_script) {
+    // This branch runs only after a fresh exec. Never initialize an engine in
+    // a fork child: the test suite's V8 threads may hold inherited locks.
+    unsetenv(kRawChildEnv);
+    unofficial_napi_env_owner owner = nullptr;
+    napi_env env = nullptr;
+    if (unofficial_napi_create_env(8, nullptr, &env, &owner) != napi_ok || env == nullptr) {
+      _exit(70);
+    }
+    if (!EdgeAttachEnvironmentForRuntime(env)) {
+      (void)unofficial_napi_release_env(owner, nullptr);
+      _exit(70);
+    }
+    std::string child_error;
+    // Raw fixtures need event-loop turns for IPC and exit-time assertions.
+    const int child_exit = RunRawNodeTestScript(env, node_test_relative_path, &child_error, true);
+    EdgeProcessWrapForceKillTrackedChildren();
+    if (!child_error.empty()) {
+      (void)write(STDERR_FILENO, child_error.c_str(), child_error.size());
+      (void)write(STDERR_FILENO, "\n", 1);
+    }
+    EdgeEnvironmentRunCleanup(env);
+    EdgeEnvironmentRunAtExitCallbacks(env);
+    EdgeEnvironmentDetach(env);
+    (void)unofficial_napi_release_env(owner, nullptr);
+    _exit(child_exit);
+  }
   if (StartsWith(script_rel, "pseudo-tty/")) {
     use_pseudo_tty = true;
     redirect_stdio_to_files = true;
@@ -575,106 +604,102 @@ int RunRawNodeTestScriptInSubprocess(const char* node_test_relative_path,
     stdout_path = stdout_template;
     stderr_path = stderr_template;
   }
-  int status = 0;
-  const pid_t child_pid = fork();
-  if (child_pid < 0) {
-    const int fork_errno = errno;
-    close_fd(&stdout_fd);
-    close_fd(&stderr_fd);
+  EnvSnapshot child_env = CaptureEnvSnapshot();
+  std::vector<std::string> child_args;
+  fs::path input_path;
+  if (use_pseudo_tty) {
+    const fs::path node_test_root_path = ResolveNodeTestRootPathForRawScript(script_rel);
+    const fs::path script_path = ResolveRawNodeScriptPath(node_test_relative_path);
+    input_path = script_path.parent_path() / (script_path.stem().string() + ".in");
+    child_args = {"python3", (node_test_root_path / "tools" / "pseudo-tty.py").string(),
+                  ResolveEdgeCliPathForRawSubprocess().string(), script_path.string()};
+    child_env["NODE_TEST_DIR"] = node_test_root_path.string();
+    child_env["NODE_TEST_KNOWN_GLOBALS"] = "0";
+    child_env["TEST_SERIAL_ID"] = MakeTestSerialId(script_rel);
+    child_env["TEST_THREAD_ID"] = child_env["TEST_SERIAL_ID"];
+    child_env["TEST_PARALLEL"] = StartsWith(script_rel, "parallel/") ? "1" : "0";
+    child_env.erase("EDGE_FORCE_STDIO_TTY");
+  } else {
+    char executable[8192];
+    size_t executable_size = sizeof(executable);
+    const int executable_rc = uv_exepath(executable, &executable_size);
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    if (executable_rc != 0 || test_info == nullptr) {
+      close_fd(&stdout_fd);
+      close_fd(&stderr_fd);
+      if (!stdout_path.empty()) (void)fs::remove(stdout_path);
+      if (!stderr_path.empty()) (void)fs::remove(stderr_path);
+      if (error_out != nullptr) *error_out = "Unable to resolve the current test executable/case";
+      return 1;
+    }
+    child_args = {std::string(executable, executable_size),
+                  std::string("--gtest_filter=") + test_info->test_suite_name() + "." + test_info->name(),
+                  "--gtest_repeat=1", "--gtest_output=", "--gtest_color=no"};
+    child_env[kRawChildEnv] = script_rel;
+    // The parent was already assigned its shard. The child must run this
+    // exact case even when its single-case filter would land on another shard.
+    child_env.erase("GTEST_TOTAL_SHARDS");
+    child_env.erase("GTEST_SHARD_INDEX");
+    child_env.erase("GTEST_SHARD_STATUS_FILE");
+  }
+  std::vector<char*> child_argv;
+  for (auto& arg : child_args) child_argv.push_back(arg.data());
+  child_argv.push_back(nullptr);
+  std::vector<std::string> child_env_entries;
+  for (const auto& [name, value] : child_env) child_env_entries.push_back(name + "=" + value);
+  std::vector<char*> child_envp;
+  for (auto& entry : child_env_entries) child_envp.push_back(entry.data());
+  child_envp.push_back(nullptr);
+
+  posix_spawn_file_actions_t actions;
+  posix_spawnattr_t attributes;
+  int spawn_rc = posix_spawn_file_actions_init(&actions);
+  const bool actions_initialized = spawn_rc == 0;
+  if (spawn_rc == 0) spawn_rc = posix_spawnattr_init(&attributes);
+  const bool attributes_initialized = spawn_rc == 0;
+  // Every fixture tree has its own process group for descendant cleanup.
+  if (spawn_rc == 0) spawn_rc = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
+  if (spawn_rc == 0) spawn_rc = posix_spawnattr_setpgroup(&attributes, 0);
+  if (spawn_rc == 0 && stdout_fd >= 0) {
+    spawn_rc = posix_spawn_file_actions_adddup2(&actions, stdout_fd, STDOUT_FILENO);
+  }
+  if (spawn_rc == 0 && stderr_fd >= 0) {
+    spawn_rc = posix_spawn_file_actions_adddup2(&actions, stderr_fd, STDERR_FILENO);
+  }
+  for (const int fd : {stdout_fd, stderr_fd}) {
+    if (spawn_rc == 0 && fd > STDERR_FILENO) {
+      spawn_rc = posix_spawn_file_actions_addclose(&actions, fd);
+    }
+  }
+  if (spawn_rc == 0 && !input_path.empty() && fs::exists(input_path)) {
+    spawn_rc = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, input_path.c_str(), O_RDONLY, 0);
+  }
+  pid_t child_pid = -1;
+  if (spawn_rc == 0) {
+    spawn_rc = posix_spawnp(&child_pid, child_argv[0], &actions, &attributes,
+                             child_argv.data(), child_envp.data());
+  }
+  if (attributes_initialized) (void)posix_spawnattr_destroy(&attributes);
+  if (actions_initialized) (void)posix_spawn_file_actions_destroy(&actions);
+  close_fd(&stdout_fd);
+  close_fd(&stderr_fd);
+  if (spawn_rc != 0) {
     if (!stdout_path.empty()) (void)fs::remove(stdout_path);
     if (!stderr_path.empty()) (void)fs::remove(stderr_path);
-    if (error_out != nullptr) {
-      *error_out = "fork failed: " + std::string(std::strerror(fork_errno));
-    }
+    if (error_out != nullptr) *error_out = "posix_spawn failed: " + std::string(std::strerror(spawn_rc));
     return 1;
   }
 
-  if (child_pid == 0) {
-    if (redirect_stdio_to_files) {
-      if (stdout_fd >= 0) {
-        (void)dup2(stdout_fd, STDOUT_FILENO);
-      }
-      if (stderr_fd >= 0) {
-        (void)dup2(stderr_fd, STDERR_FILENO);
-      }
-      close_fd(&stdout_fd);
-      close_fd(&stderr_fd);
-    }
-    // Put each raw-test subprocess tree in its own process group so the parent
-    // the parent can always reap/kill descendants after the child exits.
-    (void)setpgid(0, 0);
-    if (use_pseudo_tty) {
-      const bool is_parallel_suite = StartsWith(script_rel, "parallel/");
-      const fs::path node_test_root_path = ResolveNodeTestRootPathForRawScript(script_rel);
-      const fs::path script_path = ResolveRawNodeScriptPath(node_test_relative_path);
-      const fs::path input_path = script_path.parent_path() / (script_path.stem().string() + ".in");
-      const std::string node_test_dir = node_test_root_path.string();
-      const std::string test_serial_id = MakeTestSerialId(script_rel);
-      const fs::path pty_helper = node_test_root_path / "tools" / "pseudo-tty.py";
-      const fs::path edge_path = ResolveEdgeCliPathForRawSubprocess();
-
-      setenv("NODE_TEST_DIR", node_test_dir.c_str(), 1);
-      setenv("NODE_TEST_KNOWN_GLOBALS", "0", 1);
-      setenv("TEST_SERIAL_ID", test_serial_id.c_str(), 1);
-      setenv("TEST_THREAD_ID", test_serial_id.c_str(), 1);
-      setenv("TEST_PARALLEL", is_parallel_suite ? "1" : "0", 1);
-      unsetenv("EDGE_FORCE_STDIO_TTY");
-
-      if (fs::exists(input_path)) {
-        const int input_fd = open(input_path.c_str(), O_RDONLY);
-        if (input_fd >= 0) {
-          (void)dup2(input_fd, STDIN_FILENO);
-          close(input_fd);
-        }
-      }
-
-      execlp("python3",
-             "python3",
-             pty_helper.c_str(),
-             edge_path.c_str(),
-             script_path.c_str(),
-             static_cast<char*>(nullptr));
-      _exit(70);
-    }
-
-    unofficial_napi_env_owner owner = nullptr;
-    napi_env env = nullptr;
-    if (unofficial_napi_create_env(8, nullptr, &env, &owner) != napi_ok || env == nullptr) {
-      _exit(70);
-    }
-    if (!EdgeAttachEnvironmentForRuntime(env)) {
-      (void)unofficial_napi_release_env(owner, nullptr);
-      _exit(70);
-    }
-    std::string child_error;
-    // Raw Node tests rely on libuv/event-loop turns (process exit checks,
-    // IPC callbacks, mustCall verification). Run with loop support enabled in
-    // subprocess mode to avoid false positives and leaking orphan children.
-    const int child_exit = RunRawNodeTestScript(env, node_test_relative_path, &child_error, true);
-    // Force-clean any tracked child processes before tearing down this env.
-    EdgeProcessWrapForceKillTrackedChildren();
-    if (!child_error.empty()) {
-      (void)write(STDERR_FILENO, child_error.c_str(), child_error.size());
-      (void)write(STDERR_FILENO, "\n", 1);
-    }
-    if (owner != nullptr) {
-      EdgeEnvironmentRunCleanup(env);
-      EdgeEnvironmentRunAtExitCallbacks(env);
-      EdgeEnvironmentDetach(env);
-      (void)unofficial_napi_release_env(owner, nullptr);
-    }
-    _exit(child_exit);
-  }
-
-  close_fd(&stdout_fd);
-  close_fd(&stderr_fd);
-
+  int status = 0;
   while (waitpid(child_pid, &status, 0) < 0) {
     if (errno == EINTR) continue;
     const int wait_errno = errno;
     if (error_out != nullptr) {
       *error_out = "waitpid failed: " + std::string(std::strerror(wait_errno));
     }
+    (void)kill(-child_pid, SIGKILL);
+    if (!stdout_path.empty()) (void)fs::remove(stdout_path);
+    if (!stderr_path.empty()) (void)fs::remove(stderr_path);
     return 1;
   }
 

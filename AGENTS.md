@@ -211,7 +211,7 @@ plans/quickjs-wasm/development/troubleshooting/node-test/018_tls_securecontext_s
 Most recent Node compatibility troubleshooting note:
 
 ```text
-plans/quickjs-wasm/development/troubleshooting/node-compat/napi/022_host_js_import_attributes.md
+plans/quickjs-wasm/development/troubleshooting/node-compat/napi/025_lazy_property_realm_lifetime.md
 ```
 
 Most recent Wasmer deploy troubleshooting note:

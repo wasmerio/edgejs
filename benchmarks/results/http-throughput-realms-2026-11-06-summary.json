@@ -1,0 +1,150 @@
+{
+  "date_utc": "2026-11-06T18:36:05Z",
+  "machine": "Apple M5 Max, 18 logical CPUs",
+  "host": "macOS-27.0-arm64-arm-64bit",
+  "published_package": "syrusakbary/edgejs@0.2.5-gfbc0e8e",
+  "edge_source": "71e7a9458969f74af7ede7be964f0359acf46e46",
+  "napi_runtime_source": "469bf1011a4b091a7a0f60c12c1a5c5344551574",
+  "provider": "V8 custom build 11.9.9, same napi_wasmer runner for both guests",
+  "wasm_compiler": "Cranelift",
+  "autocannon_version": "autocannon v9.0.0\nnode v26.0.0",
+  "config": {
+    "rounds": 3,
+    "duration_seconds": 10,
+    "warmup_seconds": 3,
+    "connections": 32,
+    "pipelining": 1
+  },
+  "artifacts": {
+    "runner": {
+      "sha256": "c2f8bcb4dcf9777264969c7dd4d2c89729173a6105b12e129dbbe5dd5afe9203"
+    },
+    "published": {
+      "sha256": "f5cbf8c1cd39eef56553a4a4e6c7623bbf90fefc00a8c57c08e322f5504e82ae"
+    },
+    "current": {
+      "sha256": "99636f01b39b4d4f5f77c20610309d1702fd9b338daca050bf5eaea1bc23439f"
+    },
+    "workload": {
+      "sha256": "acae992b65898912e04323dbf30734d72ef242ac4df89a39eb54defcf3a7f538"
+    }
+  },
+  "published_webc_sha256": "6ce2b9bea44cb116faa0c869612a156b23d40d2b18d6fb210192e5155d61ff2a",
+  "runs": [
+    {
+      "version": "published",
+      "trial": 1,
+      "duration_seconds": 10.01,
+      "requests": 257164,
+      "requests_per_second": 25716.8,
+      "mean_latency_ms": 0.73,
+      "p50_latency_ms": 1,
+      "p99_latency_ms": 2,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "version": "current",
+      "trial": 1,
+      "duration_seconds": 10.01,
+      "requests": 242570,
+      "requests_per_second": 24256,
+      "mean_latency_ms": 0.78,
+      "p50_latency_ms": 1,
+      "p99_latency_ms": 2,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "version": "current",
+      "trial": 2,
+      "duration_seconds": 10.01,
+      "requests": 217466,
+      "requests_per_second": 21745.6,
+      "mean_latency_ms": 0.96,
+      "p50_latency_ms": 1,
+      "p99_latency_ms": 2,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "version": "published",
+      "trial": 2,
+      "duration_seconds": 10.01,
+      "requests": 250814,
+      "requests_per_second": 25080,
+      "mean_latency_ms": 0.73,
+      "p50_latency_ms": 1,
+      "p99_latency_ms": 2,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "version": "published",
+      "trial": 3,
+      "duration_seconds": 10.01,
+      "requests": 224652,
+      "requests_per_second": 22465.6,
+      "mean_latency_ms": 0.93,
+      "p50_latency_ms": 1,
+      "p99_latency_ms": 2,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    },
+    {
+      "version": "current",
+      "trial": 3,
+      "duration_seconds": 10.01,
+      "requests": 236198,
+      "requests_per_second": 23620.8,
+      "mean_latency_ms": 0.83,
+      "p50_latency_ms": 1,
+      "p99_latency_ms": 2,
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "body_mismatches": 0
+    }
+  ],
+  "summary": {
+    "published": {
+      "requests_per_second": [
+        25716.8,
+        25080,
+        22465.6
+      ],
+      "median": 25080,
+      "min": 22465.6,
+      "max": 25716.8
+    },
+    "current": {
+      "requests_per_second": [
+        24256,
+        21745.6,
+        23620.8
+      ],
+      "median": 23620.8,
+      "min": 21745.6,
+      "max": 24256
+    },
+    "change_percent": -5.818181818181822
+  },
+  "node_client_capacity_control": {
+    "seconds": 3,
+    "requests_per_second": 113034.67,
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0
+  },
+  "interpretation": "Current median is 5.82% lower in three quick trials; run ranges overlap. The provider is held constant, so this does not isolate provider-upgrade performance."
+}

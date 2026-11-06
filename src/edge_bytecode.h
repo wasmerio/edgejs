@@ -40,7 +40,8 @@ class EdgeBytecode {
                    bool has_cache = false,
                    bool* cache_rejected_out = nullptr,
                    bool* can_parse_as_module_out = nullptr,
-                   bool compile_on_cache_rejection = true) {
+                   bool compile_on_cache_rejection = true,
+                   unofficial_napi_realm realm = nullptr) {
     Reset();
     if (cache_rejected_out != nullptr) *cache_rejected_out = false;
     if (can_parse_as_module_out != nullptr) *can_parse_as_module_out = false;
@@ -48,6 +49,7 @@ class EdgeBytecode {
     unofficial_napi_bytecode_open_options options{};
     options.size = sizeof(options);
     options.version = UNOFFICIAL_NAPI_BYTECODE_OPEN_OPTIONS_VERSION;
+    options.realm_or_null = realm;
     options.source_text = source_text;
     options.filename = filename;
     options.shape = shape;

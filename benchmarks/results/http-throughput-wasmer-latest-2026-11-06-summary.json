@@ -1,0 +1,244 @@
+{
+  "machine": "Apple M5 Max, 18 logical CPUs",
+  "host": "macOS-27.0-arm64-arm-64bit",
+  "published_package": "syrusakbary/edgejs@0.2.5-gfbc0e8e",
+  "edge_guest_source": "71e7a9458969f74af7ede7be964f0359acf46e46",
+  "napi_native_source": "201ab932e16fefcd2f55fc61c7276d4df372ff97",
+  "wasmer_source": "4434ce07535d0322308ed89c4f3407cd46cbbea8",
+  "rust_toolchain": "1.99",
+  "llvm_version": "23.1.4",
+  "llvm_configuration": "LLVM::default(), aggressive/O3, M0 enabled",
+  "provider": "V8 custom build 11.9.9, same NAPI bridge for both compilers and guests",
+  "autocannon_version": "autocannon v9.0.0\nnode v26.0.0",
+  "artifacts": {
+    "published": {
+      "sha256": "f5cbf8c1cd39eef56553a4a4e6c7623bbf90fefc00a8c57c08e322f5504e82ae"
+    },
+    "current": {
+      "sha256": "99636f01b39b4d4f5f77c20610309d1702fd9b338daca050bf5eaea1bc23439f"
+    },
+    "workload": {
+      "sha256": "acae992b65898912e04323dbf30734d72ef242ac4df89a39eb54defcf3a7f538"
+    }
+  },
+  "compilers": {
+    "llvm23": {
+      "date_utc": "2026-11-06T18:52:54Z",
+      "config": {
+        "rounds": 3,
+        "duration_seconds": 10,
+        "warmup_seconds": 3,
+        "connections": 32,
+        "pipelining": 1
+      },
+      "runner_sha256": "1d0095f2c0b82ae810af111b4ade07c236d6d44c6c62cd09f8bf893770765d05",
+      "runs": [
+        {
+          "version": "published",
+          "trial": 1,
+          "requests_per_second": 40784,
+          "requests": 407823,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "current",
+          "trial": 1,
+          "requests_per_second": 42227.2,
+          "requests": 422212,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "current",
+          "trial": 2,
+          "requests_per_second": 40950.4,
+          "requests": 409504,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "published",
+          "trial": 2,
+          "requests_per_second": 42022.4,
+          "requests": 420226,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "published",
+          "trial": 3,
+          "requests_per_second": 41955.2,
+          "requests": 419611,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "current",
+          "trial": 3,
+          "requests_per_second": 39820.81,
+          "requests": 398245,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        }
+      ],
+      "summary": {
+        "published": {
+          "requests_per_second": [
+            40784,
+            42022.4,
+            41955.2
+          ],
+          "median": 41955.2,
+          "min": 40784,
+          "max": 42022.4
+        },
+        "current": {
+          "requests_per_second": [
+            42227.2,
+            40950.4,
+            39820.81
+          ],
+          "median": 40950.4,
+          "min": 39820.81,
+          "max": 42227.2
+        },
+        "change_percent": -2.394935550301258
+      }
+    },
+    "cranelift": {
+      "date_utc": "2026-11-06T18:54:20Z",
+      "config": {
+        "rounds": 3,
+        "duration_seconds": 10,
+        "warmup_seconds": 3,
+        "connections": 32,
+        "pipelining": 1
+      },
+      "runner_sha256": "01e8bae6d06aa931efd5d51f624b20b5ad32a80f72d7cc40bf7a05178e4f312a",
+      "runs": [
+        {
+          "version": "published",
+          "trial": 1,
+          "requests_per_second": 41049.6,
+          "requests": 410496,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "current",
+          "trial": 1,
+          "requests_per_second": 42547.2,
+          "requests": 425519,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "current",
+          "trial": 2,
+          "requests_per_second": 43446.4,
+          "requests": 434490,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "published",
+          "trial": 2,
+          "requests_per_second": 40284.81,
+          "requests": 402823,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "published",
+          "trial": 3,
+          "requests_per_second": 41785.6,
+          "requests": 417858,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        },
+        {
+          "version": "current",
+          "trial": 3,
+          "requests_per_second": 43052.8,
+          "requests": 430566,
+          "p50_latency_ms": 0,
+          "p99_latency_ms": 1,
+          "errors": 0,
+          "timeouts": 0,
+          "non2xx": 0,
+          "body_mismatches": 0
+        }
+      ],
+      "summary": {
+        "published": {
+          "requests_per_second": [
+            41049.6,
+            40284.81,
+            41785.6
+          ],
+          "median": 41049.6,
+          "min": 40284.81,
+          "max": 41785.6
+        },
+        "current": {
+          "requests_per_second": [
+            42547.2,
+            43446.4,
+            43052.8
+          ],
+          "median": 43052.8,
+          "min": 42547.2,
+          "max": 43446.4
+        },
+        "change_percent": 4.879950109136266
+      }
+    }
+  },
+  "current_llvm_vs_cranelift_percent": -4.883306079976213,
+  "interpretation": "Three quick repetitions per guest and compiler; backend groups measured sequentially. LLVM shows no throughput advantage. Historical old-Wasmer results also differ in runtime and Rust/dependency versions and cannot isolate compiler performance."
+}
