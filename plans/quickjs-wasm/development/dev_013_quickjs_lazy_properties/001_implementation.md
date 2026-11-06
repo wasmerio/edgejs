@@ -135,3 +135,25 @@ advances only the engine gitlink to the merge commit. The focused engine
 lazy-property regression and all 21 shared QuickJS lazy tests pass again.
 No implementation changed, so the broader source-tree verification above
 still applies. Edge PR 179 follows the updated N-API feature-branch pin.
+
+## PR comparison-base correction
+
+The user reported that N-API PR 137 displays 33,375 additions across 115 files.
+Verified the REST/GraphQL PR base still references old main `87937f1`, while
+the actual remote main is `49ae989` and is an ancestor of feature head
+`4d8aba2`. GitHub's branch compare API and local three-dot diff both show the
+actual feature delta: 3,039 additions, 33 removals, 17 files; 2,156 additions
+are in the two lazy-property test files. The stale PR base includes already
+merged realms, trusted-script and provider/Wasmer changes.
+
+Refresh the existing PR's base metadata to current main without changing its
+source tree, then verify the PR's own displayed file/line counts. Preserve the
+branch source and all previously verified implementation; no source rewrite or
+new tests are needed for a comparison-only correction.
+
+Applied a same-base PR metadata update (`PATCH .../pulls/137`, `base=main`).
+GitHub immediately refreshed the base to `49ae989` and now reports exactly
+3,039 additions, 33 removals, 17 files and six feature commits. The head remains
+`4d8aba2`; no source, branch history, dependency pin or test changed. The
+429-addition count refers to the separate QuickJS engine PR, not the N-API
+API/bridge/provider/conformance-test PR.
