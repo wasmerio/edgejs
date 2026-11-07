@@ -65,6 +65,16 @@ WASIX_V8_LANE_ENV := \
 	WASIX_EDGEJS_WASM="$(abspath $(WASIX_EDGEJS_WASM))" \
 	WASIX_EDGEJS_WORKSPACE_DIRS="test,tests,lib,deps,assets,build-wasix" \
 	WASIX_EDGEJS_GUEST_EXEC_PATH="/workspace/build-wasix/edgejs.wasm"
+# WASIX builds do not embed builtin JS or ICU data (EDGE_EMBED_BUILTIN_SOURCES /
+# EDGE_EMBED_ICU_DATA=OFF): wasix/build-wasix.sh and quickjs-wasm/build.sh stage
+# them next to edgejs.wasm (<build>/node-lib, <build>/icu) through
+# scripts/stage_wasix_static_data.py. The WASIX lanes depend on one sentinel per
+# tree so a missing staging fails before any test runs; stale trees are caught
+# at runtime by the builtin catalog digest (<build>/node-lib/.edge-builtin-catalog).
+WASIX_STATIC_DATA_SENTINELS = $(1)/node-lib/internal/bootstrap/realm.js $(1)/icu/icudt78l/res_index.res
+WASIX_V8_BUILD_DIR := $(patsubst %/,%,$(dir $(WASIX_EDGEJS_WASM)))
+WASIX_V8_STATIC_DATA := $(call WASIX_STATIC_DATA_SENTINELS,$(WASIX_V8_BUILD_DIR))
+QUICKJS_WASIX_STATIC_DATA := $(call WASIX_STATIC_DATA_SENTINELS,$(BUILD_QUICKJS_WASIX_DIR))
 EDGE_VERSION_MAJOR := $(shell awk '$$2 == "EDGE_MAJOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_MINOR := $(shell awk '$$2 == "EDGE_MINOR_VERSION" {print $$3; exit}' src/edge_version.h)
 EDGE_VERSION_PATCH := $(shell awk '$$2 == "EDGE_PATCH_VERSION" {print $$3; exit}' src/edge_version.h)
@@ -360,6 +370,14 @@ build-quickjs-wasix:
 $(QUICKJS_WASIX_WASM):
 	./quickjs-wasm/build.sh
 
+# Order-only on the wasm: a missing wasm is built (which also stages), but an
+# existing wasm without staged data is an error rather than a silent restage.
+$(QUICKJS_WASIX_STATIC_DATA): | $(QUICKJS_WASIX_WASM)
+	@test -f "$@" || { \
+		echo "error: missing staged WASIX static data: $@" >&2; \
+		echo "Rebuild with ./quickjs-wasm/build.sh (stages node-lib/ and icu/ next to $(QUICKJS_WASIX_WASM))." >&2; \
+		exit 1; }
+
 build-wasix-napi: build-wasix build-napi-wasmer-cli
 
 build-wasix-napi-quickjs: build-quickjs-wasix
@@ -369,11 +387,11 @@ build-napi-wasmer-cli:
 
 test-wasix-napi: build-wasix-napi test-wasix-napi-cli
 
-test-wasix-napi-quickjs: build-wasix-napi-quickjs
+test-wasix-napi-quickjs: build-wasix-napi-quickjs $(QUICKJS_WASIX_STATIC_DATA)
 	$(MAKE) test-wasix-safe-mode WASIX_PACKAGE_DIR="$(CURDIR)/quickjs-wasm"
 
-test-wasix-napi-cli: build-wasix build-napi-wasmer-cli
-	@output="$$($(NAPI_WASMER_BINARY) $(WASIX_EDGEJS_WASM) -e "$(WASIX_NAPI_SMOKE_JS)")"; \
+test-wasix-napi-cli: build-wasix build-napi-wasmer-cli $(WASIX_V8_STATIC_DATA)
+	@output="$$($(NAPI_WASMER_BINARY) $(WASIX_EDGEJS_WASM) --builtin-js-dir "$(WASIX_V8_BUILD_DIR)/node-lib" --mount "$(abspath $(WASIX_V8_BUILD_DIR))/icu:/usr/share/edge-icu" -e "$(WASIX_NAPI_SMOKE_JS)")"; \
 	printf '%s\n' "$$output"; \
 	printf '%s\n' "$$output" | grep -Fx "hello world!"
 
@@ -399,7 +417,7 @@ test-quickjs-only:
 	  --skip-tests=$(QUICKJS_SKIP_TESTS) \
 	  -j $(TEST_JOBS)
 
-test-wasix-quickjs-only:
+test-wasix-quickjs-only: $(QUICKJS_WASIX_STATIC_DATA)
 	WASIX_SLOW_TESTS="$(subst $(SPACE),$(COMMA),$(strip $(WASIX_SLOW_TESTS)))" \
 	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_SLOW_TEST_TIMEOUT_SCALE)" \
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
@@ -425,13 +443,26 @@ test-quickjs-intl:
 	done
 	@echo "[intl native] all locale tests passed"
 
-test-wasix-quickjs-intl:
+# edgejs-owned ICU data tests (tests/js), run by the WASIX intl lanes: WASIX
+# builds open ICU's individual data items from /usr/share/edge-icu instead of
+# an embedded blob, so these cover converters, collation, calendars, time
+# zones, plurals, segmentation and likely subtags against the staged tree.
+WASIX_INTL_DATA_TESTS := \
+  wasix-icu-data
+
+test-wasix-quickjs-intl: $(QUICKJS_WASIX_STATIC_DATA)
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
 		echo "error: $(WASMER_BIN) is required for test-wasix-quickjs-intl" >&2; exit 1; }
 	@set -e; for t in $(QUICKJS_INTL_TESTS); do \
 	  echo "[intl wasix] $$t"; \
 	  WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" \
 	    "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/test/$$t.js"; \
+	done
+	@set -e; for t in $(WASIX_INTL_DATA_TESTS); do \
+	  echo "[intl wasix] tests/js/$$t"; \
+	  WASMER_BIN="$(WASMER_BIN)" EDGEJS_ROOT="$(CURDIR)" WASIX_EDGEJS_PACKAGE_DIR="$(CURDIR)/quickjs-wasm" \
+	    WASIX_EDGEJS_WORKSPACE_DIRS="test,tests,lib,deps,assets,build-quickjs-wasix" \
+	    "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
 	done
 	@echo "[intl wasix] all locale tests passed"
 
@@ -454,19 +485,29 @@ test-lang: $(EDGE_BINARY)
 $(WASIX_EDGEJS_WASM):
 	./wasix/build-wasix.sh
 
-test-wasix-v8-only: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+$(WASIX_V8_STATIC_DATA): | $(WASIX_EDGEJS_WASM)
+	@test -f "$@" || { \
+		echo "error: missing staged WASIX static data: $@" >&2; \
+		echo "Rebuild with ./wasix/build-wasix.sh (stages node-lib/ and icu/ next to $(WASIX_EDGEJS_WASM))." >&2; \
+		exit 1; }
+
+test-wasix-v8-only: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	WASIX_SLOW_TESTS="$(subst $(SPACE),$(COMMA),$(strip $(WASIX_SLOW_TESTS)))" \
 	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_SLOW_TEST_TIMEOUT_SCALE)" \
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) $(WASIX_V8_LANE_ENV) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(EDGE_NODE_TEST_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS),$(subst $(SPACE),$(COMMA),$(strip $(V8_WASIX_SKIP_TESTS))) \
 	  -j $(TEST_JOBS)
 
-test-wasix-v8-intl: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+test-wasix-v8-intl: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
 		echo "error: $(WASIX_V8_RUNNER_BIN) is required for test-wasix-v8-intl" >&2; exit 1; }
 	@set -e; for t in $(QUICKJS_INTL_TESTS); do \
 	  echo "[intl v8 wasix] $$t"; \
 	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/test/$$t.js"; \
+	done
+	@set -e; for t in $(WASIX_INTL_DATA_TESTS); do \
+	  echo "[intl v8 wasix] tests/js/$$t"; \
+	  $(WASIX_V8_LANE_ENV) "$(WASIX_QUICKJS_NODE_TEST_RUNNER)" "$(CURDIR)/tests/js/$$t.js"; \
 	done
 	@echo "[intl v8 wasix] all locale tests passed"
 
@@ -479,7 +520,7 @@ WASIX_V8_LANG_TESTS := \
   guest-finalizer-memory \
   finalization-registry-fires
 
-test-wasix-v8-lang: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+test-wasix-v8-lang: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
 		echo "error: $(WASIX_V8_RUNNER_BIN) is required for test-wasix-v8-lang" >&2; exit 1; }
 	@set -e; for t in $(WASIX_V8_LANG_TESTS); do \
@@ -494,7 +535,7 @@ test-wasix-v8-lang: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
 WASIX_PROCESS_TESTS := \
   wasix-stdio-parent-close
 
-test-wasix-v8-process: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+test-wasix-v8-process: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
 		echo "error: $(WASIX_V8_RUNNER_BIN) is required for test-wasix-v8-process" >&2; exit 1; }
 	@set -e; for t in $(WASIX_PROCESS_TESTS); do \
@@ -503,7 +544,7 @@ test-wasix-v8-process: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
 	done
 	@echo "[process v8 wasix] all process tests passed"
 
-test-wasix-quickjs-process:
+test-wasix-quickjs-process: $(QUICKJS_WASIX_STATIC_DATA)
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
 		echo "error: $(WASMER_BIN) is required for test-wasix-quickjs-process" >&2; exit 1; }
 	@set -e; for t in $(WASIX_PROCESS_TESTS); do \
@@ -570,11 +611,25 @@ dist-only:
 		cp -R quickjs-wasm/etc "$(DIST_DIR)/etc"; \
 		cp -R quickjs-wasm/pnpm "$(DIST_DIR)/pnpm"; \
 		cp -R test/deps/npm "$(DIST_DIR)/npm"; \
+		for data in node-lib/internal/bootstrap/realm.js node-lib/.edge-builtin-catalog icu/icudt78l/res_index.res; do \
+			if [ ! -f "$(BUILD_DIR)/$$data" ]; then \
+				echo "error: missing staged WASIX static data $(BUILD_DIR)/$$data; rebuild $(BUILD_DIR) with its WASIX build script" >&2; \
+				exit 1; \
+			fi; \
+		done; \
+		cp -R "$(BUILD_DIR)/node-lib" "$(DIST_DIR)/node-lib" || exit 1; \
+		cp -R "$(BUILD_DIR)/icu" "$(DIST_DIR)/icu" || exit 1; \
 		mkdir -p "$(DIST_DIR)/ssl-certs"; \
 		cp "$(WASIX_SSL_CERTS_DIR)/cacert.pem" "$(DIST_DIR)/ssl-certs/cacert.pem"; \
 		cp "$(WASIX_SSL_CERTS_DIR)/cert.pem" "$(DIST_DIR)/ssl-certs/cert.pem"; \
 		cp -R "$(WASIX_SSL_CERTS_DIR)/certs" "$(DIST_DIR)/ssl-certs/certs"; \
-		perl -0pi -e 's#^source = ".*"#source = "./bin/edge"#m; s#^"/(etc|npm|pnpm)" = ".*"#"/$$1" = "./$$1"#mg; s#^"/usr/local/ssl" = ".*"#"/usr/local/ssl" = "./ssl-certs"#m' "$(DIST_DIR)/wasmer.toml"; \
+		perl -0pi -e 's#^source = ".*"#source = "./bin/edge"#m; s#^"/(etc|npm|pnpm)" = ".*"#"/$$1" = "./$$1"#mg; s#^"/usr/local/ssl" = ".*"#"/usr/local/ssl" = "./ssl-certs"#m; s#^"/node-lib" = ".*"#"/node-lib" = "./node-lib"#mg; s#^"/usr/share/edge-icu" = ".*"#"/usr/share/edge-icu" = "./icu"#mg' "$(DIST_DIR)/wasmer.toml"; \
+		for mapping in '"/node-lib" = "./node-lib"' '"/usr/share/edge-icu" = "./icu"'; do \
+			if [ "$$(grep -cFx "$$mapping" "$(DIST_DIR)/wasmer.toml")" != 1 ]; then \
+				echo "error: $(DIST_DIR)/wasmer.toml must contain exactly one $$mapping [fs] entry" >&2; \
+				exit 1; \
+			fi; \
+		done; \
 	else \
 		cp "$(EDGE_BINARY)" "$(DIST_BIN_DIR)/edge"; \
 		cp "$(EDGEENV_BINARY)" "$(DIST_BIN_DIR)/edgeenv"; \
@@ -593,7 +648,7 @@ dist-only:
 		done; \
 	fi
 	if [ "$(BUILD_DIR)" = "build-wasix" ] || [ "$(BUILD_DIR)" = "$(BUILD_QUICKJS_WASIX_DIR)" ]; then \
-		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml ssl-certs etc npm pnpm; \
+		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md wasmer.toml ssl-certs etc npm pnpm node-lib icu; \
 	else \
 		cd $(DIST_DIR) && zip -r ../$(ZIP_NAME) bin bin-compat README.md; \
 	fi
@@ -630,7 +685,7 @@ framework-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
 		$(MAKE) framework-test-run $(FRAMEWORK_TEST_SELECTOR)
 
-framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
+framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM) $(QUICKJS_WASIX_STATIC_DATA)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
 		echo "error: $(WASMER_BIN) is required for framework-test-quickjs-wasix" >&2; \
@@ -649,7 +704,7 @@ framework-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
 # unclean-exit and js-next-ssr/js-next-standalone. Only the docusaurus static sites
 # stay skipped here -- they fail to build on the Node.js reference itself (build
 # tooling), which QuickJS also skips via FRAMEWORK_TEST_NODE_SKIP.
-framework-test-v8-wasix: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+framework-test-v8-wasix: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
 		echo "error: $(WASIX_V8_RUNNER_BIN) is required for framework-test-v8-wasix" >&2; \
@@ -693,7 +748,7 @@ standalone-build-test: $(EDGE_BINARY) test-framework-install
 	@SYMLINK_TARGET="$(abspath $(EDGE_BINARY))" \
 		"$(EDGE_BINARY)" "$(STANDALONE_BUILD_TEST_SCRIPT)" test $(FRAMEWORK_TEST_SELECTOR)
 
-standalone-build-test-v8-wasix: $(WASIX_EDGEJS_WASM) build-napi-wasmer-cli
+standalone-build-test-v8-wasix: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
 		echo "error: $(WASIX_V8_RUNNER_BIN) is required for standalone-build-test-v8-wasix" >&2; \
@@ -712,7 +767,7 @@ standalone-build-test-quickjs-native: $(QUICKJS_EDGE_BINARY)
 		FRAMEWORK_TEST_RUNNER_LABEL='EdgeJS QuickJS Native' \
 		$(MAKE) standalone-build-test-run $(FRAMEWORK_TEST_SELECTOR)
 
-standalone-build-test-quickjs-wasix: $(QUICKJS_WASIX_WASM)
+standalone-build-test-quickjs-wasix: $(QUICKJS_WASIX_WASM) $(QUICKJS_WASIX_STATIC_DATA)
 	@chmod +x "$(WASIX_FRAMEWORK_RUNNER)"
 	@command -v "$(WASMER_BIN)" >/dev/null 2>&1 || { \
 		echo "error: $(WASMER_BIN) is required for standalone-build-test-quickjs-wasix" >&2; \

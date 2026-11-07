@@ -123,6 +123,12 @@ duplicating issue details.
 
 ### 🟢 [006_edge_command_package_naming.md](wasmer-deploy/006_edge_command_package_naming.md): canonical Edge command and package executable naming
 
+### 🟠 [007_static_data_out_of_linear_memory.md](wasmer-deploy/007_static_data_out_of_linear_memory.md): WASIX static data out of guest linear memory
+
+Builtin JS and ICU data move from passive data segments into the package
+filesystem, so each instance's memory drops from 51.6 MB to about 11 MB
+(wasmer-sdk#547).
+
 ### ▶️ [021_quickjs_upstream_sync.md](node-compat/napi/021_quickjs_upstream_sync.md): QuickJS upstream synchronization compatibility
 
 Overlapping coroutine GC, ArrayBuffer ownership, and lazy stack trace integration

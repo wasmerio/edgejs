@@ -6,27 +6,35 @@ include_guard(GLOBAL)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-set(EDGE_ICU_DATA_BZ2 "${EDGE_ICU_ROOT}/source/data/in/icudt78l.dat.bz2")
-set(EDGE_ICU_EMBED_C "${CMAKE_CURRENT_BINARY_DIR}/generated/ubi_icudata.c")
-add_custom_command(
-  OUTPUT "${EDGE_ICU_EMBED_C}"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
-  COMMAND
-    "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/cmake/embed_binary.py"
-    --input "${EDGE_ICU_DATA_BZ2}"
-    --output "${EDGE_ICU_EMBED_C}"
-    --symbol "ubi_icudt78l_dat"
-    --compression bz2
-  DEPENDS
-    "${PROJECT_ROOT}/cmake/embed_binary.py"
-    "${EDGE_ICU_DATA_BZ2}"
-  VERBATIM
-)
+if(EDGE_EMBED_ICU_DATA)
+  set(EDGE_ICU_DATA_BZ2 "${EDGE_ICU_ROOT}/source/data/in/icudt78l.dat.bz2")
+  set(EDGE_ICU_EMBED_C "${CMAKE_CURRENT_BINARY_DIR}/generated/ubi_icudata.c")
+  add_custom_command(
+    OUTPUT "${EDGE_ICU_EMBED_C}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND
+      "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/cmake/embed_binary.py"
+      --input "${EDGE_ICU_DATA_BZ2}"
+      --output "${EDGE_ICU_EMBED_C}"
+      --symbol "ubi_icudt78l_dat"
+      --compression bz2
+    DEPENDS
+      "${PROJECT_ROOT}/cmake/embed_binary.py"
+      "${EDGE_ICU_DATA_BZ2}"
+    VERBATIM
+  )
 
-add_library(edge_icu_embedded_data STATIC
-  "${EDGE_ICU_EMBED_C}"
-)
-set_target_properties(edge_icu_embedded_data PROPERTIES LINKER_LANGUAGE C)
+  add_library(edge_icu_embedded_data STATIC
+    "${EDGE_ICU_EMBED_C}"
+  )
+  set_target_properties(edge_icu_embedded_data PROPERTIES LINKER_LANGUAGE C)
+else()
+  # Lazy, file-backed ICU data: the package ships ICU's individual items
+  # (scripts/extract_icu_data.py) and ICU opens only the ones it needs from
+  # u_getDataDirectory() (src/edge_icu_data.cc). This keeps ~33 MB of passive
+  # data segments out of every instance's linear memory.
+  add_library(edge_icu_embedded_data INTERFACE)
+endif()
 
 add_library(edge_icu_common STATIC
   ${EDGE_ICU_COMMON_SOURCES}
@@ -39,6 +47,11 @@ target_include_directories(edge_icu_common
 )
 target_compile_definitions(edge_icu_common
   PRIVATE
+    # Read data files with stdio instead of mmap. WASIX's emulated mmap rounds
+    # every mapping up to 64 KiB of linear memory and ICU keeps them for the
+    # life of the process, so the ~850 small items an Intl-heavy program opens
+    # would cost several times their size. Has no effect on embedded data.
+    U_HAVE_MMAP=0
     HAVE_DLOPEN=0
     UCONFIG_ONLY_HTML_CONVERSION=1
     U_CHARSET_IS_UTF8=1

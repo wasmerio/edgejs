@@ -6,7 +6,7 @@
 #include "node_api.h"
 
 // Installs the ICU-backed Intl constructors onto globalThis.Intl. Assumes the
-// embedded ICU data has already been activated (see EdgeActivateIcuData); each
+// ICU data has already been activated (see EdgeActivateIcuData); each
 // constructor is backed by the linked edge_icu_i18n library. Adds to an existing
 // Intl object if present, otherwise creates one. Returns false and writes to
 // *error_out (when non-null) on a hard failure.

@@ -52,7 +52,10 @@ The GitHub assets are:
 WASIX ZIPs contain the same canonical package metadata and files used for
 registry publication. Source development manifest names are normalized in the
 release outputs to `wasmer/edgejs` and `wasmer/edgejs-quickjs`. Both packages
-contain the `edge` module and use `bin/edge` as the executable.
+contain the `edge` module and use `bin/edge` as the executable. They also
+contain the staged `node-lib/` (builtin JS) and `icu/` (ICU item files)
+directories, mapped to `/node-lib` and `/usr/share/edge-icu`. The WASIX module
+does not embed this data, so a package without them cannot bootstrap.
 
 ## Recover a failed release
 

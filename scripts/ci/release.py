@@ -30,6 +30,14 @@ ASSETS = (
 PACKAGES = {"edge-wasix.zip": "edgejs", "edge-quickjs-wasix.zip": "edgejs-quickjs"}
 REGISTRIES = {"wasmer.io": "https://registry.wasmer.io/graphql",
               "wasmer.wtf": "https://registry.wasmer.wtf/graphql"}
+# WASIX builds read builtin JS and ICU data from the package filesystem instead
+# of embedding them in bin/edge, so a package must map both staged trees.
+REQUIRED_FS = {"/node-lib": "./node-lib", "/usr/share/edge-icu": "./icu"}
+CATALOG_MEMBER = "node-lib/.edge-builtin-catalog"
+REQUIRED_MEMBERS = (CATALOG_MEMBER, "node-lib/internal/bootstrap/realm.js",
+                    "icu/icudt78l/res_index.res")
+# Embedded builtin JS plus ICU data used to put ~45 MB into the data section.
+MAX_DATA_SECTION_BYTES = 4 * 1024 * 1024
 
 
 def stable_version(value):
@@ -66,17 +74,68 @@ def safe_member(info):
         raise ValueError(f"Symlink in release archive: {info.filename}")
 
 
-def package_manifest(content, name, version):
-    data = tomllib.loads(content)
+def read_uleb(data, offset):
+    value = shift = 0
+    for _ in range(10):
+        if offset >= len(data):
+            raise ValueError("Truncated WebAssembly module")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            return value, offset
+        shift += 7
+    raise ValueError("Invalid LEB128 value in WebAssembly module")
+
+
+def wasm_data_section_bytes(data):
+    """Return the payload size of the data section (id 11), summed if repeated."""
+    if not data.startswith(b"\0asm\x01\0\0\0"):
+        raise ValueError("bin/edge is not a WebAssembly 1.0 module")
+    offset, total = 8, 0
+    while offset < len(data):
+        section_id = data[offset]
+        size, offset = read_uleb(data, offset + 1)
+        if offset + size > len(data):
+            raise ValueError("Truncated WebAssembly section")
+        if section_id == 11:
+            total += size
+        offset += size
+    return total
+
+
+def check_wasix_edge(wasm, label):
+    size = wasm_data_section_bytes(wasm)
+    if size >= MAX_DATA_SECTION_BYTES:
+        raise ValueError(f"{label}: bin/edge data section is {size} bytes (limit {MAX_DATA_SECTION_BYTES}); "
+                         "builtin JS or ICU data is embedded instead of staged")
+
+
+def check_catalog(content, label):
+    if not re.fullmatch(rb"[0-9a-f]{64}\n?", content):
+        raise ValueError(f"{label}: {CATALOG_MEMBER} must hold a sha256 hex digest")
+
+
+def validate_manifest(data):
     if data["package"].get("entrypoint") != "edge":
         raise ValueError("WASIX package must use the edge entrypoint")
     if len(data.get("module", [])) != 1 or data["module"][0]["name"] != "edge":
         raise ValueError("WASIX package must contain exactly one edge module")
     if data["module"][0]["source"] != "./bin/edge":
         raise ValueError("WASIX package must use ./bin/edge")
-    for source in data.get("fs", {}).values():
+    fs = data.get("fs", {})
+    for source in fs.values():
         if PurePosixPath(source).is_absolute() or ".." in PurePosixPath(source).parts:
             raise ValueError(f"Package filesystem source escapes distribution: {source}")
+    for guest, source in REQUIRED_FS.items():
+        if guest not in fs:
+            raise ValueError(f"WASIX package must map {guest} to {source}")
+        if fs[guest] != source:
+            raise ValueError(f"WASIX package must map {guest} to {source}, not {fs[guest]}")
+
+
+def package_manifest(content, name, version):
+    validate_manifest(tomllib.loads(content))
     # Only rewrite release output metadata. Preserve all commands, annotations,
     # dependency versions, and filesystem layout from the built distribution.
     start = re.search(r"^\[package\]\s*$", content, re.M)
@@ -117,6 +176,11 @@ def prepare(assets, version):
             if filename in PACKAGES:
                 name = PACKAGES[filename]
                 manifest = package_manifest(source.read("wasmer.toml").decode(), name, version)
+                for member in REQUIRED_MEMBERS:
+                    if member not in names:
+                        raise ValueError(f"{filename} is missing {member}")
+                check_catalog(source.read(CATALOG_MEMBER), filename)
+                check_wasix_edge(source.read("bin/edge"), filename)
                 temp = archive.with_suffix(".zip.tmp")
                 with zipfile.ZipFile(temp, "w") as target:
                     for info in infos:
@@ -128,6 +192,22 @@ def prepare(assets, version):
                 source.extractall(package_root / PACKAGES[filename])
     sums = "".join(f"{digest(assets / filename)}  {filename}\n" for filename in ASSETS)
     (assets / "SHA256SUMS").write_text(sums)
+
+
+def check_dist(path):
+    """Validate an unpacked WASIX distribution directory before publishing it."""
+    label = str(path)
+    validate_manifest(tomllib.loads((path / "wasmer.toml").read_text()))
+    for member in ("bin/edge", *REQUIRED_MEMBERS):
+        file = path / member
+        if file.is_symlink() or not file.is_file():
+            raise ValueError(f"{label} is missing {member}")
+    for tree in ("node-lib", "icu"):
+        links = [str(item.relative_to(path)) for item in (path / tree).rglob("*") if item.is_symlink()]
+        if links:
+            raise ValueError(f"{label} has symlinks in {tree}: {links[:5]}")
+    check_catalog((path / CATALOG_MEMBER).read_bytes(), label)
+    check_wasix_edge((path / "bin/edge").read_bytes(), label)
 
 
 def digest(path):
@@ -198,11 +278,16 @@ def main():
     registry.add_argument("--packages", type=Path, required=True)
     registry.add_argument("--registry", choices=REGISTRIES, required=True)
     registry.add_argument("--version", required=True)
+    dist = commands.add_parser("check-dist")
+    dist.add_argument("--dist", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "version":
         print(source_version(args.tag))
     elif args.command == "prepare":
         prepare(args.assets, args.version)
+    elif args.command == "check-dist":
+        check_dist(args.dist)
+        print(f"WASIX distribution OK: {args.dist}")
     else:
         publish(args.packages, args.registry, args.version)
 

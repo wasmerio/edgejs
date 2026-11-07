@@ -24,6 +24,8 @@ class Case:
     expected_returncode: int = 0
     expected_stderr_contains: str = ""
     alternate_outcomes: tuple[tuple[int, str], ...] = ()
+    # Extra guest environment variables, passed as `wasmer run --env K=V`.
+    env: tuple[tuple[str, str], ...] = ()
 
 
 def sanitize_stderr(stderr: str) -> str:
@@ -36,18 +38,23 @@ def sanitize_stderr(stderr: str) -> str:
     return "\n".join(lines)
 
 
-def run_case(wasmer_bin: str, package_dir: Path, timeout: int, case: Case) -> None:
-    name = case.name
+def build_command(wasmer_bin: str, case: Case) -> list[str]:
     cmd = [
         wasmer_bin,
         "run",
         ".",
         "--experimental-napi",
         "--net",
-        "--",
-        "-e",
-        case.script,
     ]
+    for key, value in case.env:
+        cmd.extend(["--env", f"{key}={value}"])
+    cmd.extend(["--", "-e", case.script])
+    return cmd
+
+
+def run_case(wasmer_bin: str, package_dir: Path, timeout: int, case: Case) -> None:
+    name = case.name
+    cmd = build_command(wasmer_bin, case)
 
     try:
         completed = subprocess.run(
@@ -111,7 +118,7 @@ def run_case(wasmer_bin: str, package_dir: Path, timeout: int, case: Case) -> No
     print(f"[ok] {name}: {stdout.strip() or completed.returncode}")
 
 
-def build_cases(host: str, include_network: bool) -> list[Case]:
+def build_cases(host: str, include_network: bool, external_static_data: bool = True) -> list[Case]:
     cases = [
         Case(
             name="process.versions.webcontainer",
@@ -170,7 +177,51 @@ def build_cases(host: str, include_network: bool) -> list[Case]:
             script="process.on('SIGTERM', () => { console.log('HANDLED'); process.exit(0); }); process.kill(process.pid, 'SIGTERM'); setTimeout(() => {}, 5000);",
             expected_stdout="HANDLED\n",
         ),
+        # WASIX packages read builtin JS from /node-lib and ICU's individual
+        # data items from /usr/share/edge-icu (wasmer.toml [fs]) instead of
+        # embedding them. These cases fail if either tree is not mounted or is
+        # out of date: without ICU data, collation and month names fall back to
+        # root/English and legacy decoders are missing.
+        Case(
+            name="Intl.Collator de and DateTimeFormat de use ICU data",
+            script="const s = ['z', '\\u00e4', 'a'].sort(new Intl.Collator('de').compare).join(','); const m = new Intl.DateTimeFormat('de', { month: 'long', timeZone: 'UTC' }).format(0); if (s !== 'a,\\u00e4,z' || m !== 'Januar') throw new Error(`unexpected ICU result: ${JSON.stringify([s, m])}`); console.log('INTL DE OK');",
+            expected_stdout="INTL DE OK\n",
+        ),
+        Case(
+            name="TextDecoder shift_jis uses ICU converter data",
+            script="const s = new TextDecoder('shift_jis').decode(new Uint8Array([0x93, 0xfa, 0x96, 0x7b])); if (s !== '\\u65e5\\u672c') throw new Error(`unexpected shift_jis decode: ${JSON.stringify(s)}`); console.log('SHIFT_JIS OK');",
+            expected_stdout="SHIFT_JIS OK\n",
+        ),
+        # internal/deps sources are served from /node-lib/internal/deps. The
+        # natives entry may be an accessor (read lazily from the filesystem) or
+        # a cached data property, so read it through its descriptor.
+        Case(
+            name="process.binding('natives') reads internal/deps sources",
+            script="const natives = process.binding('natives'); const id = 'internal/deps/acorn/acorn/dist/acorn'; const d = Object.getOwnPropertyDescriptor(natives, id); if (!d) throw new Error(`missing natives entry ${id}`); const src = 'value' in d ? d.value : d.get.call({}); if (typeof src !== 'string' || src.length === 0) throw new Error(`empty natives source for ${id}`); console.log('NATIVES OK');",
+            expected_stdout="NATIVES OK\n",
+        ),
+        # fetch() lazily loads internal/deps/undici from /node-lib; a data: URL
+        # keeps the check offline.
+        Case(
+            name="fetch data: URL loads undici from /node-lib",
+            script="fetch('data:text/plain,edge').then((r) => r.text()).then((t) => console.log('FETCH DATA', t));",
+            expected_stdout="FETCH DATA edge\n",
+        ),
     ]
+
+    if external_static_data:
+        # An ICU data directory override that holds no ICU data must be
+        # reported on stderr, naming the directory, and fall back to the
+        # package's /usr/share/edge-icu so ICU-backed decoding keeps working.
+        # Builds that embed ICU (EDGE_WASIX_EMBED_STATIC_DATA=1) ignore the
+        # variable.
+        cases.append(Case(
+            name="unusable ICU data directory falls back to the package mount",
+            script="console.log(new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0])).charCodeAt(0));",
+            expected_stdout="12354\n",
+            expected_stderr_contains="/nonexistent-edge-icu",
+            env=(("EDGE_ICU_DATA", "/nonexistent-edge-icu"),),
+        ))
 
     if include_network:
         cases.extend([
@@ -222,13 +273,22 @@ def main() -> int:
         action="store_true",
         help="Run outbound HTTP/TLS smoke checks in addition to deterministic local checks.",
     )
+    parser.add_argument(
+        "--embedded-static-data",
+        action="store_true",
+        help="The package embeds builtin JS and ICU data (EDGE_WASIX_EMBED_STATIC_DATA=1); skip checks that only apply to filesystem-backed data.",
+    )
     args = parser.parse_args()
 
     package_dir = Path(args.package_dir).resolve()
     if not (package_dir / "wasmer.toml").is_file():
         raise RuntimeError(f"missing wasmer.toml in {package_dir}")
 
-    cases = build_cases(args.https_host, include_network=args.include_network)
+    cases = build_cases(
+        args.https_host,
+        include_network=args.include_network,
+        external_static_data=not args.embedded_static_data,
+    )
 
     for case in cases:
         run_case(args.wasmer_bin, package_dir, args.timeout, case)
