@@ -16,6 +16,37 @@ build-quickjs-wasix/edge.wasm
 build-quickjs-wasix/edgejs.wasm
 ```
 
+It also stages the static data that the wasm reads at runtime instead of
+embedding it:
+
+```text
+build-quickjs-wasix/node-lib/   builtin JS, mounted at /node-lib
+build-quickjs-wasix/icu/        ICU 78 item files (icudt78l/), mounted at /usr/share/edge-icu
+```
+
+This keeps about 45 MB of data out of each instance's linear memory
+(wasmer-sdk#547). `quickjs-wasm/wasmer.toml` maps both directories, so
+`wasmer run quickjs-wasm` works as-is. To run the raw module, mount them
+yourself:
+
+```sh
+wasmer run --stack-size 4194304 \
+  --volume build-quickjs-wasix/node-lib:/node-lib \
+  --volume build-quickjs-wasix/icu:/usr/share/edge-icu \
+  build-quickjs-wasix/edgejs.wasm -- -e "console.log('hello')"
+```
+
+`EDGEJS_LIB_DIR` overrides the guest lib root. `--icu-data-dir`,
+`EDGE_ICU_DATA`, `NODE_ICU_DATA` or `ICU_DATA` (checked in that order)
+override the guest ICU directory, which must hold `icudt78l/` or
+`icudt78l.dat`; an unusable setting falls back to `/usr/share/edge-icu`
+with a warning. Build with `EDGE_WASIX_EMBED_STATIC_DATA=1` to embed both
+again and get a standalone wasm in `build-quickjs-wasix-embedded/`.
+
+A package `[fs]` entry wins over a `wasmer run --volume` at the same guest
+path, so to point `wasmer run quickjs-wasm` at a different tree, mount it
+elsewhere and set `EDGEJS_LIB_DIR` / `EDGE_ICU_DATA` to that guest path.
+
 The build script verifies that the final wasm module does not import N-API
 symbols such as `napi_*`, `node_api_*`, or `unofficial_napi_*`.
 

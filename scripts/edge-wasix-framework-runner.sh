@@ -40,6 +40,17 @@ runner_bin="${WASIX_RUNNER_BIN:-${WASMER_BIN:-wasmer}}"
 package_dir="${WASIX_EDGEJS_PACKAGE_DIR:-${edgejs_root}/quickjs-wasm}"
 wasm_path="${WASIX_EDGEJS_WASM:-${edgejs_root}/build-wasix/edgejs.wasm}"
 guest_app_root="${WASIX_FRAMEWORK_GUEST_ROOT:-/app}"
+# WASIX builds read builtin JS and ICU data from staged trees next to
+# edgejs.wasm (see scripts/stage_wasix_static_data.py). The napi runner gets
+# them explicitly; the wasmer runner gets them from the package's wasmer.toml
+# [fs] (/node-lib, /usr/share/edge-icu), which wins over a --volume at the same
+# guest path, so explicit overrides are mounted elsewhere and selected through
+# EDGEJS_LIB_DIR / EDGE_ICU_DATA. Same contract as edge-wasix-node-runner.sh.
+wasm_build_dir="$(dirname "${wasm_path}")"
+node_lib_override="${WASIX_EDGEJS_NODE_LIB:-}"
+icu_data_override="${WASIX_EDGEJS_ICU_DATA:-}"
+guest_icu_data_dir="/usr/share/edge-icu"
+guest_override_root="/edgejs-static-data-override"
 # QuickJS's guest-stack guard needs enough host stack to raise a JS exception.
 # Wasmer's 1 MiB default can trap first with LLVM/amd64; retain the override.
 wasmer_stack_args=(--stack-size "${WASMER_STACK_SIZE:-4194304}")
@@ -112,11 +123,19 @@ if [[ -d "${package_dir}/etc" ]]; then
 fi
 
 if [[ "${runner_kind}" == "napi" ]]; then
+  node_lib_dir="${node_lib_override:-${wasm_build_dir}/node-lib}"
+  icu_data_dir="${icu_data_override:-${wasm_build_dir}/icu}"
+  if [[ ! -d "${node_lib_dir}" || ! -d "${icu_data_dir}" ]]; then
+    printf 'error: staged WASIX static data missing (node-lib: %s, icu: %s); rebuild with ./wasix/build-wasix.sh\n' \
+      "${node_lib_dir}" "${icu_data_dir}" >&2
+    exit 1
+  fi
+  mount_specs+=("${icu_data_dir}:${guest_icu_data_dir}")
   runner_args=(
     "${runner_bin}"
     "${wasm_path}"
     --program-name edge
-    --builtin-js-dir "${edgejs_root}/lib"
+    --builtin-js-dir "${node_lib_dir}"
     --cwd "${guest_cwd}"
   )
   for env_spec in "${env_specs[@]}"; do
@@ -134,6 +153,15 @@ if [[ "${runner_kind}" == "napi" ]]; then
   fi
 
   exec "${runner_args[@]}"
+fi
+
+if [[ -n "${node_lib_override}" ]]; then
+  mount_specs+=("${node_lib_override}:${guest_override_root}/node-lib")
+  env_specs+=("EDGEJS_LIB_DIR=${guest_override_root}/node-lib")
+fi
+if [[ -n "${icu_data_override}" ]]; then
+  mount_specs+=("${icu_data_override}:${guest_override_root}/icu")
+  env_specs+=("EDGE_ICU_DATA=${guest_override_root}/icu")
 fi
 
 wasmer_env_args=()

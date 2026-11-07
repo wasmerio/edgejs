@@ -8,6 +8,18 @@ function(edge_configure_options)
     "Deprecated alias. Use EDGE_NAPI_PROVIDER=imports."
     OFF
   )
+  # Static data that native builds keep in the read-only executable image.
+  # Wasm has no read-only segment, so embedded data is copied into every
+  # instance's linear memory; WASIX builds turn these OFF and ship the data in
+  # the package filesystem instead (see wasix/build-wasix.sh).
+  option(EDGE_EMBED_BUILTIN_SOURCES
+    "Embed builtin JS sources (lib/ and deps/) in the binary; OFF reads them from the lib root (/node-lib or EDGEJS_LIB_DIR)"
+    ON
+  )
+  option(EDGE_EMBED_ICU_DATA
+    "Embed the ICU common data blob; OFF loads individual ICU items lazily from a data directory (/usr/share/edge-icu or EDGE_ICU_DATA)"
+    ON
+  )
   option(EDGE_ALLOW_UNDEFINED_IMPORTS
     "Allow undefined imports at link time (useful for external runtime deps in wasm/wasix)"
     OFF
@@ -72,6 +84,20 @@ function(edge_configure_options)
     set(EDGE_IS_WASIX_TARGET ON)
   endif()
 
+  if(NOT EDGE_EMBED_BUILTIN_SOURCES OR NOT EDGE_EMBED_ICU_DATA)
+    # The binary depends on data staged by scripts/stage_wasix_static_data.py.
+    set(_edge_static_data_note
+      "Edge static data: builtin JS embedded=${EDGE_EMBED_BUILTIN_SOURCES}, ICU data embedded=${EDGE_EMBED_ICU_DATA}")
+    if(EDGE_IS_WASIX_TARGET)
+      message(STATUS "${_edge_static_data_note}")
+    else()
+      message(WARNING
+        "${_edge_static_data_note}. Native builds normally embed both; this "
+        "binary needs EDGEJS_LIB_DIR / EDGE_ICU_DATA pointing at a tree staged "
+        "by scripts/stage_wasix_static_data.py.")
+    endif()
+  endif()
+
   set(_edge_webcontainer_version_default "")
   if(EDGE_IS_WASIX_TARGET)
     execute_process(
@@ -112,6 +138,8 @@ function(edge_configure_options)
   set(EDGE_SHARED_OPENSSL_LIBPATH "${EDGE_SHARED_OPENSSL_LIBPATH}" PARENT_SCOPE)
   set(EDGE_SHARED_OPENSSL_LIBNAME "${EDGE_SHARED_OPENSSL_LIBNAME}" PARENT_SCOPE)
   set(EDGE_REPO_LOCAL_V8_DIST_ROOT "${EDGE_REPO_LOCAL_V8_DIST_ROOT}" PARENT_SCOPE)
+  set(EDGE_EMBED_BUILTIN_SOURCES "${EDGE_EMBED_BUILTIN_SOURCES}" PARENT_SCOPE)
+  set(EDGE_EMBED_ICU_DATA "${EDGE_EMBED_ICU_DATA}" PARENT_SCOPE)
   set(EDGE_IS_WASIX_TARGET "${EDGE_IS_WASIX_TARGET}" PARENT_SCOPE)
   set(EDGE_WEBCONTAINER_VERSION "${EDGE_WEBCONTAINER_VERSION}" PARENT_SCOPE)
 endfunction()

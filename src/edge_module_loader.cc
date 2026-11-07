@@ -1210,10 +1210,18 @@ static napi_value BuiltinsCompileFunctionCallback(napi_env env, napi_callback_in
   }
 
   std::string source;
-  if (!builtin_catalog::TryReadBuiltinSource(id, &source)) {
-    const std::string msg = "No such built-in module: " + id;
-    napi_throw_error(env, nullptr, msg.c_str());
-    return nullptr;
+  std::string read_error;
+  switch (builtin_catalog::ReadBuiltinSource(id, &source, &read_error)) {
+    case builtin_catalog::SourceReadStatus::kOk:
+      break;
+    case builtin_catalog::SourceReadStatus::kIoError:
+      napi_throw_error(env, nullptr, read_error.c_str());
+      return nullptr;
+    case builtin_catalog::SourceReadStatus::kNotBuiltin: {
+      const std::string msg = "No such built-in module: " + id;
+      napi_throw_error(env, nullptr, msg.c_str());
+      return nullptr;
+    }
   }
   napi_value code = nullptr;
   if (napi_create_string_utf8(env, source.c_str(), source.size(), &code) != napi_ok || code == nullptr) {
@@ -1310,7 +1318,14 @@ static napi_value BuiltinsNativesSourceGetter(napi_env env, napi_callback_info i
 
   const std::string* id = static_cast<const std::string*>(data);
   std::string source;
-  if (!builtin_catalog::TryReadBuiltinSource(*id, &source)) {
+  std::string read_error;
+  const builtin_catalog::SourceReadStatus read_status =
+      builtin_catalog::ReadBuiltinSource(*id, &source, &read_error);
+  if (read_status == builtin_catalog::SourceReadStatus::kIoError) {
+    napi_throw_error(env, nullptr, read_error.c_str());
+    return nullptr;
+  }
+  if (read_status != builtin_catalog::SourceReadStatus::kOk) {
     napi_value undefined = nullptr;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -1321,9 +1336,21 @@ static napi_value BuiltinsNativesSourceGetter(napi_env env, napi_callback_info i
     return nullptr;
   }
 
-  // Cache string value on first access to avoid repeated file reads.
+  // Replace the accessor with a data property holding the source, so later
+  // reads neither re-read the file nor re-create the string. (The accessor has
+  // no setter, so a plain property assignment would not stick.)
   if (this_arg != nullptr) {
-    napi_set_named_property(env, this_arg, id->c_str(), source_value);
+    napi_property_descriptor cached{
+        id->c_str(),
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        source_value,
+        static_cast<napi_property_attributes>(napi_writable | napi_enumerable | napi_configurable),
+        nullptr,
+    };
+    napi_define_properties(env, this_arg, 1, &cached);
   }
   return source_value;
 }
@@ -1684,8 +1711,14 @@ static bool ExecuteBuiltinFromNative(napi_env env, ModuleLoaderState* state, con
   if (env == nullptr || state == nullptr || id.empty()) return false;
 
   std::string source;
-  if (!builtin_catalog::TryReadBuiltinSource(id, &source)) {
-    return ThrowNativeBuiltinExecutionError(env, id, "builtin source could not be read");
+  std::string read_error;
+  switch (builtin_catalog::ReadBuiltinSource(id, &source, &read_error)) {
+    case builtin_catalog::SourceReadStatus::kOk:
+      break;
+    case builtin_catalog::SourceReadStatus::kIoError:
+      return ThrowNativeBuiltinExecutionError(env, id, read_error);
+    case builtin_catalog::SourceReadStatus::kNotBuiltin:
+      return ThrowNativeBuiltinExecutionError(env, id, "builtin source could not be read");
   }
 
   napi_value params = nullptr;

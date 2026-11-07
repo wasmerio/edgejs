@@ -6,10 +6,25 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build-wasix"
 TOOLCHAIN_FILE="${PROJECT_ROOT}/wasix/wasix-toolchain.cmake"
 OPENSSL_WASIX_DIR="${PROJECT_ROOT}/deps/openssl-wasix"
-OPENSSL_EXCEPTION_MODE_FILE="${BUILD_DIR}/.openssl-build-abi"
+# Records the ABI of the shared deps/openssl-wasix libraries, so it stays in
+# build-wasix even when building the embedded variant below.
+OPENSSL_EXCEPTION_MODE_FILE="${PROJECT_ROOT}/build-wasix/.openssl-build-abi"
 OPENSSL_BUILD_ABI="${WASIXCC_WASM_EXCEPTIONS:-exnref}-no-wide-arithmetic"
 VALIDATE_WASM="${PROJECT_ROOT}/wasix/validate-imported-napi-wasm.py"
 BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
+STAGE_STATIC_DATA="${PROJECT_ROOT}/scripts/stage_wasix_static_data.py"
+
+# Builtin JS and ICU data are read from the package filesystem (/node-lib and
+# /usr/share/edge-icu, staged into ${BUILD_DIR}/node-lib and ${BUILD_DIR}/icu)
+# instead of being embedded: wasm copies every data segment into each
+# instance's linear memory. EDGE_WASIX_EMBED_STATIC_DATA=1 builds a standalone
+# edge.wasm that embeds both, in its own build directory.
+if [[ "${EDGE_WASIX_EMBED_STATIC_DATA:-0}" == "1" ]]; then
+  EMBED_STATIC_DATA=ON
+  BUILD_DIR="${PROJECT_ROOT}/build-wasix-embedded"
+else
+  EMBED_STATIC_DATA=OFF
+fi
 
 # Chrome and current Node support the standardized exnref exception-handling
 # proposal, so build the guest and every static dependency with that ABI.
@@ -48,7 +63,7 @@ optimize_wasm() {
 }
 
 "${PROJECT_ROOT}/wasix/setup-wasix-deps.sh"
-mkdir -p "${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}" "$(dirname "${OPENSSL_EXCEPTION_MODE_FILE}")"
 
 if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
   rm -f "${BUILD_DIR}/CMakeCache.txt"
@@ -102,6 +117,8 @@ cmake \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
   -DEDGE_NAPI_PROVIDER=imports \
   -DEDGE_BUILD_CLI=ON \
+  -DEDGE_EMBED_BUILTIN_SOURCES="${EMBED_STATIC_DATA}" \
+  -DEDGE_EMBED_ICU_DATA="${EMBED_STATIC_DATA}" \
   -DBUILD_TESTING=OFF
 
 # This artifact deliberately leaves N-API unresolved. The host supplies these
@@ -110,6 +127,13 @@ grep -Fxq 'EDGE_NAPI_PROVIDER:STRING=imports' "${BUILD_DIR}/CMakeCache.txt" || {
   echo "error: WASIX build did not configure EDGE_NAPI_PROVIDER=imports" >&2
   exit 1
 }
+for static_data_option in EDGE_EMBED_BUILTIN_SOURCES EDGE_EMBED_ICU_DATA; do
+  grep -Fxq "${static_data_option}:BOOL=${EMBED_STATIC_DATA}" "${BUILD_DIR}/CMakeCache.txt" || {
+    echo "error: WASIX build did not configure ${static_data_option}=${EMBED_STATIC_DATA}" >&2
+    exit 1
+  }
+done
+unset static_data_option
 
 cmake --build "${BUILD_DIR}" -j4
 
@@ -124,6 +148,13 @@ else
   exit 1
 fi
 
+# Stage /node-lib and /usr/share/edge-icu for the options that are OFF.
+python3 "${STAGE_STATIC_DATA}" \
+  --project-root "${PROJECT_ROOT}" \
+  --build-dir "${BUILD_DIR}"
+
+# With both static-data options OFF this also enforces the data-section and
+# initial-memory size guard.
 python3 "${VALIDATE_WASM}" \
   --cmake-cache "${BUILD_DIR}/CMakeCache.txt" \
   "${BUILD_DIR}/edgejs.wasm"

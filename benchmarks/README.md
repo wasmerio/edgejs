@@ -181,10 +181,15 @@ python3 benchmarks/bench-http-throughput.py \
   --runner build-wasix-napi/target/release/napi_wasmer \
   --published-wasm /tmp/edgejs-published/modules/edge \
   --current-wasm build-wasix/edgejs.wasm \
-  --builtin-dir lib \
+  --builtin-dir build-wasix/node-lib \
   --autocannon /tmp/edgejs-http-benchmark-tools/node_modules/.bin/autocannon \
   --output benchmarks/results/http-throughput.json
 ```
+
+`--builtin-dir` must be the staged `build-wasix/node-lib`, not the repo's
+`lib/`. The current WASIX guest reads its builtins from `/node-lib` and checks
+the catalog digest written there by `wasix/build-wasix.sh`. These harnesses do
+not mount ICU data at `/usr/share/edge-icu`.
 
 Download/unpack the exact baseline version with `wasmer package download`
 first; install Autocannon 9.0.0 in the indicated isolated prefix. Build the
@@ -204,7 +209,7 @@ one guest with the balanced-pair harness:
 WASMER_NAPI_CACHE_DIR=/tmp/edgejs-compiler-comparison \
 python3 benchmarks/bench-http-compilers.py \
   --runner build-wasix-napi/target/release/napi_wasmer \
-  --wasm build-wasix/edgejs.wasm --builtin-dir lib \
+  --wasm build-wasix/edgejs.wasm --builtin-dir build-wasix/node-lib \
   --autocannon /tmp/edgejs-http-benchmark-tools/node_modules/.bin/autocannon \
   --output benchmarks/results/http-compilers.json
 ```
