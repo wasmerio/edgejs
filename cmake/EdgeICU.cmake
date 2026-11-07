@@ -44,25 +44,29 @@ function(edge_configure_icu)
     # with ICU at runtime via udata_setCommonData(); see src/edge_icu_data.cc.
     # stubdata (linked below) remains as ICU's default entry point; the runtime
     # override takes precedence once activated.
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    set(EDGE_ICU_DATA_BZ2 "${EDGE_ICU_ROOT}/source/data/in/icudt78l.dat.bz2")
-    set(EDGE_ICU_EMBED_C "${CMAKE_CURRENT_BINARY_DIR}/generated/ubi_icudata.c")
-    add_custom_command(
-      OUTPUT "${EDGE_ICU_EMBED_C}"
-      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
-      COMMAND
-        "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/cmake/embed_binary.py"
-        --input "${EDGE_ICU_DATA_BZ2}"
-        --output "${EDGE_ICU_EMBED_C}"
-        --symbol "ubi_icudt78l_dat"
-        --compression bz2
-      DEPENDS
-        "${PROJECT_ROOT}/cmake/embed_binary.py"
-        "${EDGE_ICU_DATA_BZ2}"
-      VERBATIM
-    )
-    add_library(edge_icu_embedded_data STATIC "${EDGE_ICU_EMBED_C}")
-    set_target_properties(edge_icu_embedded_data PROPERTIES LINKER_LANGUAGE C)
+    if(EDGE_EMBED_ICU_DATA)
+      find_package(Python3 COMPONENTS Interpreter REQUIRED)
+      set(EDGE_ICU_DATA_BZ2 "${EDGE_ICU_ROOT}/source/data/in/icudt78l.dat.bz2")
+      set(EDGE_ICU_EMBED_C "${CMAKE_CURRENT_BINARY_DIR}/generated/ubi_icudata.c")
+      add_custom_command(
+        OUTPUT "${EDGE_ICU_EMBED_C}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND
+          "${Python3_EXECUTABLE}" "${PROJECT_ROOT}/cmake/embed_binary.py"
+          --input "${EDGE_ICU_DATA_BZ2}"
+          --output "${EDGE_ICU_EMBED_C}"
+          --symbol "ubi_icudt78l_dat"
+          --compression bz2
+        DEPENDS
+          "${PROJECT_ROOT}/cmake/embed_binary.py"
+          "${EDGE_ICU_DATA_BZ2}"
+        VERBATIM
+      )
+      add_library(edge_icu_embedded_data STATIC "${EDGE_ICU_EMBED_C}")
+      set_target_properties(edge_icu_embedded_data PROPERTIES LINKER_LANGUAGE C)
+    else()
+      add_library(edge_icu_embedded_data INTERFACE)
+    endif()
 
     add_library(edge_icu_common STATIC
       ${EDGE_ICU_COMMON_SOURCES}

@@ -139,3 +139,9 @@ No phase should be marked complete without passing its defined test gate.
 - Setup + build helper:
   - `wasix/setup-wasix-deps.sh`
   - `wasix/build-wasix.sh`
+- WASIX builds configure `EDGE_EMBED_BUILTIN_SOURCES=OFF` and
+  `EDGE_EMBED_ICU_DATA=OFF` (both default ON for native builds). The builtin
+  catalog then keeps only ids and paths; sources are read from `/node-lib`
+  (or `EDGEJS_LIB_DIR`) and ICU items from `/usr/share/edge-icu`.
+  `scripts/stage_wasix_static_data.py` stages both trees into the build
+  directory, and the package manifests map them.

@@ -217,7 +217,7 @@ plans/quickjs-wasm/development/troubleshooting/node-compat/napi/025_lazy_propert
 Most recent Wasmer deploy troubleshooting note:
 
 ```text
-plans/quickjs-wasm/development/troubleshooting/wasmer-deploy/006_edge_command_package_naming.md
+plans/quickjs-wasm/development/troubleshooting/wasmer-deploy/007_static_data_out_of_linear_memory.md
 ```
 
 Important commands:

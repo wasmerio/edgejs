@@ -7,11 +7,14 @@
 #include <string_view>
 #include <vector>
 
-// Consolidated bytecode cache for embedded builtins, stored in a single file
-// next to the binary ("edge" -> "edge.builtins.v8b" / "edge.builtins.qjsb").
-// Builtins ship inside the binary, so unlike user-file sidecars there is one
-// store per installed binary, loaded once per process and flushed (merged)
-// once at teardown. Payloads are opaque engine data; this module owns the
+// Consolidated bytecode cache for builtins, stored in a single file next to
+// the binary ("edge" -> "edge.builtins.v8b" / "edge.builtins.qjsb").
+// Builtin sources ship with the binary (embedded in it, or, for WASIX builds
+// with EDGE_EMBED_BUILTIN_SOURCES=OFF, in the package's /node-lib tree), so
+// unlike user-file sidecars there is one store per installed binary, loaded
+// once per process and flushed (merged) once at teardown. Each entry carries a
+// hash of the source it was compiled from, so file-backed sources validate the
+// same way as embedded ones. Payloads are opaque engine data; this module owns the
 // container format, validation, and the process-global entry store only.
 namespace edge_builtin_bytecode {
 

@@ -67,11 +67,16 @@ env = [
   "npm_config_update_notifier=false",
 ]
 
+# /node-lib (builtin JS) and /usr/share/edge-icu (ICU data) are staged by
+# quickjs-wasm/build.sh; the WASIX build reads them from the package filesystem
+# instead of embedding them in edgejs.wasm.
 [fs]
 "/etc" = "./etc"
+"/node-lib" = "../build-quickjs-wasix/node-lib"
 "/npm" = "../test/deps/npm"
 "/pnpm" = "./pnpm"
 "/usr/local/ssl" = "../ssl-certs"
+"/usr/share/edge-icu" = "../build-quickjs-wasix/icu"
 
 [dependencies]
 "wasmer/bash" = "1.0.25"

@@ -6,9 +6,9 @@ Items here should be replaced with real WASIX implementations, proper feature ga
 ## ICU
 
 - Replace the temporary `tzname` / `timezone` / `daylight` UTC stub in [wasix/src/wasix_compat.h](/home/theduke/dev/github.com/wasmerio/ubi/wasix/src/wasix_compat.h) with a proper WASIX timezone integration once the runtime/sysroot exposes a supported API.
-- Validate that the embedded ICU data path is the right long-term packaging model for WASIX. Alternatives to consider:
-  - dedicated `icudata` object generation at build time
-  - runtime loading from a colocated data file
+- WASIX builds no longer embed ICU data (`EDGE_EMBED_ICU_DATA=OFF`). ICU loads individual item files from `/usr/share/edge-icu/icudt78l/`, staged into `<build>/icu/` and mapped by the package manifests. Still open:
+  - measure the per-item linear-memory cost of ICU's mmap path under WASIX, and switch to `U_HAVE_MMAP=0` if it is high
+  - trim the staged item set if package file count or size becomes a problem
   - upstreaming a canonical WASIX ICU packaging flow
 - Audit the full vendored ICU source build and trim it to the minimal set of libraries/features actually needed by `ubi` if build time or wasm size becomes a problem.
 
@@ -46,14 +46,11 @@ Items here should be replaced with real WASIX implementations, proper feature ga
 
 - Stop `ubi/wasix/setup-wasix-deps.sh` from mutating cloned deps during normal builds; switch to pinned revisions or explicit update steps.
 - Reduce noisy WASIX compatibility warnings in the build once the functional gaps are resolved.
-- Revisit builtin JS loading for WASIX. The current setup is intentionally hybrid:
-  - builtin IDs are generated at build time into a compiled catalog, similar to native Node
-  - builtin source files are still loaded from host-backed directories mounted into the guest at `/node-lib` and `/node/deps`
-  This is good enough for bootstrap, but should be cleaned up into one clear packaging model. Decide whether the long-term direction is:
-  - fully guest-visible packaged sources with a stable manifest,
-  - host-provided sources with a tighter runner contract, or
-  - a different native-aligned mechanism entirely.
-  Any cleanup should preserve the requirement that builtin source loads flow through the WASIX filesystem contract rather than ad hoc host-side shortcuts.
+- Builtin JS loading for WASIX now uses packaged sources (`EDGE_EMBED_BUILTIN_SOURCES=OFF`):
+  - builtin IDs and paths are generated at build time into a compiled catalog, similar to native Node
+  - source files are staged into `<build>/node-lib/` (deps under `internal/deps/`) and read from `/node-lib`, or from `EDGEJS_LIB_DIR` when set
+  - a `.edge-builtin-catalog` digest file guards against a wasm paired with a stale tree
+  Builtin source loads must keep flowing through the WASIX filesystem contract rather than ad hoc host-side shortcuts.
 
 ## N-API harness
 

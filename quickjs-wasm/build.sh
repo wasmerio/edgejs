@@ -6,6 +6,20 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build-quickjs-wasix"
 TOOLCHAIN_FILE="${PROJECT_ROOT}/wasix/wasix-toolchain.cmake"
 OPENSSL_WASIX_DIR="${PROJECT_ROOT}/deps/openssl-wasix"
+STAGE_STATIC_DATA="${PROJECT_ROOT}/scripts/stage_wasix_static_data.py"
+VALIDATE_WASM="${PROJECT_ROOT}/wasix/validate-imported-napi-wasm.py"
+
+# Builtin JS and ICU data are read from the package filesystem (/node-lib and
+# /usr/share/edge-icu, staged into ${BUILD_DIR}/node-lib and ${BUILD_DIR}/icu)
+# instead of being embedded: wasm copies every data segment into each
+# instance's linear memory. EDGE_WASIX_EMBED_STATIC_DATA=1 builds a standalone
+# edge.wasm that embeds both, in its own build directory.
+if [[ "${EDGE_WASIX_EMBED_STATIC_DATA:-0}" == "1" ]]; then
+  EMBED_STATIC_DATA=ON
+  BUILD_DIR="${PROJECT_ROOT}/build-quickjs-wasix-embedded"
+else
+  EMBED_STATIC_DATA=OFF
+fi
 
 export WASIXCC_WASM_EXCEPTIONS="${WASIXCC_WASM_EXCEPTIONS:-exnref}"
 
@@ -191,6 +205,8 @@ if ! openssl_wasix_ready; then
   )
 fi
 
+# The CMake cache persists between runs unless WASIX_FORCE_RECONFIGURE=1, so
+# the static-data options are passed explicitly every time.
 cmake \
   -S "${PROJECT_ROOT}" \
   -B "${BUILD_DIR}" \
@@ -202,7 +218,17 @@ cmake \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
   -DEDGE_NAPI_PROVIDER=quickjs \
   -DEDGE_BUILD_CLI=ON \
+  -DEDGE_EMBED_BUILTIN_SOURCES="${EMBED_STATIC_DATA}" \
+  -DEDGE_EMBED_ICU_DATA="${EMBED_STATIC_DATA}" \
   -DBUILD_TESTING=OFF
+
+for static_data_option in EDGE_EMBED_BUILTIN_SOURCES EDGE_EMBED_ICU_DATA; do
+  grep -Fxq "${static_data_option}:BOOL=${EMBED_STATIC_DATA}" "${BUILD_DIR}/CMakeCache.txt" || {
+    echo "error: QuickJS WASIX build did not configure ${static_data_option}=${EMBED_STATIC_DATA}" >&2
+    exit 1
+  }
+done
+unset static_data_option
 
 cmake --build "${BUILD_DIR}" -j4
 
@@ -217,6 +243,18 @@ else
 fi
 
 check_no_napi_imports "${BUILD_DIR}/edgejs.wasm"
+
+# Stage /node-lib and /usr/share/edge-icu for the options that are OFF.
+python3 "${STAGE_STATIC_DATA}" \
+  --project-root "${PROJECT_ROOT}" \
+  --build-dir "${BUILD_DIR}"
+
+# With both static-data options OFF, enforce the data-section and
+# initial-memory size guard (the N-API import checks do not apply here).
+python3 "${VALIDATE_WASM}" \
+  --static-data-only \
+  --cmake-cache "${BUILD_DIR}/CMakeCache.txt" \
+  "${BUILD_DIR}/edgejs.wasm"
 
 "${SCRIPT_DIR}/stage-pnpm.sh"
 

@@ -39,6 +39,7 @@
 #include <unistd.h>
 #endif
 
+#include "builtin_catalog.h"
 #include "edge_fs.h"
 #include "edge_environment.h"
 #include "edge_errors_binding.h"
@@ -2417,6 +2418,24 @@ bool ReadExecArgvStringOptionFrom(const std::vector<std::string>& exec_argv,
   return true;
 }
 
+// The value of the last --icu-data-dir in the effective exec argv, accepting
+// both "--icu-data-dir=<dir>" and "--icu-data-dir <dir>". Empty when absent.
+std::string ReadIcuDataDirFromExecArgv() {
+  static constexpr std::string_view kFlag = "--icu-data-dir";
+  std::string value;
+  const auto& argv = g_edge_effective_exec_argv;
+  for (size_t i = 0; i < argv.size(); ++i) {
+    const std::string& arg = argv[i];
+    if (arg == kFlag) {
+      if (i + 1 < argv.size()) value = argv[++i];
+    } else if (arg.size() > kFlag.size() && arg.compare(0, kFlag.size(), kFlag) == 0 &&
+               arg[kFlag.size()] == '=') {
+      value = arg.substr(kFlag.size() + 1);
+    }
+  }
+  return value;
+}
+
 bool ExecArgvHasFlagIn(const std::vector<std::string>& exec_argv, const char* flag) {
   if (flag == nullptr || flag[0] == '\0') return false;
   for (const auto& arg : exec_argv) {
@@ -2900,13 +2919,20 @@ int RunScriptWithGlobals(napi_env env,
     return 1;
   }
 
-  // Activate the embedded ICU common data before any locale-aware code runs, so
-  // ICU-backed Intl (and legacy charset conversion) sees real data instead of
-  // the empty stubdata image.
+  // Activate ICU data (embedded, or the external item tree on WASIX builds)
+  // before any locale-aware code runs, so ICU-backed Intl (and legacy charset
+  // conversion) sees real data instead of the empty stubdata image.
+  // Activation is process-wide, so a failure is reported once, not once per
+  // worker bootstrap.
   {
-    std::string icu_data_error;
-    if (!EdgeActivateIcuData(&icu_data_error)) {
-      fprintf(stderr, "[edge] warning: %s\n", icu_data_error.c_str());
+    const std::string icu_data_dir_flag = ReadIcuDataDirFromExecArgv();
+    std::string icu_data_message;
+    EdgeActivateIcuData(&icu_data_message, icu_data_dir_flag.c_str());
+    if (!icu_data_message.empty()) {
+      static std::once_flag icu_data_warning_once;
+      std::call_once(icu_data_warning_once, [&icu_data_message]() {
+        fprintf(stderr, "[edge] warning: %s\n", icu_data_message.c_str());
+      });
     }
   }
 
@@ -3067,6 +3093,11 @@ int RunScriptWithGlobals(napi_env env,
     return 1;
   }
 #endif
+  // Builds that read builtin sources from the filesystem need the lib mount;
+  // report a missing one clearly instead of failing inside a bootstrapper.
+  if (!builtin_catalog::VerifyBuiltinSources(error_out)) {
+    return 1;
+  }
   if (!execute_bootstrapper("internal/per_context/primordials", nullptr)) {
     if (should_abort_worker_bootstrap()) return 1;
     return 1;

@@ -471,6 +471,30 @@ jobs:
           set -euo pipefail
           make dist-only BUILD_DIR=build-quickjs-wasix JOBS=4 ZIP_NAME=edge-quickjs-wasix.zip
 
+      # The WASIX build reads builtin JS and ICU data from the package
+      # filesystem, so check the dist maps both staged trees and that bin/edge
+      # no longer embeds them, then run the packaged dist itself.
+      - name: Validate dist package (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release.py check-dist --dist dist
+          wasmer package build --check dist
+
+      - name: Smoke test dist static data (QuickJS WASIX)
+        shell: bash
+        env:
+          # German month names and Shift_JIS decoding both need ICU data read
+          # from /usr/share/edge-icu; bootstrap itself needs /node-lib.
+          DIST_SMOKE_JS: >-
+            [new Intl.DateTimeFormat('de', {month: 'long', timeZone: 'UTC'}).format(0),
+            new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0])).codePointAt(0).toString(16)].join(' ')
+        run: |
+          set -euo pipefail
+          output="$(wasmer run --stack-size 4194304 dist -- -p "${DIST_SMOKE_JS}")"
+          printf '%s\n' "${output}"
+          test "${output}" = "Januar 3042"
+
       - name: Upload artifact edge
         uses: actions/upload-artifact@v4
         with:
@@ -494,6 +518,10 @@ jobs:
       RELEASE_NAME: ${{ needs.metadata.outputs.release_name }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
@@ -634,6 +662,27 @@ jobs:
           curl https://get.wasmer.io -sSfL | sh -s "v7.2.0"
           echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
           "${HOME}/.wasmer/bin/wasmer" --version
+
+      - name: Validate WASIX package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release.py check-dist --dist "${{ steps.wasmer.outputs.wasix_dist_dir }}"
+          wasmer package build --check "${{ steps.wasmer.outputs.wasix_dist_dir }}"
+
+      - name: Smoke test WASIX package
+        shell: bash
+        env:
+          # German month names and Shift_JIS decoding both need ICU data read
+          # from /usr/share/edge-icu; bootstrap itself needs /node-lib.
+          DIST_SMOKE_JS: >-
+            [new Intl.DateTimeFormat('de', {month: 'long', timeZone: 'UTC'}).format(0),
+            new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0])).codePointAt(0).toString(16)].join(' ')
+        run: |
+          set -euo pipefail
+          output="$(wasmer run --stack-size 4194304 "${{ steps.wasmer.outputs.wasix_dist_dir }}" -- -p "${DIST_SMOKE_JS}")"
+          printf '%s\n' "${output}"
+          test "${output}" = "Januar 3042"
 
       - name: Publish to wasmer.wtf
         env:

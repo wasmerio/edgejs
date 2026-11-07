@@ -164,6 +164,24 @@ jobs:
             wasmer package build --check "release-assets/packages/${package}"
           done
 
+      # prepare already checked both packages map /node-lib and
+      # /usr/share/edge-icu; run the QuickJS package to prove the staged builtin
+      # JS and ICU data load. The host N-API package needs a N-API runner and
+      # was smoke tested by its build job.
+      - name: Smoke test QuickJS registry package
+        shell: bash
+        env:
+          # German month names and Shift_JIS decoding both need ICU data read
+          # from /usr/share/edge-icu; bootstrap itself needs /node-lib.
+          DIST_SMOKE_JS: >-
+            [new Intl.DateTimeFormat('de', {month: 'long', timeZone: 'UTC'}).format(0),
+            new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0])).codePointAt(0).toString(16)].join(' ')
+        run: |
+          set -euo pipefail
+          output="$(wasmer run --stack-size 4194304 release-assets/packages/edgejs-quickjs -- -p "${DIST_SMOKE_JS}")"
+          printf '%s\n' "${output}"
+          test "${output}" = "Januar 3042"
+
       - name: Upload release assets and checksums
         shell: bash
         run: |

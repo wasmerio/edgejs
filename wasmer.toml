@@ -4,13 +4,16 @@ name = "syrusakbary/edgejs"
 version = "0.1.24"
 description = "Edge.js with host-provided N-API and no embedded JavaScript engine"
 
-# [fs]
-# "/node-lib" = "./lib"
+# /node-lib (builtin JS) and /usr/share/edge-icu (ICU data) are staged by
+# wasix/build-wasix.sh; the WASIX build reads them from the package filesystem
+# instead of embedding them in edgejs.wasm.
 [fs]
 "/etc" = "./quickjs-wasm/etc"
+"/node-lib" = "./build-wasix/node-lib"
 "/npm" = "./test/deps/npm"
 "/pnpm" = "./quickjs-wasm/pnpm"
 "/usr/local/ssl" = "./ssl-certs"
+"/usr/share/edge-icu" = "./build-wasix/icu"
 
 [[module]]
 name = "edge"
@@ -23,7 +26,6 @@ runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
 atom = "edge"
-# env = ["EDGEJS_LIB_DIR=/node-lib"]
 
 [[command]]
 name = "edgejs"
