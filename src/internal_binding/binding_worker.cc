@@ -1256,7 +1256,7 @@ void WorkerThreadMain(Worker* wrap, uintptr_t stack_top) {
   if (!EdgeAttachEnvironmentForRuntime(worker_env, &wrap->worker_config)) {
     uv_loop_t* shutdown_loop = EdgeEnvironmentReleaseEventLoop(worker_env);
     if (shutdown_loop == nullptr) shutdown_loop = worker_loop;
-    (void)EdgeReleaseEnv(worker_env, worker_owner, shutdown_loop);
+    (void)unofficial_napi_release_env(worker_owner, shutdown_loop);
     EdgeEnvironmentDestroyReleasedEventLoop(shutdown_loop);
     wrap->worker_config.external_event_loop = nullptr;
     FinalizeWorkerThread(wrap, 1, "ERR_WORKER_INIT_FAILED", "Failed to attach worker env");
@@ -1344,7 +1344,7 @@ cleanup_worker_env:
   shutdown_loop = EdgeWorkerEnvReleaseEventLoop(worker_env);
   if (shutdown_loop == nullptr) shutdown_loop = worker_loop;
   EdgeWorkerEnvForget(worker_env);
-  (void)EdgeReleaseEnv(worker_env, worker_owner, shutdown_loop);
+  (void)unofficial_napi_release_env(worker_owner, shutdown_loop);
   if (wrap->thread_data != nullptr) {
     // release_env has stopped and reclaimed any sessions the worker did not
     // explicitly consume; these are now invalid bookkeeping tokens.

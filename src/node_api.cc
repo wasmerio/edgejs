@@ -72,7 +72,8 @@ namespace {
 
 struct DetachedEnvState {
   // napi_add_env_cleanup_hook's hooks for an env with no Environment
-  // attached; EdgeReleaseEnv runs them, last added first.
+  // attached; napi's release of the env runs them, last added first, through
+  // EdgeRunDetachedEnvCleanup.
   std::vector<std::pair<napi_cleanup_hook, void*>> env_cleanup_hooks;
   std::vector<napi_async_cleanup_hook_handle> async_cleanup_hooks;
   bool async_cleanup_hook_registered = false;
@@ -445,26 +446,6 @@ void napi_v8_run_async_cleanup_hooks(napi_env env) {
 
 namespace {
 
-// Runs the env cleanup hooks registered while no Environment was attached,
-// last added first, each in its own handle scope; a hook may add or remove
-// others. Exceptions they leave are dropped, as Node's cleanup hooks' are.
-void RunDetachedEnvCleanupHooks(napi_env env) {
-  for (;;) {
-    auto* state = GetDetachedEnvState(env);
-    if (state == nullptr || state->env_cleanup_hooks.empty()) break;
-    const auto [hook, arg] = state->env_cleanup_hooks.back();
-    state->env_cleanup_hooks.pop_back();
-    edge::HandleScope scope(env);
-    hook(arg);
-    bool pending = false;
-    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-      napi_value ignored = nullptr;
-      (void)napi_get_and_clear_last_exception(env, &ignored);
-    }
-  }
-  MaybeEraseDetachedEnvState(env);
-}
-
 size_t TypedArrayElementSize(napi_typedarray_type type) {
   switch (type) {
     case napi_int16_array:
@@ -486,14 +467,29 @@ size_t TypedArrayElementSize(napi_typedarray_type type) {
 
 }  // namespace
 
-napi_status EdgeReleaseEnv(napi_env env,
-                           unofficial_napi_env_owner owner,
-                           uv_loop_t* loop_or_null) {
-  if (env != nullptr) RunDetachedEnvCleanupHooks(env);
-  const napi_status status = unofficial_napi_release_env(owner, loop_or_null);
-  // The env is gone, and a later one may get its address.
-  if (env != nullptr) g_detached_env_state.erase(env);
-  return status;
+bool EdgeRunDetachedEnvCleanup(napi_env env, void* /*data*/) {
+  // Last added first, each in its own handle scope; a hook may add or remove
+  // others. What a hook leaves pending is dropped, so the next one runs
+  // clean (napi drops what the whole callback leaves).
+  bool ran = false;
+  for (;;) {
+    auto* state = GetDetachedEnvState(env);
+    if (state == nullptr || state->env_cleanup_hooks.empty()) break;
+    const auto [hook, arg] = state->env_cleanup_hooks.back();
+    state->env_cleanup_hooks.pop_back();
+    ran = true;
+    {
+      edge::HandleScope scope(env);
+      hook(arg);
+    }
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+      napi_value ignored = nullptr;
+      (void)napi_get_and_clear_last_exception(env, &ignored);
+    }
+  }
+  MaybeEraseDetachedEnvState(env);
+  return ran;
 }
 
 extern "C" {
@@ -1024,8 +1020,9 @@ napi_status NAPI_CDECL napi_get_buffer_info(napi_env env,
 
 // --- Env cleanup hooks ---
 // As Node's, they run when the env's Environment is cleaned up
-// (Environment::RunCleanup), last added first. An env with no Environment
-// attached keeps them until EdgeReleaseEnv.
+// (Environment::RunCleanup), last added first. Those of an env with no
+// Environment attached run in napi's release of it, interleaved with its
+// finalizers (EdgeRunDetachedEnvCleanup, the env_cleanup_callback).
 
 napi_status NAPI_CDECL napi_add_env_cleanup_hook(node_api_basic_env basic_env,
                                                  napi_cleanup_hook fun,

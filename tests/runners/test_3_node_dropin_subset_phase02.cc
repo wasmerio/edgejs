@@ -22,7 +22,6 @@
 #include <process.h>
 #endif
 
-#include "edge_env_loop.h"
 #include "test_env.h"
 #include "edge_module_loader.h"
 #include "edge_process_wrap.h"
@@ -557,7 +556,7 @@ int RunRawNodeTestScriptInSubprocess(const char* node_test_relative_path,
       _exit(70);
     }
     if (!EdgeAttachEnvironmentForRuntime(env)) {
-      (void)EdgeReleaseEnv(env, owner, nullptr);
+      (void)unofficial_napi_release_env(owner, nullptr);
       _exit(70);
     }
     std::string child_error;
@@ -571,7 +570,7 @@ int RunRawNodeTestScriptInSubprocess(const char* node_test_relative_path,
     EdgeEnvironmentRunCleanup(env);
     EdgeEnvironmentRunAtExitCallbacks(env);
     EdgeEnvironmentDetach(env);
-    (void)EdgeReleaseEnv(env, owner, nullptr);
+    (void)unofficial_napi_release_env(owner, nullptr);
     _exit(child_exit);
   }
   if (StartsWith(script_rel, "pseudo-tty/")) {

@@ -1,4 +1,5 @@
 #include "edge_environment.h"
+#include "edge_env_loop.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,6 +39,9 @@ bool RegisterAttachedEnvHooks(napi_env env) {
   hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
   hooks.fatal_error_callback = EdgeFatalErrorReportCallback;
   hooks.oom_error_callback = EdgeOomErrorReportCallback;
+  // Edge defines napi_add_env_cleanup_hook; those of an env with no
+  // Environment run inside napi's release, between its finalizers.
+  hooks.env_cleanup_callback = EdgeRunDetachedEnvCleanup;
   if (EdgeRuntimePlatformPrepareEnvHooks(env, &hooks) != napi_ok) return false;
   uint64_t accepted_hooks = 0;
   if (unofficial_napi_attach_env(env, &hooks, &accepted_hooks) == napi_ok) {
@@ -1773,17 +1777,26 @@ void EdgeEnvironmentSetOpaqueSlot(napi_env env,
   }
 
   edge::SlotEntry old;
+  bool register_cleanup_hook = false;
   {
     std::lock_guard<std::mutex> lock(g_environment_mu);
     auto& state = g_detached_slots[env];
-    if (!state.cleanup_hook_registered &&
-        napi_add_env_cleanup_hook(env, OnDetachedEnvSlotsCleanup, env) == napi_ok) {
+    if (!state.cleanup_hook_registered) {
       state.cleanup_hook_registered = true;
+      register_cleanup_hook = true;
     }
     auto& slot = state.slots[slot_id];
     old = slot;
     slot.data = data;
     slot.deleter = deleter;
+  }
+  // Not under g_environment_mu: napi_add_env_cleanup_hook (Edge's) looks the
+  // Environment up, which takes it.
+  if (register_cleanup_hook &&
+      napi_add_env_cleanup_hook(env, OnDetachedEnvSlotsCleanup, env) != napi_ok) {
+    std::lock_guard<std::mutex> lock(g_environment_mu);
+    auto it = g_detached_slots.find(env);
+    if (it != g_detached_slots.end()) it->second.cleanup_hook_registered = false;
   }
 
   if (old.deleter != nullptr && old.data != nullptr && old.data != data) {
