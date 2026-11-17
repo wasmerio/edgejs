@@ -75,6 +75,8 @@ struct CleanupHookEntry {
   using Callback = void (*)(void* arg);
   Callback callback = nullptr;
   void* arg = nullptr;
+  // Tells a registration from a later one of the same callback and arg.
+  uint64_t id = 0;
 };
 
 struct CleanupStageEntry {
@@ -309,6 +311,7 @@ class Environment {
   void AddAsyncCleanupHook(napi_async_cleanup_hook_handle handle);
   bool RemoveAsyncCleanupHook(napi_async_cleanup_hook_handle handle);
   void RunAsyncCleanupHooks();
+  bool DrainCleanupHooks();
   bool async_cleanup_hook_registered() const;
   void set_async_cleanup_hook_registered(bool registered);
 
@@ -379,6 +382,7 @@ class Environment {
   std::vector<napi_async_cleanup_hook_handle> async_cleanup_hooks_;
   bool async_cleanup_hook_registered_ = false;
   std::vector<CleanupHookEntry> cleanup_hooks_;
+  uint64_t next_cleanup_hook_id_ = 0;
   std::vector<CleanupStageEntry> cleanup_stages_;
   std::deque<AtExitEntry> at_exit_callbacks_;
   std::unordered_set<int> unmanaged_fds_;

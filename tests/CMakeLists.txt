@@ -158,4 +158,20 @@ if(TARGET edge AND NOT CMAKE_CROSSCOMPILING)
     COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/esm-json-import-attributes.mjs"
   )
   set_tests_properties(edge.esm_json_import_attributes PROPERTIES TIMEOUT 60)
+
+  # A Node-API addon for the JS tests, linked against the edge binary's
+  # exported Node-API (Edge's node_api.h).
+  add_library(edge_test_napi_addon MODULE "${EDGE_ROOT}/tests/js/addons/napi_test_addon.c")
+  set_target_properties(edge_test_napi_addon PROPERTIES PREFIX "" SUFFIX ".node")
+  target_include_directories(edge_test_napi_addon PRIVATE
+    "${PROJECT_ROOT}/include" "${NAPI_INCLUDE_ROOT}")
+  if(APPLE)
+    target_link_options(edge_test_napi_addon PRIVATE "LINKER:-undefined,dynamic_lookup")
+  endif()
+  add_test(
+    NAME edge.napi_fatal_exception
+    COMMAND $<TARGET_FILE:edge> "${EDGE_ROOT}/tests/js/napi-fatal-exception.js"
+            $<TARGET_FILE:edge_test_napi_addon>
+  )
+  set_tests_properties(edge.napi_fatal_exception PROPERTIES TIMEOUT 60)
 endif()

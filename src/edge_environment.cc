@@ -1,4 +1,5 @@
 #include "edge_environment.h"
+#include "edge_env_loop.h"
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +45,12 @@ bool RegisterAttachedEnvHooks(napi_env env) {
     // Edge owns cleanup and detachment. This transaction contains only events
     // which originate inside the provider; unsupported optional events remain
     // absent from the accepted capability mask.
+    //
+    // Edge defines napi_add_env_cleanup_hook: the hooks added while no
+    // Environment is attached (after Detach, say) run inside napi's release,
+    // between its finalizers. Apart from the attachment, and set already if
+    // an addon added one before it; refused only where it could not run.
+    (void)unofficial_napi_set_env_cleanup_callback(env, EdgeRunDetachedEnvCleanup, nullptr);
     return true;
   }
   EdgeRunRuntimePlatformEnvCleanup(env);
@@ -783,7 +790,7 @@ bool Environment::immediate_has_outstanding() const {
 void Environment::AddCleanupHook(CleanupHookCallback callback, void* arg) {
   if (callback == nullptr) return;
   std::lock_guard<std::mutex> lock(mutex_);
-  cleanup_hooks_.push_back(CleanupHookEntry{callback, arg});
+  cleanup_hooks_.push_back(CleanupHookEntry{callback, arg, ++next_cleanup_hook_id_});
 }
 
 void Environment::RemoveCleanupHook(CleanupHookCallback callback, void* arg) {
@@ -1576,6 +1583,49 @@ void Environment::CleanupActiveRegistryEntries() {
   }
 }
 
+// As Node's CleanupQueue::Drain, until the queue stays empty: each round runs
+// the hooks registered when it starts, most recent first. One that an earlier
+// hook removed does not run; one added meanwhile runs in the next round. Each
+// runs in a handle scope of its own, and what it leaves pending is dropped
+// before the next one. Like Node's, the rounds are not bounded: a hook that
+// registers another each time runs as long as it does, and RunCleanup's guard
+// counts only the passes that wait on libuv. Returns whether any ran.
+bool Environment::DrainCleanupHooks() {
+  bool ran = false;
+  for (;;) {
+    std::vector<CleanupHookEntry> cleanup_hooks;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      cleanup_hooks = cleanup_hooks_;
+    }
+    if (cleanup_hooks.empty()) return ran;
+    ran = true;
+    for (auto it = cleanup_hooks.rbegin(); it != cleanup_hooks.rend(); ++it) {
+      bool registered = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto found = std::find_if(
+            cleanup_hooks_.begin(), cleanup_hooks_.end(),
+            [&](const CleanupHookEntry& entry) { return entry.id == it->id; });
+        if (found != cleanup_hooks_.end()) {
+          cleanup_hooks_.erase(found);
+          registered = true;
+        }
+      }
+      if (!registered || it->callback == nullptr) continue;
+      {
+        edge::HandleScope scope(env_);
+        it->callback(it->arg);
+      }
+      bool pending = false;
+      if (napi_is_exception_pending(env_, &pending) == napi_ok && pending) {
+        napi_value ignored = nullptr;
+        (void)napi_get_and_clear_last_exception(env_, &ignored);
+      }
+    }
+  }
+}
+
 void Environment::RunCleanup(bool close_event_loop) {
   std::vector<CleanupStageEntry> stages;
   {
@@ -1617,18 +1667,8 @@ void Environment::RunCleanup(bool close_event_loop) {
       did_work = true;
     }
 
-    std::vector<CleanupHookEntry> cleanup_hooks;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!cleanup_hooks_.empty()) {
-        cleanup_hooks.swap(cleanup_hooks_);
-      }
-    }
-    if (!cleanup_hooks.empty()) {
+    if (DrainCleanupHooks()) {
       did_work = true;
-      for (auto it = cleanup_hooks.rbegin(); it != cleanup_hooks.rend(); ++it) {
-        if (it->callback != nullptr) it->callback(it->arg);
-      }
     }
 
     bool has_async_cleanup = false;
@@ -1773,17 +1813,26 @@ void EdgeEnvironmentSetOpaqueSlot(napi_env env,
   }
 
   edge::SlotEntry old;
+  bool register_cleanup_hook = false;
   {
     std::lock_guard<std::mutex> lock(g_environment_mu);
     auto& state = g_detached_slots[env];
-    if (!state.cleanup_hook_registered &&
-        napi_add_env_cleanup_hook(env, OnDetachedEnvSlotsCleanup, env) == napi_ok) {
+    if (!state.cleanup_hook_registered) {
       state.cleanup_hook_registered = true;
+      register_cleanup_hook = true;
     }
     auto& slot = state.slots[slot_id];
     old = slot;
     slot.data = data;
     slot.deleter = deleter;
+  }
+  // Not under g_environment_mu: EdgeAddEnvCleanupHook looks the Environment
+  // up, which takes it.
+  if (register_cleanup_hook &&
+      EdgeAddEnvCleanupHook(env, OnDetachedEnvSlotsCleanup, env) != napi_ok) {
+    std::lock_guard<std::mutex> lock(g_environment_mu);
+    auto it = g_detached_slots.find(env);
+    if (it != g_detached_slots.end()) it->second.cleanup_hook_registered = false;
   }
 
   if (old.deleter != nullptr && old.data != nullptr && old.data != data) {

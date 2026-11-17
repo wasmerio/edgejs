@@ -9,6 +9,13 @@ set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(EDGE_ROOT "${PROJECT_ROOT}")
 set(NAPI_V8_ROOT "${PROJECT_ROOT}/napi/v8")
 set(NAPI_INCLUDE_ROOT "${PROJECT_ROOT}/napi/include")
+# Edge.js owns node_api.h (include/, src/node_api.cc); napi provides the
+# engine (js_native_api.h, unofficial_napi.h). Our node_api.h is found first
+# by every target, napi's included, and napi leaves out its deprecated
+# definitions of the calls Edge defines.
+include_directories(BEFORE "${PROJECT_ROOT}/include")
+set(NAPI_PROVIDE_NODE_API OFF CACHE BOOL
+  "Define node_api.h's Buffer, env cleanup hook and fatal calls (deprecated)" FORCE)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(Git QUIET)
 include("${PROJECT_ROOT}/cmake/EdgeBuiltinCatalog.cmake")
@@ -83,12 +90,14 @@ if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
       set(NAPI_V8_DEFINES "V8_COMPRESS_POINTERS" CACHE STRING
         "Semicolon-separated V8 embedder compile definitions" FORCE)
       if(APPLE)
-        set(NAPI_V8_EXTRA_LIBS "/System/Library/Frameworks/CoreFoundation.framework" CACHE STRING
+        # V8 15.9's partition allocator also needs Security (SecTask*).
+        set(NAPI_V8_EXTRA_LIBS "/System/Library/Frameworks/CoreFoundation.framework;/System/Library/Frameworks/Security.framework" CACHE STRING
           "Semicolon-separated extra V8 libraries (e.g. libplatform/libbase)" FORCE)
       endif()
     endif()
   endif()
   set(NAPI_V8_BUILD_TESTS "${EDGE_BUILD_NAPI_TESTS}" CACHE BOOL "" FORCE)
+  edge_select_v8_linker()
   add_subdirectory("${NAPI_V8_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/napi-v8")
 elseif(EDGE_NAPI_PROVIDER STREQUAL "imports")
   add_library(edge_napi_headers INTERFACE)

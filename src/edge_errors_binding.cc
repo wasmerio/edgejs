@@ -296,21 +296,24 @@ napi_value ErrorsGetErrorSourcePositions(napi_env env, napi_callback_info info) 
   return out;
 }
 
-napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
-  napi_value exception = nullptr;
-  if (argc >= 1 && argv[0] != nullptr) {
-    exception = argv[0];
-  } else {
-    napi_get_undefined(env, &exception);
+// A worker being stopped runs no more JavaScript: the caller's frame unwinds.
+void KeepWorkerStopped(napi_env env) {
+  if (!EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env)) {
+    (void)unofficial_napi_terminate_execution(env);
   }
-  bool from_promise = false;
-  if (argc >= 2 && argv[1] != nullptr) {
-    napi_get_value_bool(env, argv[1], &from_promise);
-  }
+}
 
+}  // namespace
+
+// Node's errors::TriggerUncaughtException: reports `exception` as uncaught
+// right away through process._fatalException (the 'uncaughtException'
+// listeners), and when nothing handles it ends the process, or the worker,
+// through the fatal path. Returns false when the handler itself threw and
+// that exception is pending.
+bool EdgeTriggerUncaughtException(napi_env env,
+                                  napi_value exception,
+                                  bool from_promise,
+                                  bool keep_worker_stopped) {
   if (const char* debug = std::getenv("EDGE_DEBUG_EXCEPTIONS");
       debug != nullptr && debug[0] != '\0' && debug[0] != '0') {
     napi_valuetype exception_type = napi_undefined;
@@ -326,13 +329,17 @@ napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info)
   }
 
   if (!EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env)) {
+    if (keep_worker_stopped) {
+      KeepWorkerStopped(env);
+      return true;
+    }
     bool has_pending = false;
     if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
       napi_value ignored = nullptr;
       (void)napi_get_and_clear_last_exception(env, &ignored);
     }
     (void)unofficial_napi_cancel_terminate_execution(env);
-    return MakeUndefined(env);
+    return true;
   }
 
   auto invoke_ref_callback = [&](napi_ref ref) {
@@ -380,6 +387,12 @@ napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info)
       if (napi_call_function(env, process, fatal_exception, 2, fatal_argv, &fatal_result) != napi_ok) {
         if (!EdgeWorkerEnvOwnsProcessState(env) &&
             EdgeWorkerEnvStopRequested(env)) {
+          if (keep_worker_stopped) {
+            // The worker's _fatalException reported the error to its parent
+            // and ended it with process.exit(): it stays terminated.
+            KeepWorkerStopped(env);
+            return true;
+          }
           bool has_pending = false;
           if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
             napi_value ignored = nullptr;
@@ -389,9 +402,9 @@ napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info)
           if (state != nullptr) {
             invoke_ref_callback(state->enhance_fatal_stack_after_inspector_ref);
           }
-          return MakeUndefined(env);
+          return true;
         }
-        return nullptr;
+        return false;
       }
       if (fatal_result != nullptr) {
         bool handled = false;
@@ -399,7 +412,7 @@ napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info)
           if (state != nullptr) {
             invoke_ref_callback(state->enhance_fatal_stack_after_inspector_ref);
           }
-          return MakeUndefined(env);
+          return true;
         }
       }
     }
@@ -410,7 +423,28 @@ napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info)
   }
 
   (void)EdgeFinalizeFatalExceptionNow(env, exception);
-  return MakeUndefined(env);
+  if (keep_worker_stopped) KeepWorkerStopped(env);
+  return true;
+}
+
+namespace {
+
+napi_value ErrorsTriggerUncaughtException(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
+  napi_value exception = nullptr;
+  if (argc >= 1 && argv[0] != nullptr) {
+    exception = argv[0];
+  } else {
+    napi_get_undefined(env, &exception);
+  }
+  bool from_promise = false;
+  if (argc >= 2 && argv[1] != nullptr) {
+    napi_get_value_bool(env, argv[1], &from_promise);
+  }
+
+  return EdgeTriggerUncaughtException(env, exception, from_promise) ? MakeUndefined(env) : nullptr;
 }
 
 napi_value GetOrCreateErrorsBinding(napi_env env) {

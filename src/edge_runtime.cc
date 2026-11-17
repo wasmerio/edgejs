@@ -3800,6 +3800,32 @@ bool EdgeFinalizeFatalExceptionNow(napi_env env,
   return true;
 }
 
+void EdgeExitForExceptionInFatalExceptionHandler(napi_env env, napi_value exception) {
+  constexpr int kExceptionInFatalExceptionHandler = 7;
+  if (env == nullptr) return;
+  if (exception != nullptr) {
+    std::string message = FormatFatalExceptionMessage(env, exception, {}, {});
+    if (!message.empty()) {
+      if (message.back() != '\n') message.push_back('\n');
+      WriteTextToFd(2, message);
+    }
+  }
+  if (EdgeWorkerEnvIsMainThread(env) && !EdgeWorkerEnvIsInternalThread(env)) {
+    std::_Exit(kExceptionInFatalExceptionHandler);
+  }
+  // A worker ends with that code, as Node's Worker::Exit, and stays
+  // terminated meanwhile.
+  if (auto* environment = EdgeEnvironmentGet(env); environment != nullptr) {
+    environment->Exit(kExceptionInFatalExceptionHandler);
+    return;
+  }
+  EdgeWorkerEnvRequestStop(env);
+  if (uv_loop_t* loop = EdgeGetEnvLoop(env); loop != nullptr) {
+    uv_stop(loop);
+  }
+  (void)unofficial_napi_terminate_execution(env);
+}
+
 napi_status EdgeInstallConsole(napi_env env) {
   if (env == nullptr) {
     return napi_invalid_arg;

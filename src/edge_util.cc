@@ -3,6 +3,7 @@
 #endif
 
 #include "edge_util.h"
+#include "edge_buffer.h"
 
 #include "unofficial_napi.h"
 #include "edge_buffer_lease.h"
@@ -1556,4 +1557,11 @@ napi_value EdgeInstallUtilBinding(napi_env env) {
 napi_value EdgeGetTypesBinding(napi_env env) {
   auto* state = EdgeEnvironmentGetSlotData<TypesBindingState>(env, kEdgeEnvironmentSlotTypesBindingState);
   return state != nullptr ? GetRefValue(env, state->binding_ref) : nullptr;
+}
+
+napi_value EdgeMakeBuffer(napi_env env, napi_value bytes) {
+  if (env == nullptr || bytes == nullptr) return bytes;
+  napi_value prototype = EdgeGetBufferPrototype(env);
+  if (prototype != nullptr) (void)node_api_set_prototype(env, bytes, prototype);
+  return bytes;
 }

@@ -86,13 +86,16 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libicu-dev lldb
+          # The prebuilt V8 archive uses ELF compact relocations (CREL), which
+          # need LLD 20+: CMake links with it (edge_select_v8_linker), as a
+          # local `make build` does.
+          sudo apt-get install -y libicu-dev lldb lld-20
 
       - name: Validate public N-API headers stay V8-agnostic
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h include/node_api.h include/node_api_types.h
 
       - name: Build edge
         shell: bash
@@ -212,7 +215,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h include/node_api.h include/node_api_types.h
 
       - name: Build edge
         shell: bash

@@ -19,7 +19,7 @@ EDGEENV_BINARY ?= $(BUILD_DIR)/edgeenv
 CMAKE_ARGS ?=
 BUILD_ENV ?= env
 EXTRA_CMAKE_ARGS ?=
-NAPI_V8_PREBUILT_VERSION ?= 11.9.9
+NAPI_V8_PREBUILT_VERSION ?= 15.9.111.1
 NAPI_V8_PLATFORM :=
 FRAMEWORK_TEST_SCRIPT := $(CURDIR)/scripts/framework-test.js
 STANDALONE_BUILD_TEST_SCRIPT := $(CURDIR)/scripts/standalone-build-test.js
@@ -319,7 +319,7 @@ NAPI_V8_CMAKE_ARGS += -DNAPI_V8_INCLUDE_DIR=$(NAPI_V8_DIST_ROOT)/include
 NAPI_V8_CMAKE_ARGS += -DNAPI_V8_LIBRARY=$(NAPI_V8_DIST_ROOT)/lib/libv8.a
 NAPI_V8_CMAKE_ARGS += -DNAPI_V8_DEFINES=V8_COMPRESS_POINTERS
 ifeq ($(UNAME_S),Darwin)
-NAPI_V8_CMAKE_ARGS += -DNAPI_V8_EXTRA_LIBS=/System/Library/Frameworks/CoreFoundation.framework
+NAPI_V8_CMAKE_ARGS += -DNAPI_V8_EXTRA_LIBS='/System/Library/Frameworks/CoreFoundation.framework;/System/Library/Frameworks/Security.framework'
 endif
 endif
 endif
