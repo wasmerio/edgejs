@@ -208,4 +208,8 @@ function(edge_add_runtime_support_libraries)
     PUBLIC
       "${PROJECT_ROOT}/deps/simdutf"
   )
+  # V8 links in its own simdutf (15.9 ships 7.7.0, ours is 6.4.0) in the
+  # same `simdutf` namespace. Ours, and every user of it, gets its own name
+  # so the two never meet at link time.
+  target_compile_definitions(edge_simdutf PUBLIC simdutf=edge_simdutf)
 endfunction()
