@@ -1328,3 +1328,15 @@ napi_value EdgeInstallBufferBinding(napi_env env) {
 
   return binding;
 }
+
+napi_value EdgeGetBufferPrototype(napi_env env) {
+  if (env == nullptr) return nullptr;
+  auto* state = EdgeEnvironmentGetSlotData<BufferBindingState>(
+      env, kEdgeEnvironmentSlotBufferBindingState);
+  if (state == nullptr || state->buffer_prototype_ref == nullptr) return nullptr;
+  napi_value prototype = nullptr;
+  if (napi_get_reference_value(env, state->buffer_prototype_ref, &prototype) != napi_ok) {
+    return nullptr;
+  }
+  return prototype;
+}

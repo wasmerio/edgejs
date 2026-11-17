@@ -1,3 +1,4 @@
+#include "edge_buffer.h"
 #include "internal_binding/binding_initializers.h"
 #include "internal_binding/binding_module_wrap.h"
 
@@ -793,25 +794,10 @@ napi_value ModuleWrapCreateCachedData(napi_env env, napi_callback_info info) {
     if (unofficial_napi_module_wrap_create_cached_data(env, instance->module_handle, &out) == napi_ok &&
         out != nullptr) {
       // The provider's bytes self-validate (V8 CachedData / QuickJS QJSB
-      // header, which now carries the module source hash); just hand back a
-      // node Buffer. vm.SourceTextModule#createCachedData() promises a Buffer;
-      // the QuickJS provider returns a plain Uint8Array.
-      napi_value global = nullptr;
-      napi_value buffer_ctor = nullptr;
-      napi_value from_fn = nullptr;
-      napi_value wrapped = nullptr;
-      bool is_buffer = false;
-      if (napi_get_global(env, &global) == napi_ok && global != nullptr &&
-          napi_get_named_property(env, global, "Buffer", &buffer_ctor) == napi_ok &&
-          buffer_ctor != nullptr &&
-          napi_instanceof(env, out, buffer_ctor, &is_buffer) == napi_ok && !is_buffer &&
-          napi_get_named_property(env, buffer_ctor, "from", &from_fn) == napi_ok &&
-          from_fn != nullptr &&
-          napi_call_function(env, buffer_ctor, from_fn, 1, &out, &wrapped) == napi_ok &&
-          wrapped != nullptr) {
-        return wrapped;
-      }
-      return out;
+      // header, which now carries the module source hash). The provider
+      // returns a plain Uint8Array over its own ArrayBuffer;
+      // vm.SourceTextModule#createCachedData() promises a Buffer.
+      return EdgeMakeBuffer(env, out);
     }
   }
   napi_value arraybuffer = nullptr;

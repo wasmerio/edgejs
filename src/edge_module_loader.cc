@@ -3240,29 +3240,11 @@ static bool AcquireArrayBufferView(napi_env env, napi_value value, EdgeBufferLea
   return false;
 }
 
-// vm APIs promise node Buffers for cachedData; bytecode_serialize guarantees
-// only a Uint8Array (engine-dependent). Wrap via Buffer.from when needed.
+// vm APIs promise node Buffers for cachedData; the provider returns the bytes
+// as a plain Uint8Array over its own ArrayBuffer, which this makes a Buffer in
+// place (no copy, no JS, never a slice of Buffer's pool).
 static napi_value EnsureNodeBuffer(napi_env env, napi_value view) {
-  if (view == nullptr) return nullptr;
-  napi_value global = nullptr;
-  napi_value buffer_ctor = nullptr;
-  if (napi_get_global(env, &global) != napi_ok || global == nullptr ||
-      napi_get_named_property(env, global, "Buffer", &buffer_ctor) != napi_ok ||
-      buffer_ctor == nullptr) {
-    return view;
-  }
-  bool is_buffer = false;
-  if (napi_instanceof(env, view, buffer_ctor, &is_buffer) == napi_ok && is_buffer) {
-    return view;
-  }
-  napi_value from_fn = nullptr;
-  napi_value wrapped = nullptr;
-  if (napi_get_named_property(env, buffer_ctor, "from", &from_fn) != napi_ok || from_fn == nullptr ||
-      napi_call_function(env, buffer_ctor, from_fn, 1, &view, &wrapped) != napi_ok ||
-      wrapped == nullptr) {
-    return view;
-  }
-  return wrapped;
+  return EdgeMakeBuffer(env, view);
 }
 
 // Compiles script text and returns its serialized code cache (replaces the
