@@ -43,6 +43,11 @@ bool EdgeFinalizeFatalExceptionNow(napi_env env,
                                    const std::string& exception_line = {},
                                    const std::string& thrown_at = {});
 void EdgePrepareProcessExit(napi_env env, int exit_code);
+// Node's TryCatchScope kFatal, for an uncaught exception whose handler
+// (process._fatalException) threw `exception`: reports it and ends the
+// process, or the worker, with kExceptionInFatalExceptionHandler (7), whatever
+// process.exitCode is.
+void EdgeExitForExceptionInFatalExceptionHandler(napi_env env, napi_value exception);
 
 enum EdgeMakeCallbackFlags : int {
   kEdgeMakeCallbackNone = 0,

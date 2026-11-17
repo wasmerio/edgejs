@@ -39,15 +39,18 @@ bool RegisterAttachedEnvHooks(napi_env env) {
   hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
   hooks.fatal_error_callback = EdgeFatalErrorReportCallback;
   hooks.oom_error_callback = EdgeOomErrorReportCallback;
-  // Edge defines napi_add_env_cleanup_hook; those of an env with no
-  // Environment run inside napi's release, between its finalizers.
-  hooks.env_cleanup_callback = EdgeRunDetachedEnvCleanup;
   if (EdgeRuntimePlatformPrepareEnvHooks(env, &hooks) != napi_ok) return false;
   uint64_t accepted_hooks = 0;
   if (unofficial_napi_attach_env(env, &hooks, &accepted_hooks) == napi_ok) {
     // Edge owns cleanup and detachment. This transaction contains only events
     // which originate inside the provider; unsupported optional events remain
     // absent from the accepted capability mask.
+    //
+    // Edge defines napi_add_env_cleanup_hook: the hooks added while no
+    // Environment is attached (after Detach, say) run inside napi's release,
+    // between its finalizers. Apart from the attachment, and set already if
+    // an addon added one before it; refused only where it could not run.
+    (void)unofficial_napi_set_env_cleanup_callback(env, EdgeRunDetachedEnvCleanup, nullptr);
     return true;
   }
   EdgeRunRuntimePlatformEnvCleanup(env);
@@ -1580,6 +1583,49 @@ void Environment::CleanupActiveRegistryEntries() {
   }
 }
 
+// As Node's CleanupQueue::Drain, until the queue stays empty: each round runs
+// the hooks registered when it starts, most recent first. One that an earlier
+// hook removed does not run; one added meanwhile runs in the next round. Each
+// runs in a handle scope of its own, and what it leaves pending is dropped
+// before the next one. Like Node's, the rounds are not bounded: a hook that
+// registers another each time runs as long as it does, and RunCleanup's guard
+// counts only the passes that wait on libuv. Returns whether any ran.
+bool Environment::DrainCleanupHooks() {
+  bool ran = false;
+  for (;;) {
+    std::vector<CleanupHookEntry> cleanup_hooks;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      cleanup_hooks = cleanup_hooks_;
+    }
+    if (cleanup_hooks.empty()) return ran;
+    ran = true;
+    for (auto it = cleanup_hooks.rbegin(); it != cleanup_hooks.rend(); ++it) {
+      bool registered = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto found = std::find_if(
+            cleanup_hooks_.begin(), cleanup_hooks_.end(),
+            [&](const CleanupHookEntry& entry) { return entry.id == it->id; });
+        if (found != cleanup_hooks_.end()) {
+          cleanup_hooks_.erase(found);
+          registered = true;
+        }
+      }
+      if (!registered || it->callback == nullptr) continue;
+      {
+        edge::HandleScope scope(env_);
+        it->callback(it->arg);
+      }
+      bool pending = false;
+      if (napi_is_exception_pending(env_, &pending) == napi_ok && pending) {
+        napi_value ignored = nullptr;
+        (void)napi_get_and_clear_last_exception(env_, &ignored);
+      }
+    }
+  }
+}
+
 void Environment::RunCleanup(bool close_event_loop) {
   std::vector<CleanupStageEntry> stages;
   {
@@ -1621,40 +1667,8 @@ void Environment::RunCleanup(bool close_event_loop) {
       did_work = true;
     }
 
-    // As Node's CleanupQueue::Drain: the hooks registered now run, most
-    // recent first. One that an earlier hook removed does not run; one added
-    // meanwhile runs in the next round. Each runs in a handle scope of its
-    // own, and what it leaves pending is dropped before the next one.
-    std::vector<CleanupHookEntry> cleanup_hooks;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      cleanup_hooks = cleanup_hooks_;
-    }
-    if (!cleanup_hooks.empty()) {
+    if (DrainCleanupHooks()) {
       did_work = true;
-      for (auto it = cleanup_hooks.rbegin(); it != cleanup_hooks.rend(); ++it) {
-        bool registered = false;
-        {
-          std::lock_guard<std::mutex> lock(mutex_);
-          auto found = std::find_if(
-              cleanup_hooks_.begin(), cleanup_hooks_.end(),
-              [&](const CleanupHookEntry& entry) { return entry.id == it->id; });
-          if (found != cleanup_hooks_.end()) {
-            cleanup_hooks_.erase(found);
-            registered = true;
-          }
-        }
-        if (!registered || it->callback == nullptr) continue;
-        {
-          edge::HandleScope scope(env_);
-          it->callback(it->arg);
-        }
-        bool pending = false;
-        if (napi_is_exception_pending(env_, &pending) == napi_ok && pending) {
-          napi_value ignored = nullptr;
-          (void)napi_get_and_clear_last_exception(env_, &ignored);
-        }
-      }
     }
 
     bool has_async_cleanup = false;

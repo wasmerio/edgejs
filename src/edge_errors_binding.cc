@@ -296,6 +296,13 @@ napi_value ErrorsGetErrorSourcePositions(napi_env env, napi_callback_info info) 
   return out;
 }
 
+// A worker being stopped runs no more JavaScript: the caller's frame unwinds.
+void KeepWorkerStopped(napi_env env) {
+  if (!EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env)) {
+    (void)unofficial_napi_terminate_execution(env);
+  }
+}
+
 }  // namespace
 
 // Node's errors::TriggerUncaughtException: reports `exception` as uncaught
@@ -303,7 +310,10 @@ napi_value ErrorsGetErrorSourcePositions(napi_env env, napi_callback_info info) 
 // listeners), and when nothing handles it ends the process, or the worker,
 // through the fatal path. Returns false when the handler itself threw and
 // that exception is pending.
-bool EdgeTriggerUncaughtException(napi_env env, napi_value exception, bool from_promise) {
+bool EdgeTriggerUncaughtException(napi_env env,
+                                  napi_value exception,
+                                  bool from_promise,
+                                  bool keep_worker_stopped) {
   if (const char* debug = std::getenv("EDGE_DEBUG_EXCEPTIONS");
       debug != nullptr && debug[0] != '\0' && debug[0] != '0') {
     napi_valuetype exception_type = napi_undefined;
@@ -319,6 +329,10 @@ bool EdgeTriggerUncaughtException(napi_env env, napi_value exception, bool from_
   }
 
   if (!EdgeWorkerEnvOwnsProcessState(env) && EdgeWorkerEnvStopRequested(env)) {
+    if (keep_worker_stopped) {
+      KeepWorkerStopped(env);
+      return true;
+    }
     bool has_pending = false;
     if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
       napi_value ignored = nullptr;
@@ -373,6 +387,12 @@ bool EdgeTriggerUncaughtException(napi_env env, napi_value exception, bool from_
       if (napi_call_function(env, process, fatal_exception, 2, fatal_argv, &fatal_result) != napi_ok) {
         if (!EdgeWorkerEnvOwnsProcessState(env) &&
             EdgeWorkerEnvStopRequested(env)) {
+          if (keep_worker_stopped) {
+            // The worker's _fatalException reported the error to its parent
+            // and ended it with process.exit(): it stays terminated.
+            KeepWorkerStopped(env);
+            return true;
+          }
           bool has_pending = false;
           if (napi_is_exception_pending(env, &has_pending) == napi_ok && has_pending) {
             napi_value ignored = nullptr;
@@ -403,6 +423,7 @@ bool EdgeTriggerUncaughtException(napi_env env, napi_value exception, bool from_
   }
 
   (void)EdgeFinalizeFatalExceptionNow(env, exception);
+  if (keep_worker_stopped) KeepWorkerStopped(env);
   return true;
 }
 

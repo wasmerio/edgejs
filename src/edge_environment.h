@@ -311,6 +311,7 @@ class Environment {
   void AddAsyncCleanupHook(napi_async_cleanup_hook_handle handle);
   bool RemoveAsyncCleanupHook(napi_async_cleanup_hook_handle handle);
   void RunAsyncCleanupHooks();
+  bool DrainCleanupHooks();
   bool async_cleanup_hook_registered() const;
   void set_async_cleanup_hook_registered(bool registered);
 

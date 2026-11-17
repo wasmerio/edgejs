@@ -23,6 +23,11 @@ function(edge_configure_icu)
       U_HAVE_STD_STRING=1
       UCONFIG_NO_BREAK_ITERATION=0
       U_DISABLE_RENAMING=1
+      # Names ICU's data entry point icudt_edge78_dat, not icudt78_dat: a V8
+      # library carries its own ICU, and one of the same release defines
+      # icudt78_dat with its data. Edge's stays its own, whatever ICU the V8
+      # has, and with renaming off nothing else takes the suffix.
+      U_LIB_SUFFIX_C_NAME=_edge
     )
 
     add_library(edge_icu_stubdata STATIC
@@ -84,14 +89,11 @@ function(edge_configure_icu)
       PUBLIC
         edge_icu_embedded_data
     )
-    # ICU's data entry point (icudt78_dat). The bundled V8 links its own ICU
-    # of the same version with its real data under that name; the empty stub
-    # would win the link and leave V8's Intl without data (DateTimeFormat,
-    # Collator, normalize('NFKC') abort). Edge's ICU sets its own common data
-    # at startup either way (src/edge_icu_data.cc).
-    if(NOT EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
-      target_link_libraries(edge_icu_common PUBLIC edge_icu_stubdata)
-    endif()
+    # ICU's default data entry point, Edge's own (U_LIB_SUFFIX_C_NAME above):
+    # the empty stub never stands in for V8's ICU data (V8's Intl would have
+    # none), and Edge's ICU links whatever V8 is selected. Edge's ICU sets its
+    # common data at startup (src/edge_icu_data.cc).
+    target_link_libraries(edge_icu_common PUBLIC edge_icu_stubdata)
 
     add_library(edge_icu_i18n STATIC
       ${EDGE_ICU_I18N_SOURCES}

@@ -288,6 +288,26 @@ void CleanupChecksPending(void* data) {
 
 void CountCleanup(void* data) { ++*static_cast<std::atomic<int>*>(data); }
 
+// Registers a successor until it has run `remaining` times in all.
+struct CleanupChain {
+  napi_env env = nullptr;
+  int remaining = 0;
+  int ran = 0;
+};
+
+void RunCleanupChain(void* data) {
+  auto* chain = static_cast<CleanupChain*>(data);
+  ++chain->ran;
+  if (--chain->remaining > 0) {
+    EXPECT_EQ(napi_add_env_cleanup_hook(chain->env, RunCleanupChain, chain), napi_ok);
+  }
+}
+
+bool OtherEmbedderCleanup(napi_env /*env*/, void* data) {
+  ++*static_cast<int*>(data);
+  return false;
+}
+
 }  // namespace
 
 // As Node's: napi_fatal_exception reports the error to 'uncaughtException'
@@ -326,6 +346,29 @@ TEST_F(Test0RuntimePhase01, UnhandledFatalExceptionEndsTheProcess) {
       "unhandled from an addon");
 }
 
+// A handler that throws ends the process with 7 (Node's
+// kExceptionInFatalExceptionHandler), whatever process.exitCode says, and
+// nothing after the call runs.
+TEST_F(Test0RuntimePhase01, FatalExceptionWhoseHandlerThrowsExitsWithSeven) {
+  EXPECT_EXIT(
+      {
+        EnvScope s(runtime_.get());
+        InstallFatalException(s.env);
+        std::string error;
+        (void)EdgeRunScriptSource(
+            s.env,
+            "process.exitCode = 28;"
+            "process.on('uncaughtException', () => {"
+            "  throw new Error('thrown by the handler'); });"
+            "__fatal(new Error('fatal from an addon'));"
+            "process.exitCode = 3;",
+            &error);
+        std::_Exit(3);
+      },
+      ::testing::ExitedWithCode(7),
+      "thrown by the handler");
+}
+
 // As Node's CleanupQueue::Drain: a hook an earlier hook removes does not run,
 // and what one hook leaves pending does not reach the next.
 TEST_F(Test0RuntimePhase01, EnvCleanupHooksHonorRemovalAndIsolateExceptions) {
@@ -342,7 +385,7 @@ TEST_F(Test0RuntimePhase01, EnvCleanupHooksHonorRemovalAndIsolateExceptions) {
 }
 
 // An env no Environment is attached to: its hooks run in napi's release,
-// which Edge's env_cleanup_callback joins, installed when the first is added.
+// which calls Edge's cleanup callback, set when the first is added.
 TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHooksRunInTheRelease) {
   napi_env env = nullptr;
   unofficial_napi_env_owner owner = nullptr;
@@ -350,29 +393,58 @@ TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHooksRunInTheRelease) {
   std::atomic<int> ran{0};
   ASSERT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_ok);
   ASSERT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_ok);
-  bool attached = false;
-  uint64_t accepted = 0;
-  ASSERT_EQ(unofficial_napi_get_env_hooks(env, &attached, &accepted), napi_ok);
-  EXPECT_TRUE(attached);
   ASSERT_EQ(unofficial_napi_release_env(owner, nullptr), napi_ok);
   EXPECT_EQ(ran.load(), 2);
 }
 
-// Where the release will not call Edge back (as on the WASIX host), an
-// addon's hook is refused instead of kept to never run.
-TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHookIsRefusedWithoutTheCallback) {
+// A hook an addon adds before Edge attaches its Environment does not take
+// the env's one attachment: the Environment still attaches, and the hook
+// still runs, once, in the release.
+TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHookThenEnvironmentAttach) {
   napi_env env = nullptr;
   unofficial_napi_env_owner owner = nullptr;
   ASSERT_EQ(unofficial_napi_create_env(8, nullptr, &env, &owner), napi_ok);
-  unofficial_napi_env_hooks hooks{};
-  hooks.size = sizeof(hooks);
-  hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
-  uint64_t accepted = 0;
-  ASSERT_EQ(unofficial_napi_attach_env(env, &hooks, &accepted), napi_ok);
+  std::atomic<int> ran{0};
+  ASSERT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_ok);
+  ASSERT_TRUE(EdgeAttachEnvironmentForRuntime(env));
+  std::atomic<int> attached_ran{0};
+  ASSERT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &attached_ran), napi_ok);
+  EdgeEnvironmentRunCleanup(env);
+  EXPECT_EQ(attached_ran.load(), 1);
+  EdgeEnvironmentRunAtExitCallbacks(env);
+  EdgeEnvironmentDetach(env);
+  ASSERT_EQ(unofficial_napi_release_env(owner, nullptr), napi_ok);
+  EXPECT_EQ(ran.load(), 1);
+  EXPECT_EQ(attached_ran.load(), 1);
+}
+
+// Where the release would not call Edge back, an addon's hook is refused
+// instead of kept to never run: here another embedder's cleanup callback has
+// the env (as the WASIX host refuses Edge's).
+TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHookIsRefusedUnderAnotherCallback) {
+  napi_env env = nullptr;
+  unofficial_napi_env_owner owner = nullptr;
+  ASSERT_EQ(unofficial_napi_create_env(8, nullptr, &env, &owner), napi_ok);
+  int other_ran = 0;
+  ASSERT_EQ(unofficial_napi_set_env_cleanup_callback(env, OtherEmbedderCleanup, &other_ran),
+            napi_ok);
   std::atomic<int> ran{0};
   EXPECT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_generic_failure);
   ASSERT_EQ(unofficial_napi_release_env(owner, nullptr), napi_ok);
   EXPECT_EQ(ran.load(), 0);
+  EXPECT_GT(other_ran, 0);
+}
+
+// As Node's, a hook that adds a successor each time runs until the chain
+// ends, however long: the cleanup's bound on libuv passes does not cut it.
+TEST_F(Test0RuntimePhase01, EnvCleanupHookChainRunsToTheEnd) {
+  EnvScope s(runtime_.get());
+  CleanupChain chain;
+  chain.env = s.env;
+  chain.remaining = 300;
+  ASSERT_EQ(napi_add_env_cleanup_hook(s.env, RunCleanupChain, &chain), napi_ok);
+  EdgeEnvironmentRunCleanup(s.env);
+  EXPECT_EQ(chain.ran, 300);
 }
 
 // Detached envs on several threads add, run and drop their hooks at once.

@@ -70,6 +70,12 @@ make build
 ./build-edge/edge server.js
 ```
 
+On Linux the V8 build links the prebuilt V8, whose objects use ELF compact
+relocations, so it needs LLD 20 or newer (`apt-get install lld-20`). CMake
+finds it (`ld.lld-20`, `ld.lld`, …) and links with it, or stops with a message
+if there is none. To choose a linker yourself, set it in `LDFLAGS`, for
+example `LDFLAGS=-fuse-ld=lld-20 make build` with Clang.
+
 ```bash
 ./build-edge/edge --run dev
 ```

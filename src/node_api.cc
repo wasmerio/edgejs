@@ -509,22 +509,15 @@ bool EdgeRunDetachedEnvCleanup(napi_env env, void* /*data*/) {
   return ran;
 }
 
-// Whether napi's release of `env` will run its detached hooks, that is call
-// EdgeRunDetachedEnvCleanup. Edge attaches it with the env's hooks
-// (RegisterAttachedEnvHooks); an env no one attached gets it now, alone. The
-// WASIX host runs no guest env hooks, so there it never will.
+// Makes napi's release of `env` run its detached hooks (call
+// EdgeRunDetachedEnvCleanup), and tells whether it will. Setting it again is
+// a no-op, and it does not take the env's one attachment, which Edge's
+// Environment still needs (EdgeEnvironmentAttach). napi refuses it when the
+// env has another embedder's cleanup callback, and the WASIX host runs no
+// guest callback at a release: then the release would never run them.
 bool DetachedEnvCleanupRuns(napi_env env) {
-  bool attached = false;
-  uint64_t accepted = 0;
-  if (unofficial_napi_get_env_hooks(env, &attached, &accepted) != napi_ok) return false;
-  if (!attached) {
-    unofficial_napi_env_hooks hooks{};
-    hooks.size = sizeof(hooks);
-    hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
-    hooks.env_cleanup_callback = EdgeRunDetachedEnvCleanup;
-    if (unofficial_napi_attach_env(env, &hooks, &accepted) != napi_ok) return false;
-  }
-  return (accepted & unofficial_napi_env_hook_env_cleanup) != 0;
+  return unofficial_napi_set_env_cleanup_callback(env, EdgeRunDetachedEnvCleanup, nullptr) ==
+         napi_ok;
 }
 
 napi_status EdgeAddEnvCleanupHook(napi_env env, napi_cleanup_hook fun, void* arg) {
@@ -533,6 +526,8 @@ napi_status EdgeAddEnvCleanupHook(napi_env env, napi_cleanup_hook fun, void* arg
     environment->AddCleanupHook(fun, arg);
     return napi_ok;
   }
+  // Best effort: kept even where the release will not run it.
+  (void)DetachedEnvCleanupRuns(env);
   std::lock_guard<std::mutex> lock(g_detached_env_mu);
   g_detached_env_state[env].env_cleanup_hooks.emplace_back(fun, arg);
   return napi_ok;
@@ -1072,7 +1067,7 @@ napi_status NAPI_CDECL napi_get_buffer_info(napi_env env,
 // As Node's, they run when the env's Environment is cleaned up
 // (Environment::RunCleanup), last added first. Those of an env with no
 // Environment attached run in napi's release of it, interleaved with its
-// finalizers (EdgeRunDetachedEnvCleanup, the env_cleanup_callback).
+// finalizers (EdgeRunDetachedEnvCleanup, the env's cleanup callback).
 
 napi_status NAPI_CDECL napi_add_env_cleanup_hook(node_api_basic_env basic_env,
                                                  napi_cleanup_hook fun,
@@ -1117,15 +1112,16 @@ napi_status NAPI_CDECL napi_remove_env_cleanup_hook(node_api_basic_env basic_env
 
 // As Node's: reports `err` as uncaught right away, without throwing it: the
 // 'uncaughtException' listeners run, and with none that handles it the
-// process (or the worker) ends through the fatal path. If the handler itself
-// throws, that is fatal too (Node's kExceptionInFatalExceptionHandler).
+// process (or the worker) ends through the fatal path. A worker that ends so
+// stays terminated, so none of the addon's caller's JavaScript runs after it.
+// If the handler itself throws, that is fatal too, with exit code 7 (Node's
+// kExceptionInFatalExceptionHandler) whatever process.exitCode is.
 napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
   if (!CheckEnv(env) || err == nullptr) return napi_invalid_arg;
-  if (!EdgeTriggerUncaughtException(env, err, false)) {
+  if (!EdgeTriggerUncaughtException(env, err, false, /*keep_worker_stopped=*/true)) {
     napi_value thrown = nullptr;
     if (napi_get_and_clear_last_exception(env, &thrown) == napi_ok && thrown != nullptr) {
-      constexpr int kExceptionInFatalExceptionHandler = 7;
-      (void)EdgeFinalizeFatalExceptionNow(env, thrown, kExceptionInFatalExceptionHandler);
+      EdgeExitForExceptionInFatalExceptionHandler(env, thrown);
     }
   }
   return napi_ok;
