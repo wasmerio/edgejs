@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdlib>
 #include <chrono>
 #include <filesystem>
@@ -218,6 +219,236 @@ TEST_F(Test0RuntimePhase01, EsmImportOfThrowingCjsReturnsJsErrorInsteadOfCrashin
 
   std::error_code remove_ec;
   std::filesystem::remove_all(temp_dir, remove_ec);
+}
+
+namespace {
+
+// An addon's native function: reports its argument with napi_fatal_exception
+// and records the status that returned.
+napi_value CallFatalException(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok) return nullptr;
+  const napi_status status = napi_fatal_exception(env, argv[0]);
+  napi_value global = nullptr;
+  napi_value value = nullptr;
+  if (napi_get_global(env, &global) == napi_ok &&
+      napi_create_int32(env, static_cast<int32_t>(status), &value) == napi_ok) {
+    (void)napi_set_named_property(env, global, "__fatal_status", value);
+  }
+  return nullptr;
+}
+
+void InstallFatalException(napi_env env) {
+  napi_value global = nullptr;
+  napi_value fn = nullptr;
+  ASSERT_EQ(napi_get_global(env, &global), napi_ok);
+  ASSERT_EQ(napi_create_function(env, "__fatal", NAPI_AUTO_LENGTH, CallFatalException, nullptr, &fn),
+            napi_ok);
+  ASSERT_EQ(napi_set_named_property(env, global, "__fatal", fn), napi_ok);
+}
+
+std::string GlobalText(napi_env env, const char* name) {
+  napi_value global = nullptr;
+  napi_value value = nullptr;
+  if (napi_get_global(env, &global) != napi_ok ||
+      napi_get_named_property(env, global, name, &value) != napi_ok) {
+    return "<missing>";
+  }
+  return ValueToUtf8(env, value);
+}
+
+struct CleanupProbe {
+  napi_env env = nullptr;
+  std::vector<std::string> ran;
+  bool saw_pending_exception = false;
+};
+
+void CleanupA(void* data) { static_cast<CleanupProbe*>(data)->ran.push_back("A"); }
+
+void CleanupRemovesA(void* data) {
+  auto* probe = static_cast<CleanupProbe*>(data);
+  probe->ran.push_back("B");
+  EXPECT_EQ(napi_remove_env_cleanup_hook(probe->env, CleanupA, data), napi_ok);
+}
+
+void CleanupThrows(void* data) {
+  auto* probe = static_cast<CleanupProbe*>(data);
+  probe->ran.push_back("T");
+  (void)napi_throw_error(probe->env, nullptr, "thrown by a cleanup hook");
+}
+
+void CleanupChecksPending(void* data) {
+  auto* probe = static_cast<CleanupProbe*>(data);
+  probe->ran.push_back("C");
+  bool pending = false;
+  (void)napi_is_exception_pending(probe->env, &pending);
+  probe->saw_pending_exception = pending;
+}
+
+void CountCleanup(void* data) { ++*static_cast<std::atomic<int>*>(data); }
+
+}  // namespace
+
+// As Node's: napi_fatal_exception reports the error to 'uncaughtException'
+// right away, without throwing it into the addon's caller.
+TEST_F(Test0RuntimePhase01, FatalExceptionReachesUncaughtExceptionListeners) {
+  EnvScope s(runtime_.get());
+  InstallFatalException(s.env);
+  std::string error;
+  const int exit_code = EdgeRunScriptSource(
+      s.env,
+      "globalThis.__seen = '';"
+      "process.on('uncaughtException', (e) => { globalThis.__seen = e.message; });"
+      "let caught = false;"
+      "try { __fatal(new Error('fatal from an addon')); } catch { caught = true; }"
+      "globalThis.__caught = String(caught);",
+      &error);
+  EXPECT_EQ(exit_code, 0) << error;
+  EXPECT_EQ(GlobalText(s.env, "__seen"), "fatal from an addon");
+  EXPECT_EQ(GlobalText(s.env, "__caught"), "false");
+  EXPECT_EQ(GlobalText(s.env, "__fatal_status"), "0");
+}
+
+// With no listener the process ends as for any uncaught exception.
+TEST_F(Test0RuntimePhase01, UnhandledFatalExceptionEndsTheProcess) {
+  EXPECT_EXIT(
+      {
+        EnvScope s(runtime_.get());
+        InstallFatalException(s.env);
+        std::string error;
+        (void)EdgeRunScriptSource(
+            s.env, "__fatal(new Error('unhandled from an addon')); globalThis.__after = 1;",
+            &error);
+        std::_Exit(3);
+      },
+      ::testing::ExitedWithCode(1),
+      "unhandled from an addon");
+}
+
+// As Node's CleanupQueue::Drain: a hook an earlier hook removes does not run,
+// and what one hook leaves pending does not reach the next.
+TEST_F(Test0RuntimePhase01, EnvCleanupHooksHonorRemovalAndIsolateExceptions) {
+  EnvScope s(runtime_.get());
+  CleanupProbe probe;
+  probe.env = s.env;
+  ASSERT_EQ(napi_add_env_cleanup_hook(s.env, CleanupChecksPending, &probe), napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(s.env, CleanupA, &probe), napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(s.env, CleanupRemovesA, &probe), napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(s.env, CleanupThrows, &probe), napi_ok);
+  EdgeEnvironmentRunCleanup(s.env);
+  EXPECT_EQ(probe.ran, (std::vector<std::string>{"T", "B", "C"}));
+  EXPECT_FALSE(probe.saw_pending_exception);
+}
+
+// An env no Environment is attached to: its hooks run in napi's release,
+// which Edge's env_cleanup_callback joins, installed when the first is added.
+TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHooksRunInTheRelease) {
+  napi_env env = nullptr;
+  unofficial_napi_env_owner owner = nullptr;
+  ASSERT_EQ(unofficial_napi_create_env(8, nullptr, &env, &owner), napi_ok);
+  std::atomic<int> ran{0};
+  ASSERT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_ok);
+  bool attached = false;
+  uint64_t accepted = 0;
+  ASSERT_EQ(unofficial_napi_get_env_hooks(env, &attached, &accepted), napi_ok);
+  EXPECT_TRUE(attached);
+  ASSERT_EQ(unofficial_napi_release_env(owner, nullptr), napi_ok);
+  EXPECT_EQ(ran.load(), 2);
+}
+
+// Where the release will not call Edge back (as on the WASIX host), an
+// addon's hook is refused instead of kept to never run.
+TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHookIsRefusedWithoutTheCallback) {
+  napi_env env = nullptr;
+  unofficial_napi_env_owner owner = nullptr;
+  ASSERT_EQ(unofficial_napi_create_env(8, nullptr, &env, &owner), napi_ok);
+  unofficial_napi_env_hooks hooks{};
+  hooks.size = sizeof(hooks);
+  hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
+  uint64_t accepted = 0;
+  ASSERT_EQ(unofficial_napi_attach_env(env, &hooks, &accepted), napi_ok);
+  std::atomic<int> ran{0};
+  EXPECT_EQ(napi_add_env_cleanup_hook(env, CountCleanup, &ran), napi_generic_failure);
+  ASSERT_EQ(unofficial_napi_release_env(owner, nullptr), napi_ok);
+  EXPECT_EQ(ran.load(), 0);
+}
+
+// Detached envs on several threads add, run and drop their hooks at once.
+TEST_F(Test0RuntimePhase01, DetachedEnvCleanupHooksOnSeveralThreads) {
+  constexpr int kThreads = 4;
+  constexpr int kEnvsPerThread = 8;
+  std::atomic<int> ran{0};
+  std::atomic<int> failures{0};
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&] {
+      for (int i = 0; i < kEnvsPerThread; ++i) {
+        napi_env env = nullptr;
+        unofficial_napi_env_owner owner = nullptr;
+        if (unofficial_napi_create_env(8, nullptr, &env, &owner) != napi_ok ||
+            napi_add_env_cleanup_hook(env, CountCleanup, &ran) != napi_ok ||
+            napi_add_env_cleanup_hook(env, CountCleanup, &ran) != napi_ok ||
+            unofficial_napi_release_env(owner, nullptr) != napi_ok) {
+          ++failures;
+        }
+      }
+    });
+  }
+  for (auto& thread : threads) thread.join();
+  EXPECT_EQ(failures.load(), 0);
+  EXPECT_EQ(ran.load(), kThreads * kEnvsPerThread * 2);
+}
+
+// Asking for the length alone does not ask for the bytes.
+TEST_F(Test0RuntimePhase01, BufferInfoReportsByteLengthWithoutData) {
+  EnvScope s(runtime_.get());
+  napi_value arraybuffer = nullptr;
+  ASSERT_EQ(napi_create_arraybuffer(s.env, 32, nullptr, &arraybuffer), napi_ok);
+  napi_value doubles = nullptr;
+  napi_value view = nullptr;
+  ASSERT_EQ(napi_create_typedarray(s.env, napi_float64_array, 3, arraybuffer, 8, &doubles),
+            napi_ok);
+  ASSERT_EQ(napi_create_dataview(s.env, 12, arraybuffer, 4, &view), napi_ok);
+  size_t length = 0;
+  ASSERT_EQ(napi_get_buffer_info(s.env, doubles, nullptr, &length), napi_ok);
+  EXPECT_EQ(length, 24u);
+  ASSERT_EQ(napi_get_buffer_info(s.env, view, nullptr, &length), napi_ok);
+  EXPECT_EQ(length, 12u);
+  void* data = nullptr;
+  ASSERT_EQ(napi_get_buffer_info(s.env, doubles, &data, &length), napi_ok);
+  EXPECT_NE(data, nullptr);
+}
+
+// A copy nothing native points into is a Buffer over memory of its own.
+TEST_F(Test0RuntimePhase01, BufferCopyWithoutResultDataOwnsItsBytes) {
+  EnvScope s(runtime_.get());
+  napi_value global = nullptr;
+  napi_value fn = nullptr;
+  ASSERT_EQ(napi_get_global(s.env, &global), napi_ok);
+  ASSERT_EQ(napi_create_function(
+                s.env, "__makeCopy", NAPI_AUTO_LENGTH,
+                [](napi_env env, napi_callback_info) -> napi_value {
+                  napi_value copy = nullptr;
+                  return napi_create_buffer_copy(env, 5, "hello", nullptr, &copy) == napi_ok
+                             ? copy
+                             : nullptr;
+                },
+                nullptr, &fn),
+            napi_ok);
+  ASSERT_EQ(napi_set_named_property(s.env, global, "__makeCopy", fn), napi_ok);
+  std::string error;
+  ASSERT_EQ(EdgeRunScriptSource(
+                s.env,
+                "const copy = __makeCopy();"
+                "globalThis.__copy_ok = String(Buffer.isBuffer(copy) &&"
+                " copy.buffer.byteLength === 5 && copy.byteOffset === 0 &&"
+                " copy.toString() === 'hello');",
+                &error),
+            0)
+      << error;
+  EXPECT_EQ(GlobalText(s.env, "__copy_ok"), "true");
 }
 
 TEST_F(Test0RuntimePhase01, SourcePathCanBeTestedIndependently) {

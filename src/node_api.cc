@@ -3,6 +3,7 @@
 #include "edge_async_wrap.h"
 #include "edge_buffer.h"
 #include "edge_environment.h"
+#include "edge_errors_binding.h"
 #include "edge_env_loop.h"
 #include "edge_handle_scope.h"
 #include "edge_module_loader.h"
@@ -15,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
 #include <unordered_map>
@@ -83,6 +85,11 @@ struct DetachedEnvState {
   size_t open_callback_scopes = 0;
 };
 
+// Envs on several threads (workers) look up, add and drop their entries
+// concurrently, so every operation on the map, and on an entry's
+// env_cleanup_hooks, holds g_detached_env_mu. An entry's other fields belong
+// to its env's thread; the map never moves an entry it keeps.
+std::mutex g_detached_env_mu;
 std::unordered_map<napi_env, DetachedEnvState> g_detached_env_state;
 
 inline bool CheckEnv(napi_env env) {
@@ -94,16 +101,19 @@ edge::Environment* GetAttachedEnvironment(napi_env env) {
 }
 
 DetachedEnvState& GetOrCreateDetachedEnvState(napi_env env) {
+  std::lock_guard<std::mutex> lock(g_detached_env_mu);
   return g_detached_env_state[env];
 }
 
 DetachedEnvState* GetDetachedEnvState(napi_env env) {
+  std::lock_guard<std::mutex> lock(g_detached_env_mu);
   auto it = g_detached_env_state.find(env);
   if (it == g_detached_env_state.end()) return nullptr;
   return &it->second;
 }
 
 void MaybeEraseDetachedEnvState(napi_env env) {
+  std::lock_guard<std::mutex> lock(g_detached_env_mu);
   auto it = g_detached_env_state.find(env);
   if (it == g_detached_env_state.end()) return;
   const DetachedEnvState& state = it->second;
@@ -473,10 +483,17 @@ bool EdgeRunDetachedEnvCleanup(napi_env env, void* /*data*/) {
   // clean (napi drops what the whole callback leaves).
   bool ran = false;
   for (;;) {
-    auto* state = GetDetachedEnvState(env);
-    if (state == nullptr || state->env_cleanup_hooks.empty()) break;
-    const auto [hook, arg] = state->env_cleanup_hooks.back();
-    state->env_cleanup_hooks.pop_back();
+    std::pair<napi_cleanup_hook, void*> next;
+    {
+      // Take the next hook out before running it: it may add or remove
+      // others, and other envs' threads use the map meanwhile.
+      std::lock_guard<std::mutex> lock(g_detached_env_mu);
+      auto it = g_detached_env_state.find(env);
+      if (it == g_detached_env_state.end() || it->second.env_cleanup_hooks.empty()) break;
+      next = it->second.env_cleanup_hooks.back();
+      it->second.env_cleanup_hooks.pop_back();
+    }
+    const auto [hook, arg] = next;
     ran = true;
     {
       edge::HandleScope scope(env);
@@ -490,6 +507,35 @@ bool EdgeRunDetachedEnvCleanup(napi_env env, void* /*data*/) {
   }
   MaybeEraseDetachedEnvState(env);
   return ran;
+}
+
+// Whether napi's release of `env` will run its detached hooks, that is call
+// EdgeRunDetachedEnvCleanup. Edge attaches it with the env's hooks
+// (RegisterAttachedEnvHooks); an env no one attached gets it now, alone. The
+// WASIX host runs no guest env hooks, so there it never will.
+bool DetachedEnvCleanupRuns(napi_env env) {
+  bool attached = false;
+  uint64_t accepted = 0;
+  if (unofficial_napi_get_env_hooks(env, &attached, &accepted) != napi_ok) return false;
+  if (!attached) {
+    unofficial_napi_env_hooks hooks{};
+    hooks.size = sizeof(hooks);
+    hooks.version = UNOFFICIAL_NAPI_ENV_HOOKS_VERSION;
+    hooks.env_cleanup_callback = EdgeRunDetachedEnvCleanup;
+    if (unofficial_napi_attach_env(env, &hooks, &accepted) != napi_ok) return false;
+  }
+  return (accepted & unofficial_napi_env_hook_env_cleanup) != 0;
+}
+
+napi_status EdgeAddEnvCleanupHook(napi_env env, napi_cleanup_hook fun, void* arg) {
+  if (!CheckEnv(env) || fun == nullptr) return napi_invalid_arg;
+  if (auto* environment = GetAttachedEnvironment(env); environment != nullptr) {
+    environment->AddCleanupHook(fun, arg);
+    return napi_ok;
+  }
+  std::lock_guard<std::mutex> lock(g_detached_env_mu);
+  g_detached_env_state[env].env_cleanup_hooks.emplace_back(fun, arg);
+  return napi_ok;
 }
 
 extern "C" {
@@ -696,7 +742,7 @@ napi_status NAPI_CDECL napi_add_async_cleanup_hook(
     auto& state = GetOrCreateDetachedEnvState(napiEnv);
     if (!state.async_cleanup_hook_registered) {
       napi_status status =
-          napi_add_env_cleanup_hook(napiEnv, RunAsyncCleanupHooksOnEnvTeardown, napiEnv);
+          EdgeAddEnvCleanupHook(napiEnv, RunAsyncCleanupHooksOnEnvTeardown, napiEnv);
       if (status != napi_ok) return status;
       state.async_cleanup_hook_registered = true;
     }
@@ -915,12 +961,18 @@ napi_status NAPI_CDECL napi_create_buffer_copy(napi_env env,
   if (!CheckEnv(env) || result == nullptr || (length > 0 && data == nullptr)) {
     return napi_invalid_arg;
   }
+  if (result_data == nullptr) {
+    // Nothing native keeps a pointer into it: a copy of its own (on host JS,
+    // JavaScript owns it; no guest memory backs it or is kept for it).
+    return unofficial_napi_create_uint8array_copy(
+        env, length > 0 ? data : nullptr, length, EdgeGetBufferPrototype(env), result);
+  }
   void* bytes = nullptr;
   const napi_status status = unofficial_napi_create_uint8array(
       env, length, EdgeGetBufferPrototype(env), &bytes, result);
   if (status != napi_ok) return status;
   if (length > 0) std::memcpy(bytes, data, length);
-  if (result_data != nullptr) *result_data = bytes;
+  *result_data = bytes;
   return napi_ok;
 }
 
@@ -991,17 +1043,17 @@ napi_status NAPI_CDECL napi_get_buffer_info(napi_env env,
                                             void** data,
                                             size_t* length) {
   if (!CheckEnv(env) || value == nullptr) return napi_invalid_arg;
+  // `data` passes through as given: asking for the length alone must not
+  // make a guest provider materialize the bytes.
   bool is_typedarray = false;
   napi_status status = napi_is_typedarray(env, value, &is_typedarray);
   if (status != napi_ok) return status;
   if (is_typedarray) {
     napi_typedarray_type type = napi_uint8_array;
     size_t element_count = 0;
-    void* bytes = nullptr;
     status = napi_get_typedarray_info(
-        env, value, &type, &element_count, &bytes, nullptr, nullptr);
+        env, value, &type, &element_count, data, nullptr, nullptr);
     if (status != napi_ok) return status;
-    if (data != nullptr) *data = bytes;
     if (length != nullptr) *length = element_count * TypedArrayElementSize(type);
     return napi_ok;
   }
@@ -1010,10 +1062,8 @@ napi_status NAPI_CDECL napi_get_buffer_info(napi_env env,
   if (status != napi_ok) return status;
   if (!is_dataview) return napi_invalid_arg;
   size_t byte_length = 0;
-  void* bytes = nullptr;
-  status = napi_get_dataview_info(env, value, &byte_length, &bytes, nullptr, nullptr);
+  status = napi_get_dataview_info(env, value, &byte_length, data, nullptr, nullptr);
   if (status != napi_ok) return status;
-  if (data != nullptr) *data = bytes;
   if (length != nullptr) *length = byte_length;
   return napi_ok;
 }
@@ -1029,12 +1079,12 @@ napi_status NAPI_CDECL napi_add_env_cleanup_hook(node_api_basic_env basic_env,
                                                  void* arg) {
   auto* env = const_cast<napi_env>(basic_env);
   if (!CheckEnv(env) || fun == nullptr) return napi_invalid_arg;
-  if (auto* environment = GetAttachedEnvironment(env); environment != nullptr) {
-    environment->AddCleanupHook(fun, arg);
-  } else {
-    GetOrCreateDetachedEnvState(env).env_cleanup_hooks.emplace_back(fun, arg);
+  // Without an Environment the hook would wait for napi's release to call
+  // Edge back; refuse it rather than keep one that never runs.
+  if (GetAttachedEnvironment(env) == nullptr && !DetachedEnvCleanupRuns(env)) {
+    return napi_generic_failure;
   }
-  return napi_ok;
+  return EdgeAddEnvCleanupHook(env, fun, arg);
 }
 
 napi_status NAPI_CDECL napi_remove_env_cleanup_hook(node_api_basic_env basic_env,
@@ -1046,29 +1096,38 @@ napi_status NAPI_CDECL napi_remove_env_cleanup_hook(node_api_basic_env basic_env
     environment->RemoveCleanupHook(fun, arg);
   }
   // It may have been added while no Environment was attached.
-  if (auto* state = GetDetachedEnvState(env); state != nullptr) {
-    auto& hooks = state->env_cleanup_hooks;
-    for (auto it = hooks.rbegin(); it != hooks.rend(); ++it) {
-      if (it->first == fun && it->second == arg) {
-        hooks.erase(std::next(it).base());
-        break;
+  {
+    std::lock_guard<std::mutex> lock(g_detached_env_mu);
+    auto it = g_detached_env_state.find(env);
+    if (it != g_detached_env_state.end()) {
+      auto& hooks = it->second.env_cleanup_hooks;
+      for (auto hook = hooks.rbegin(); hook != hooks.rend(); ++hook) {
+        if (hook->first == fun && hook->second == arg) {
+          hooks.erase(std::next(hook).base());
+          break;
+        }
       }
     }
-    MaybeEraseDetachedEnvState(env);
   }
+  MaybeEraseDetachedEnvState(env);
   return napi_ok;
 }
 
 // --- Fatal errors ---
 
-// As Node's: reports `err` as an uncaught exception
-// (process.on('uncaughtException'), or exiting) right away.
+// As Node's: reports `err` as uncaught right away, without throwing it: the
+// 'uncaughtException' listeners run, and with none that handles it the
+// process (or the worker) ends through the fatal path. If the handler itself
+// throws, that is fatal too (Node's kExceptionInFatalExceptionHandler).
 napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
   if (!CheckEnv(env) || err == nullptr) return napi_invalid_arg;
-  napi_status status = napi_throw(env, err);
-  if (status != napi_ok) return status;
-  bool handled = false;
-  (void)EdgeHandlePendingExceptionNow(env, &handled);
+  if (!EdgeTriggerUncaughtException(env, err, false)) {
+    napi_value thrown = nullptr;
+    if (napi_get_and_clear_last_exception(env, &thrown) == napi_ok && thrown != nullptr) {
+      constexpr int kExceptionInFatalExceptionHandler = 7;
+      (void)EdgeFinalizeFatalExceptionNow(env, thrown, kExceptionInFatalExceptionHandler);
+    }
+  }
   return napi_ok;
 }
 
@@ -1096,7 +1155,7 @@ napi_status EdgeEnsureEnvLoop(napi_env env, uv_loop_t** loop_out) {
 
   auto& state = GetOrCreateDetachedEnvState(env);
   if (!state.loop_cleanup_hook_registered) {
-    if (napi_add_env_cleanup_hook(env, CleanupEnvLoopOnTeardown, env) != napi_ok) {
+    if (EdgeAddEnvCleanupHook(env, CleanupEnvLoopOnTeardown, env) != napi_ok) {
       return napi_generic_failure;
     }
     state.loop_cleanup_hook_registered = true;

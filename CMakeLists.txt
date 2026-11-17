@@ -90,7 +90,8 @@ if(EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
       set(NAPI_V8_DEFINES "V8_COMPRESS_POINTERS" CACHE STRING
         "Semicolon-separated V8 embedder compile definitions" FORCE)
       if(APPLE)
-        set(NAPI_V8_EXTRA_LIBS "/System/Library/Frameworks/CoreFoundation.framework" CACHE STRING
+        # V8 15.9's partition allocator also needs Security (SecTask*).
+        set(NAPI_V8_EXTRA_LIBS "/System/Library/Frameworks/CoreFoundation.framework;/System/Library/Frameworks/Security.framework" CACHE STRING
           "Semicolon-separated extra V8 libraries (e.g. libplatform/libbase)" FORCE)
       endif()
     endif()
