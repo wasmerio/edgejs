@@ -3181,12 +3181,15 @@ napi_value CertVerifySpkac(napi_env env, napi_callback_info info) {
   }
   size_t len = 0;
   if (!GetBinaryByteLength(env, argv[0], &len)) return nullptr;
-  const std::vector<uint8_t> data = ValueToBytes(env, argv[0]);
-  if (data.empty()) return EmptyString(env);
-  if (data.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+  // Before copying, as Node checks: a copy past INT_MAX bytes would abort
+  // (the prebuilt V8's operator new is PartitionAlloc, which aborts instead
+  // of failing on such requests) and OpenSSL takes an int length anyway.
+  if (len > static_cast<size_t>(std::numeric_limits<int>::max())) {
     napi_throw(env, CreateErrorWithCode(env, "ERR_OUT_OF_RANGE", "spkac is too large"));
     return nullptr;
   }
+  const std::vector<uint8_t> data = ValueToBytes(env, argv[0]);
+  if (data.empty()) return EmptyString(env);
 
   NETSCAPE_SPKI* spki = DecodeSpkac(data.data(), data.size());
   bool verified = false;
@@ -3212,12 +3215,15 @@ napi_value CertExportPublicKey(napi_env env, napi_callback_info info) {
   }
   size_t len = 0;
   if (!GetBinaryByteLength(env, argv[0], &len)) return nullptr;
-  const std::vector<uint8_t> data = ValueToBytes(env, argv[0]);
-  if (data.empty()) return EmptyString(env);
-  if (data.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+  // Before copying, as Node checks: a copy past INT_MAX bytes would abort
+  // (the prebuilt V8's operator new is PartitionAlloc, which aborts instead
+  // of failing on such requests) and OpenSSL takes an int length anyway.
+  if (len > static_cast<size_t>(std::numeric_limits<int>::max())) {
     napi_throw(env, CreateErrorWithCode(env, "ERR_OUT_OF_RANGE", "spkac is too large"));
     return nullptr;
   }
+  const std::vector<uint8_t> data = ValueToBytes(env, argv[0]);
+  if (data.empty()) return EmptyString(env);
 
   NETSCAPE_SPKI* spki = DecodeSpkac(data.data(), data.size());
   if (spki == nullptr) return EmptyString(env);
@@ -3249,12 +3255,15 @@ napi_value CertExportChallenge(napi_env env, napi_callback_info info) {
   }
   size_t len = 0;
   if (!GetBinaryByteLength(env, argv[0], &len)) return nullptr;
-  const std::vector<uint8_t> data = ValueToBytes(env, argv[0]);
-  if (data.empty()) return EmptyString(env);
-  if (data.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+  // Before copying, as Node checks: a copy past INT_MAX bytes would abort
+  // (the prebuilt V8's operator new is PartitionAlloc, which aborts instead
+  // of failing on such requests) and OpenSSL takes an int length anyway.
+  if (len > static_cast<size_t>(std::numeric_limits<int>::max())) {
     napi_throw(env, CreateErrorWithCode(env, "ERR_OUT_OF_RANGE", "spkac is too large"));
     return nullptr;
   }
+  const std::vector<uint8_t> data = ValueToBytes(env, argv[0]);
+  if (data.empty()) return EmptyString(env);
 
   NETSCAPE_SPKI* spki = DecodeSpkac(data.data(), data.size());
   if (spki == nullptr || spki->spkac == nullptr || spki->spkac->challenge == nullptr) {

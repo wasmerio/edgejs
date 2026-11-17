@@ -82,9 +82,16 @@ function(edge_configure_icu)
     )
     target_link_libraries(edge_icu_common
       PUBLIC
-        edge_icu_stubdata
         edge_icu_embedded_data
     )
+    # ICU's data entry point (icudt78_dat). The bundled V8 links its own ICU
+    # of the same version with its real data under that name; the empty stub
+    # would win the link and leave V8's Intl without data (DateTimeFormat,
+    # Collator, normalize('NFKC') abort). Edge's ICU sets its own common data
+    # at startup either way (src/edge_icu_data.cc).
+    if(NOT EDGE_NAPI_PROVIDER STREQUAL "bundled-v8")
+      target_link_libraries(edge_icu_common PUBLIC edge_icu_stubdata)
+    endif()
 
     add_library(edge_icu_i18n STATIC
       ${EDGE_ICU_I18N_SOURCES}

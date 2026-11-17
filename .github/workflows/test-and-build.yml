@@ -65,6 +65,9 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       CC: clang
       CXX: clang++
+      # The prebuilt V8 archive uses ELF compact relocations (CREL), which only
+      # LLD reads (as in napi's own CI).
+      LDFLAGS: -fuse-ld=lld-20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libicu-dev lldb
+          sudo apt-get install -y libicu-dev lldb lld-20
 
       - name: Validate public N-API headers stay V8-agnostic
         shell: bash
