@@ -264,7 +264,7 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner,
                                        &startup_trace
 #endif
                                        )) {
-    (void)unofficial_napi_release_env(env_owner, nullptr);
+    (void)EdgeReleaseEnv(env, env_owner, nullptr);
     if (error_out != nullptr) {
       *error_out = "Failed to attach runtime environment";
     }
@@ -285,7 +285,7 @@ int RunWithFreshEnv(const std::function<int(napi_env)>& runner,
   EdgeEnvironmentDetach(env);
   edge_builtin_bytecode::FlushIfDirty();
   EDGE_STARTUP_TRACE(startup_trace, "cli.env.cleanup");
-  const napi_status release_status = unofficial_napi_release_env(env_owner, nullptr);
+  const napi_status release_status = EdgeReleaseEnv(env, env_owner, nullptr);
   if (release_status != napi_ok) {
     if (error_out != nullptr) {
       *error_out = "Failed to release runtime environment";

@@ -1,13 +1,20 @@
 #include "node_api.h"
 #include "node_api_types.h"
 #include "edge_async_wrap.h"
+#include "edge_buffer.h"
 #include "edge_environment.h"
 #include "edge_env_loop.h"
 #include "edge_handle_scope.h"
 #include "edge_module_loader.h"
 #include "edge_runtime.h"
+#include "unofficial_napi.h"
 
 #include <atomic>
+#include <iterator>
+#include <utility>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <new>
 #include <string>
 #include <unordered_map>
@@ -64,6 +71,9 @@ void napi_v8_run_async_cleanup_hooks(napi_env env);
 namespace {
 
 struct DetachedEnvState {
+  // napi_add_env_cleanup_hook's hooks for an env with no Environment
+  // attached; EdgeReleaseEnv runs them, last added first.
+  std::vector<std::pair<napi_cleanup_hook, void*>> env_cleanup_hooks;
   std::vector<napi_async_cleanup_hook_handle> async_cleanup_hooks;
   bool async_cleanup_hook_registered = false;
   uv_loop_t* loop = nullptr;
@@ -96,7 +106,8 @@ void MaybeEraseDetachedEnvState(napi_env env) {
   auto it = g_detached_env_state.find(env);
   if (it == g_detached_env_state.end()) return;
   const DetachedEnvState& state = it->second;
-  if (!state.async_cleanup_hook_registered &&
+  if (state.env_cleanup_hooks.empty() &&
+      !state.async_cleanup_hook_registered &&
       state.async_cleanup_hooks.empty() &&
       !state.loop_cleanup_hook_registered &&
       state.loop == nullptr &&
@@ -430,6 +441,59 @@ void napi_v8_run_async_cleanup_hooks(napi_env env) {
   state->async_cleanup_hooks.clear();
   state->async_cleanup_hook_registered = false;
   MaybeEraseDetachedEnvState(env);
+}
+
+namespace {
+
+// Runs the env cleanup hooks registered while no Environment was attached,
+// last added first, each in its own handle scope; a hook may add or remove
+// others. Exceptions they leave are dropped, as Node's cleanup hooks' are.
+void RunDetachedEnvCleanupHooks(napi_env env) {
+  for (;;) {
+    auto* state = GetDetachedEnvState(env);
+    if (state == nullptr || state->env_cleanup_hooks.empty()) break;
+    const auto [hook, arg] = state->env_cleanup_hooks.back();
+    state->env_cleanup_hooks.pop_back();
+    edge::HandleScope scope(env);
+    hook(arg);
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+      napi_value ignored = nullptr;
+      (void)napi_get_and_clear_last_exception(env, &ignored);
+    }
+  }
+  MaybeEraseDetachedEnvState(env);
+}
+
+size_t TypedArrayElementSize(napi_typedarray_type type) {
+  switch (type) {
+    case napi_int16_array:
+    case napi_uint16_array:
+    case napi_float16_array:
+      return 2;
+    case napi_int32_array:
+    case napi_uint32_array:
+    case napi_float32_array:
+      return 4;
+    case napi_float64_array:
+    case napi_bigint64_array:
+    case napi_biguint64_array:
+      return 8;
+    default:
+      return 1;
+  }
+}
+
+}  // namespace
+
+napi_status EdgeReleaseEnv(napi_env env,
+                           unofficial_napi_env_owner owner,
+                           uv_loop_t* loop_or_null) {
+  if (env != nullptr) RunDetachedEnvCleanupHooks(env);
+  const napi_status status = unofficial_napi_release_env(owner, loop_or_null);
+  // The env is gone, and a later one may get its address.
+  if (env != nullptr) g_detached_env_state.erase(env);
+  return status;
 }
 
 extern "C" {
@@ -826,6 +890,203 @@ napi_status NAPI_CDECL napi_close_callback_scope(napi_env env, napi_callback_sco
   }
   delete scope;
   return napi_ok;
+}
+
+// --- Node Buffers ---
+// A Buffer is a Uint8Array with the env's Buffer.prototype, which bootstrap
+// hands to the buffer binding (EdgeGetBufferPrototype). Before that these
+// make plain Uint8Arrays. napi has no notion of Buffer: it makes the array
+// (unofficial_napi_create_uint8array, one import on WASIX) and Edge gives
+// it the prototype.
+
+napi_status NAPI_CDECL napi_create_buffer(napi_env env,
+                                          size_t length,
+                                          void** data,
+                                          napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr) return napi_invalid_arg;
+  void* bytes = nullptr;
+  const napi_status status = unofficial_napi_create_uint8array(
+      env, length, EdgeGetBufferPrototype(env), &bytes, result);
+  if (status == napi_ok && data != nullptr) *data = bytes;
+  return status;
+}
+
+napi_status NAPI_CDECL napi_create_buffer_copy(napi_env env,
+                                               size_t length,
+                                               const void* data,
+                                               void** result_data,
+                                               napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr || (length > 0 && data == nullptr)) {
+    return napi_invalid_arg;
+  }
+  void* bytes = nullptr;
+  const napi_status status = unofficial_napi_create_uint8array(
+      env, length, EdgeGetBufferPrototype(env), &bytes, result);
+  if (status != napi_ok) return status;
+  if (length > 0) std::memcpy(bytes, data, length);
+  if (result_data != nullptr) *result_data = bytes;
+  return napi_ok;
+}
+
+#ifndef NODE_API_NO_EXTERNAL_BUFFERS_ALLOWED
+napi_status NAPI_CDECL napi_create_external_buffer(napi_env env,
+                                                   size_t length,
+                                                   void* data,
+                                                   node_api_basic_finalize finalize_cb,
+                                                   void* finalize_hint,
+                                                   napi_value* result) {
+  if (!CheckEnv(env) || result == nullptr || (length > 0 && data == nullptr)) {
+    return napi_invalid_arg;
+  }
+  // The finalizer belongs to the ArrayBuffer, which a view keeps alive (and
+  // `buf.buffer` can outlive the view).
+  napi_value arraybuffer = nullptr;
+  napi_status status = napi_create_external_arraybuffer(
+      env, data, length, finalize_cb, finalize_hint, &arraybuffer);
+  if (status != napi_ok) return status;
+  status = napi_create_typedarray(env, napi_uint8_array, length, arraybuffer, 0, result);
+  if (status != napi_ok) return status;
+  EdgeMakeBuffer(env, *result);
+  return napi_ok;
+}
+#endif  // NODE_API_NO_EXTERNAL_BUFFERS_ALLOWED
+
+napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(napi_env env,
+                                                               napi_value arraybuffer,
+                                                               size_t byte_offset,
+                                                               size_t byte_length,
+                                                               napi_value* result) {
+  if (!CheckEnv(env) || arraybuffer == nullptr || result == nullptr) return napi_invalid_arg;
+  bool is_arraybuffer = false;
+  if (napi_is_arraybuffer(env, arraybuffer, &is_arraybuffer) != napi_ok || !is_arraybuffer) {
+    return napi_invalid_arg;
+  }
+  size_t arraybuffer_length = 0;
+  napi_status status =
+      napi_get_arraybuffer_info(env, arraybuffer, nullptr, &arraybuffer_length);
+  if (status != napi_ok) return status;
+  if (byte_offset > arraybuffer_length || byte_length > arraybuffer_length - byte_offset) {
+    return napi_invalid_arg;
+  }
+  // As Node's Buffer::New(isolate, ab, ...), the Buffer views `arraybuffer`.
+  status = napi_create_typedarray(
+      env, napi_uint8_array, byte_length, arraybuffer, byte_offset, result);
+  if (status != napi_ok) return status;
+  EdgeMakeBuffer(env, *result);
+  return napi_ok;
+}
+
+// Node's Buffer::HasInstance: any ArrayBufferView.
+napi_status NAPI_CDECL napi_is_buffer(napi_env env, napi_value value, bool* result) {
+  if (!CheckEnv(env) || value == nullptr || result == nullptr) return napi_invalid_arg;
+  bool is_view = false;
+  napi_status status = napi_is_typedarray(env, value, &is_view);
+  if (status != napi_ok) return status;
+  if (!is_view) {
+    status = napi_is_dataview(env, value, &is_view);
+    if (status != napi_ok) return status;
+  }
+  *result = is_view;
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_get_buffer_info(napi_env env,
+                                            napi_value value,
+                                            void** data,
+                                            size_t* length) {
+  if (!CheckEnv(env) || value == nullptr) return napi_invalid_arg;
+  bool is_typedarray = false;
+  napi_status status = napi_is_typedarray(env, value, &is_typedarray);
+  if (status != napi_ok) return status;
+  if (is_typedarray) {
+    napi_typedarray_type type = napi_uint8_array;
+    size_t element_count = 0;
+    void* bytes = nullptr;
+    status = napi_get_typedarray_info(
+        env, value, &type, &element_count, &bytes, nullptr, nullptr);
+    if (status != napi_ok) return status;
+    if (data != nullptr) *data = bytes;
+    if (length != nullptr) *length = element_count * TypedArrayElementSize(type);
+    return napi_ok;
+  }
+  bool is_dataview = false;
+  status = napi_is_dataview(env, value, &is_dataview);
+  if (status != napi_ok) return status;
+  if (!is_dataview) return napi_invalid_arg;
+  size_t byte_length = 0;
+  void* bytes = nullptr;
+  status = napi_get_dataview_info(env, value, &byte_length, &bytes, nullptr, nullptr);
+  if (status != napi_ok) return status;
+  if (data != nullptr) *data = bytes;
+  if (length != nullptr) *length = byte_length;
+  return napi_ok;
+}
+
+// --- Env cleanup hooks ---
+// As Node's, they run when the env's Environment is cleaned up
+// (Environment::RunCleanup), last added first. An env with no Environment
+// attached keeps them until EdgeReleaseEnv.
+
+napi_status NAPI_CDECL napi_add_env_cleanup_hook(node_api_basic_env basic_env,
+                                                 napi_cleanup_hook fun,
+                                                 void* arg) {
+  auto* env = const_cast<napi_env>(basic_env);
+  if (!CheckEnv(env) || fun == nullptr) return napi_invalid_arg;
+  if (auto* environment = GetAttachedEnvironment(env); environment != nullptr) {
+    environment->AddCleanupHook(fun, arg);
+  } else {
+    GetOrCreateDetachedEnvState(env).env_cleanup_hooks.emplace_back(fun, arg);
+  }
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_remove_env_cleanup_hook(node_api_basic_env basic_env,
+                                                    napi_cleanup_hook fun,
+                                                    void* arg) {
+  auto* env = const_cast<napi_env>(basic_env);
+  if (!CheckEnv(env) || fun == nullptr) return napi_invalid_arg;
+  if (auto* environment = GetAttachedEnvironment(env); environment != nullptr) {
+    environment->RemoveCleanupHook(fun, arg);
+  }
+  // It may have been added while no Environment was attached.
+  if (auto* state = GetDetachedEnvState(env); state != nullptr) {
+    auto& hooks = state->env_cleanup_hooks;
+    for (auto it = hooks.rbegin(); it != hooks.rend(); ++it) {
+      if (it->first == fun && it->second == arg) {
+        hooks.erase(std::next(it).base());
+        break;
+      }
+    }
+    MaybeEraseDetachedEnvState(env);
+  }
+  return napi_ok;
+}
+
+// --- Fatal errors ---
+
+// As Node's: reports `err` as an uncaught exception
+// (process.on('uncaughtException'), or exiting) right away.
+napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
+  if (!CheckEnv(env) || err == nullptr) return napi_invalid_arg;
+  napi_status status = napi_throw(env, err);
+  if (status != napi_ok) return status;
+  bool handled = false;
+  (void)EdgeHandlePendingExceptionNow(env, &handled);
+  return napi_ok;
+}
+
+void NAPI_CDECL napi_fatal_error(const char* location,
+                                 size_t location_len,
+                                 const char* message,
+                                 size_t message_len) {
+  const char* loc = location == nullptr ? "" : location;
+  const char* msg = message == nullptr ? "" : message;
+  const size_t loc_len = location_len == NAPI_AUTO_LENGTH ? std::strlen(loc) : location_len;
+  const size_t msg_len = message_len == NAPI_AUTO_LENGTH ? std::strlen(msg) : message_len;
+  std::fprintf(stderr, "FATAL ERROR: %.*s %.*s\n", static_cast<int>(loc_len), loc,
+               static_cast<int>(msg_len), msg);
+  std::fflush(stderr);
+  std::abort();
 }
 
 }  // extern "C"

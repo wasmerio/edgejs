@@ -9,6 +9,13 @@ set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(EDGE_ROOT "${PROJECT_ROOT}")
 set(NAPI_V8_ROOT "${PROJECT_ROOT}/napi/v8")
 set(NAPI_INCLUDE_ROOT "${PROJECT_ROOT}/napi/include")
+# Edge.js owns node_api.h (include/, src/node_api.cc); napi provides the
+# engine (js_native_api.h, unofficial_napi.h). Our node_api.h is found first
+# by every target, napi's included, and napi leaves out its deprecated
+# definitions of the calls Edge defines.
+include_directories(BEFORE "${PROJECT_ROOT}/include")
+set(NAPI_PROVIDE_NODE_API OFF CACHE BOOL
+  "Define node_api.h's Buffer, env cleanup hook and fatal calls (deprecated)" FORCE)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(Git QUIET)
 include("${PROJECT_ROOT}/cmake/EdgeBuiltinCatalog.cmake")

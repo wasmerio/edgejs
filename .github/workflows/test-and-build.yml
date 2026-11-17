@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h include/node_api.h include/node_api_types.h
 
       - name: Build edge
         shell: bash
@@ -212,7 +212,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h include/node_api.h include/node_api_types.h
 
       - name: Build edge
         shell: bash

@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include "edge_env_loop.h"
 #include "edge_environment_runtime.h"
 #include "edge_runtime_platform.h"
 #include "edge_timers_host.h"
@@ -55,7 +56,7 @@ struct EnvScope {
       EdgeEnvironmentRunCleanup(env);
       EdgeEnvironmentRunAtExitCallbacks(env);
       EdgeEnvironmentDetach(env);
-      EXPECT_EQ(unofficial_napi_release_env(owner, nullptr), napi_ok);
+      EXPECT_EQ(EdgeReleaseEnv(env, owner, nullptr), napi_ok);
       env = nullptr;
       owner = nullptr;
     }
