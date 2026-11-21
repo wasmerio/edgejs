@@ -439,7 +439,7 @@ function discoverProjects(selector) {
   // hanging on GitHub macOS runners (a gatsby-worker/sharp issue) — not EdgeJS
   // running the app — and the harness has no build-step timeout, so a stage
   // skip alone would still hang the job during the build. See the macOS job in
-  // .github/workflows/test-and-build-quickjs.yml.
+  // .github/workflows/test-and-build.yml.
   const excluded = parseExcludedProjects();
   const discovered = excluded.size > 0
     ? projects.filter((project) => !excluded.has(project.name))

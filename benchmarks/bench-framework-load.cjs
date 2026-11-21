@@ -6,10 +6,13 @@
 // and exits at once, so both its own elapsed time and the process wall time
 // that hyperfine sees are exact.
 //
-// usage: node load.cjs <autocannon-dir> <url> <amount> <connections> <expected-body> <output.jsonl>
+// With a max-seconds argument the run also stops at that time limit, and its
+// rate counts the responses received so far ("stopped_at_limit" is true).
+//
+// usage: node load.cjs <autocannon-dir> <url> <amount> <connections> <expected-body> <output.jsonl> [max-seconds]
 'use strict';
 const fs = require('node:fs');
-const [autocannonDir, url, amountArg, connectionsArg, expectBody, output] = process.argv.slice(2);
+const [autocannonDir, url, amountArg, connectionsArg, expectBody, output, maxSecondsArg] = process.argv.slice(2);
 const autocannon = require(autocannonDir);
 const amount = Number(amountArg);
 const connections = Number(connectionsArg);
@@ -21,6 +24,8 @@ let errors = 0;
 let mismatches = 0;
 let finished = false;
 
+let stoppedAtLimit = false;
+
 function finish(elapsedNs, complete) {
   if (finished) return;
   finished = true;
@@ -29,7 +34,7 @@ function finish(elapsedNs, complete) {
   const seconds = Number(elapsedNs) / 1e9;
   const ok = complete && non200 === 0 && errors === 0 && mismatches === 0;
   fs.appendFileSync(output, JSON.stringify({
-    ok, requests: responses, seconds, req_per_sec: responses / seconds,
+    ok, requests: responses, seconds, req_per_sec: responses / seconds, stopped_at_limit: stoppedAtLimit,
     non200, errors, mismatches,
     latency_ms: { p50: at(0.5), p90: at(0.9), p99: at(0.99), max: at(1) },
   }) + '\n');
@@ -45,5 +50,11 @@ instance.on('response', (client, statusCode, bytes, responseTime) => {
 });
 instance.on('reqError', () => { errors++; });
 instance.on('reqMismatch', () => { mismatches++; });
+if (maxSecondsArg) {
+  setTimeout(() => {
+    stoppedAtLimit = true;
+    finish(process.hrtime.bigint() - start, responses > 0);
+  }, Number(maxSecondsArg) * 1000).unref();
+}
 // Only reached when errors or mismatches kept the run from completing.
 instance.on('done', () => finish(process.hrtime.bigint() - start, false));

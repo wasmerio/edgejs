@@ -306,18 +306,36 @@ outputs.
 
 ### On pull requests
 
-The `framework-bench` job in `.github/workflows/test-and-build.yml` runs this
-benchmark on every pull request from a branch of this repository, after the
-`v8-wasix` job has built the PR. It downloads that build (`edge-wasix` and
-`napi-wasmer-linux-amd64`) and the newest finished build of the base branch,
-runs both at the same time on one runner, each pinned to half of its CPUs and
-swapping halves between rounds, and posts the comparison as a pull request
-comment. Later pushes update the same comment, which keeps a short table of
-earlier runs. The benchmark itself is capped at about 100 seconds, so it uses
-10% of the request counts above: it catches large changes, and smaller ones
-need a local run. `benchmarks/ci/framework-bench.py` holds the logic; its
-`run` and `comment` subcommands also work locally on two directories that
-each hold `dist/` (an unpacked `edge-wasix.zip`) and `runner/napi_wasmer`.
+`.github/workflows/test-and-build.yml` builds every lane in parallel, then
+runs each build's Node test suite, its framework tests and its benchmark in
+parallel jobs that reuse the build's artifacts:
+
+```text
+build-<lane>  -->  test-<lane>
+              -->  test-frameworks-<lane>
+              -->  bench-<runtime>  -->  bench-comment
+```
+
+There is one `bench-*` job per runtime: Edge.js V8 native and WASIX, Edge.js
+QuickJS native and WASIX, and Node.js 24 and 26. Each Edge.js job runs the
+PR's build and the newest finished build of the base branch at the same time
+on one runner, each pinned to half of its CPUs and swapping halves between
+rounds. The Node.js jobs run the same binary in both lanes, as a reference and
+a measure of the run's noise. Each timed run lasts at most 2 seconds and the
+benchmark itself about 100 seconds.
+
+When all benchmark jobs have finished, without waiting for the tests,
+`bench-comment` posts one pull request comment with every runtime's results,
+and later pushes update it, keeping a short table of earlier runs. The steps
+of a benchmark job are in `.github/actions/framework-bench`, the logic in
+`benchmarks/ci/framework-bench.py`, whose `run` and `comment` subcommands
+also work locally.
+
+The harness's lanes are not limited to WASIX builds: a lane with `"binary"`
+runs a host executable (a native Edge.js build, or Node.js with
+`"node": true`), and a lane with `"package"` runs a Wasmer package directory
+with the `wasmer` CLI (an unpacked `edge-quickjs-wasix.zip`). `--max-seconds`
+caps each timed run, which keeps slow runtimes within a time budget.
 
 Interpret small differences cautiously: on a laptop, run-to-run noise is
 about 3 to 5%, larger for Next.js. Re-run, or use more rounds, before

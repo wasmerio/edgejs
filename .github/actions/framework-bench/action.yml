@@ -1,0 +1,143 @@
+name: Framework benchmark
+description: >-
+  Benchmarks one runtime on the framework fixtures, the PR's build against the
+  base branch's (or, for Node.js, a binary against itself), and uploads the
+  results as artifact framework-bench-<runtime>. See benchmarks/ci/framework-bench.py.
+  Expects a checkout of the PR and GH_TOKEN in the environment.
+
+inputs:
+  runtime:
+    description: v8-native, v8-wasix, quickjs-native, quickjs-wasix, node24 or node26
+    required: true
+  artifact:
+    description: This run's dist artifact holding the PR build (empty for Node.js)
+    default: ""
+  lane-node-version:
+    description: Node.js version benchmarked by a Node.js runtime
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Install the benchmarked Node.js first and remember its path: the next
+    # setup-node puts Node.js 24 first on PATH for setup, the load generator
+    # and hyperfine's helpers, the same in every benchmark job.
+    - name: Setup benchmarked Node.js
+      if: ${{ inputs.lane-node-version != '' }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.lane-node-version }}
+
+    - name: Remember benchmarked Node.js
+      if: ${{ inputs.lane-node-version != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "BENCH_LANE_NODE=$(command -v node)" >> "${GITHUB_ENV}"
+        node --version
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "24"
+
+    - name: Restore benchmark fixtures
+      id: fixtures
+      uses: actions/cache@v4
+      with:
+        path: benchmarks/frameworks/.build
+        key: framework-fixtures-${{ runner.os }}-node24-${{ hashFiles('benchmarks/frameworks/**') }}
+
+    - name: Build benchmark fixtures
+      if: ${{ steps.fixtures.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        benchmarks/frameworks/setup.sh
+
+    - name: Install hyperfine
+      shell: bash
+      run: |
+        set -euo pipefail
+        version=v1.20.0
+        curl -sSfL "https://github.com/sharkdp/hyperfine/releases/download/${version}/hyperfine-${version}-x86_64-unknown-linux-musl.tar.gz" \
+          | tar -xz -C "${RUNNER_TEMP}"
+        echo "${RUNNER_TEMP}/hyperfine-${version}-x86_64-unknown-linux-musl" >> "${GITHUB_PATH}"
+
+    - name: Download PR build
+      if: ${{ inputs.artifact != '' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ runner.temp }}/bench/head/artifact
+
+    - name: Download PR N-API runner
+      if: ${{ inputs.runtime == 'v8-wasix' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: napi-wasmer-linux-amd64
+        path: ${{ runner.temp }}/bench/head/runner
+
+    - name: Prepare PR build
+      if: ${{ inputs.artifact != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        head="${RUNNER_TEMP}/bench/head"
+        unzip -q "${head}/artifact/${{ inputs.artifact }}.zip" -d "${head}/dist"
+        if [[ -f "${head}/runner/napi_wasmer" ]]; then
+          chmod +x "${head}/runner/napi_wasmer"
+        fi
+
+    # The released Wasmer CLI runs both QuickJS WASIX lanes.
+    - name: Install Wasmer CLI
+      if: ${{ inputs.runtime == 'quickjs-wasix' }}
+      shell: bash
+      env:
+        WASMER_SOURCE_REF: ""
+        WASMER_ARTIFACT_RUN_ID: ""
+      run: ./scripts/ci/provision-wasmer.sh wasix
+
+    - name: Download base build
+      if: ${{ inputs.artifact != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 benchmarks/ci/framework-bench.py fetch-base \
+          --runtime "${{ inputs.runtime }}" \
+          --repo "${{ github.repository }}" \
+          --base-ref "${{ github.event.pull_request.base.ref }}" \
+          --base-sha "${{ github.event.pull_request.base.sha }}" \
+          --head-sha "${{ github.sha }}" \
+          --head-runner "${RUNNER_TEMP}/bench/head/runner/napi_wasmer" \
+          --out "${RUNNER_TEMP}/bench/base"
+
+    - name: Benchmark
+      shell: bash
+      run: |
+        set -euo pipefail
+        out="${RUNNER_TEMP}/bench/out"
+        if [[ -n "${BENCH_LANE_NODE:-}" ]]; then
+          head="${BENCH_LANE_NODE}" base="${BENCH_LANE_NODE}"
+        else
+          head="${RUNNER_TEMP}/bench/head" base="${RUNNER_TEMP}/bench/base"
+        fi
+        status=0
+        python3 benchmarks/ci/framework-bench.py run --runtime "${{ inputs.runtime }}" \
+          --head "${head}" --base "${base}" --out "${out}" || status=$?
+        if [[ -f "${RUNNER_TEMP}/bench/base/meta.json" ]]; then
+          cp "${RUNNER_TEMP}/bench/base/meta.json" "${out}/base-meta.json"
+        fi
+        exit "${status}"
+
+    - name: Upload benchmark results
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: framework-bench-${{ inputs.runtime }}
+        path: |
+          ${{ runner.temp }}/bench/out/*.json
+          ${{ runner.temp }}/bench/out/*.log
+        if-no-files-found: ignore
+        retention-days: 14
+        overwrite: true

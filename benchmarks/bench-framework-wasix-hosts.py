@@ -98,9 +98,12 @@ def load_config(path):
             lane.setdefault("guest", str(build / "edgejs.wasm"))
             lane.setdefault("builtins", str(build / "node-lib"))
             lane["mounts"] = {str(build / "icu"): "/usr/share/edge-icu", **lane.get("mounts", {})}
-        for key in ("runner", "guest", "builtins"):
+        for key in ("runner", "guest", "builtins", "binary", "package"):
             if lane.get(key):
                 lane[key] = resolve(lane[key])
+        # "wasmer" may be a command name on PATH or a path.
+        if lane.get("wasmer") and os.sep in lane["wasmer"]:
+            lane["wasmer"] = resolve(lane["wasmer"])
         lane["mounts"] = {resolve(host): guest for host, guest in lane.get("mounts", {}).items()}
     return config
 
@@ -119,7 +122,38 @@ def free_port():
         return listener.getsockname()[1]
 
 
+def lane_kind(lane):
+    """napi: napi_wasmer runner + guest wasm (Edge.js V8 WASIX).
+    native: a host executable (Edge.js native builds, Node.js).
+    wasmer: a Wasmer package run with the wasmer CLI (Edge.js QuickJS WASIX)."""
+    if lane.get("binary"):
+        return "native"
+    if lane.get("package"):
+        return "wasmer"
+    return "napi"
+
+
 def guest_command(lane, extra, app_dir=None, env=None):
+    """The command that runs `extra` in the lane, and the environment it adds.
+
+    `extra` names the app entry as /app/<file> when `app_dir` is given."""
+    kind = lane_kind(lane)
+    guest_env = {**({} if lane.get("node") else {"EDGE_BYTECODE_CACHE": "0"}),
+                 **lane.get("env", {}), **(env or {})}
+    if kind == "native":
+        args = [str(Path(app_dir) / arg[len("/app/"):]) if app_dir is not None and arg.startswith("/app/")
+                else arg for arg in extra]
+        return [lane["binary"], *args], guest_env
+    if kind == "wasmer":
+        command = [lane.get("wasmer", "wasmer"), "run", *lane.get("wasmer_args", ["--cranelift"]),
+                   "--stack-size", str(lane.get("stack_size", 4194304)), "--net"]
+        for name, value in guest_env.items():
+            command += ["--env", f"{name}={value}"]
+        for host, guest in lane.get("mounts", {}).items():
+            command += ["--volume", f"{host}:{guest}"]
+        if app_dir is not None:
+            command += ["--volume", f"{app_dir}:/app", "--cwd", "/app"]
+        return [*command, lane["package"], "--", *extra], {}
     command = [lane["runner"], lane["guest"], "--program-name", "edge"]
     if lane.get("builtins"):
         command += ["--builtin-js-dir", lane["builtins"]]
@@ -127,10 +161,9 @@ def guest_command(lane, extra, app_dir=None, env=None):
         command += ["--mount", f"{host}:{guest}"]
     if app_dir is not None:
         command += ["--mount", f"{app_dir}:/app", "--cwd", "/app"]
-    guest_env = {"EDGE_BYTECODE_CACHE": "0", **lane.get("env", {}), **(env or {})}
     for name, value in guest_env.items():
         command += ["--env", f"{name}={value}"]
-    return [*command, "--", *extra]
+    return [*command, "--", *extra], {}
 
 
 def host_env(config, lane_name):
@@ -150,10 +183,10 @@ def spawn_server(config, lane_name, fixture, log_path):
     port = free_port()
     env = dict(NODE_ENV="production", NEXT_TELEMETRY_DISABLED="1",
                HOST=HOST, HOSTNAME=HOST, PORT=str(port))
-    command = guest_command(lane, ("/app/" + entry,), app_dir=cwd, env=env)
+    command, extra_env = guest_command(lane, ("/app/" + entry,), app_dir=cwd, env=env)
     log = open(log_path, "w")
     start = time.monotonic()
-    process = subprocess.Popen(command, cwd=cwd, env=host_env(config, lane_name),
+    process = subprocess.Popen(command, cwd=cwd, env={**host_env(config, lane_name), **extra_env},
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                start_new_session=True)
     return process, port, start, command
@@ -214,8 +247,11 @@ def autocannon_command(config, port, extra):
 
 
 def load_command(config, port, amount, connections, output):
-    return [config["node"], str(HERE / "bench-framework-load.cjs"), str(autocannon_dir(config)),
-            f"http://{HOST}:{port}{ROUTE}", str(amount), str(connections), BODY.decode(), str(output)]
+    command = [config["node"], str(HERE / "bench-framework-load.cjs"), str(autocannon_dir(config)),
+               f"http://{HOST}:{port}{ROUTE}", str(amount), str(connections), BODY.decode(), str(output)]
+    if config.get("max_seconds"):
+        command.append(str(config["max_seconds"]))
+    return command
 
 
 def check_load(data):
@@ -240,6 +276,8 @@ def cmd_start(config, lane_name, fixture):
     paths = cell_paths(config, lane_name, fixture)
     paths["state"].parent.mkdir(parents=True, exist_ok=True)
     process, port, start, command = spawn_server(config, lane_name, fixture, paths["log"])
+    # Record the server at once, so whoever kills this harness can find it.
+    paths["state"].write_text(json.dumps({"pid": process.pid}))
     try:
         listen_ms, first_ms = wait_ready(process, port, start)
         warmup = subprocess.run(autocannon_command(config, port, ["--duration", str(config["warmup"])]),
@@ -248,6 +286,7 @@ def cmd_start(config, lane_name, fixture):
         check_load(warm)
     except Exception:
         kill_group(process.pid)
+        paths["state"].unlink(missing_ok=True)
         sys.stderr.write(paths["log"].read_text())
         raise
     load = load_command(config, port, amount_for(config, fixture), config["connections"], paths["samples"])
@@ -272,10 +311,12 @@ def cmd_probe(config, lane_name, fixture):
     paths = cell_paths(config, lane_name, fixture)
     paths["state"].parent.mkdir(parents=True, exist_ok=True)
     process, port, start, _ = spawn_server(config, lane_name, fixture, paths["log"])
+    paths["state"].write_text(json.dumps({"pid": process.pid}))
     try:
         listen_ms, first_ms = wait_ready(process, port, start)
     finally:
         kill_group(process.pid)
+        paths["state"].unlink(missing_ok=True)
     with paths["probes"].open("a") as out:
         out.write(json.dumps({"listen_ms": listen_ms, "first_response_ms": first_ms}) + "\n")
 
@@ -372,9 +413,11 @@ def check_prerequisites(config, need_hyperfine):
             missing.append(f"lane {name}: no snapshot {lane['snapshot']!r}: run "
                            f"`benchmarks/bench-framework-wasix-hosts.py snapshot {lane['snapshot']}` first")
             continue
-        for key in ("runner", "guest", "builtins"):
+        for key in ("runner", "guest", "builtins", "binary", "package"):
             if lane.get(key) and not Path(lane[key]).exists():
                 missing.append(f"lane {name}: {key} not found: {lane[key]}")
+        if lane_kind(lane) == "wasmer" and shutil.which(lane.get("wasmer", "wasmer")) is None:
+            missing.append(f"lane {name}: wasmer CLI not found: {lane.get('wasmer', 'wasmer')}")
         for host in lane.get("mounts", {}):
             if not Path(host).exists():
                 missing.append(f"lane {name}: mount not found: {host}")
@@ -384,10 +427,19 @@ def check_prerequisites(config, need_hyperfine):
 
 def lane_identity(config, name):
     lane = config["lanes"][name]
-    versions = subprocess.check_output(guest_command(lane, ("-p", "JSON.stringify(process.versions)")),
-                                       text=True, env=host_env(config, name))
-    return {**lane, "runner_sha256": sha256(lane["runner"]), "guest_sha256": sha256(lane["guest"]),
-            "guest_edge_version": json.loads(versions).get("edge")}
+    command, extra_env = guest_command(lane, ("-p", "JSON.stringify(process.versions)"))
+    output = subprocess.check_output(command, text=True, env={**host_env(config, name), **extra_env})
+    versions = json.loads(output.strip().splitlines()[-1])
+    kind = lane_kind(lane)
+    hashed = {"napi": ("runner", "guest"), "native": ("binary",), "wasmer": ()}[kind]
+    identity = {**lane, "kind": kind, "guest_edge_version": versions.get("edge"),
+                "node_version": versions.get("node"),
+                **{f"{key}_sha256": sha256(lane[key]) for key in hashed}}
+    if kind == "wasmer":
+        module = Path(lane["package"]) / "bin" / "edge"
+        if module.exists():
+            identity["guest_sha256"] = sha256(module)
+    return identity
 
 
 def cmd_snapshot(config, args):
@@ -423,6 +475,7 @@ def cmd_smoke(config, args):
             output = config["state"] / "cells" / f"{fixture}-{lane}.smoke.jsonl"
             output.unlink(missing_ok=True)
             process, port, start, _ = spawn_server(config, lane, fixture, paths["log"])
+            paths["state"].write_text(json.dumps({"pid": process.pid}))
             status = "ok"
             try:
                 _, first_ms = wait_ready(process, port, start)
@@ -435,6 +488,7 @@ def cmd_smoke(config, args):
                 first_ms, result, status = None, None, f"FAILED: {error}"
             finally:
                 kill_group(process.pid)
+                paths["state"].unlink(missing_ok=True)
             log = paths["log"].read_text(errors="replace")
             notes = [marker for marker in ("store is not lent", "Cannot call a native function",
                                            "Check failed", "panicked") if marker in log]
@@ -457,7 +511,8 @@ def cmd_run(config, config_path, args):
     lanes = list(config["lanes"])
     fixtures = args.fixtures or list(FIXTURES)
     self = (f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} "
-            f"--config {shlex.quote(str(config_path))} --amount-scale {config['amount_scale']}")
+            f"--config {shlex.quote(str(config_path))} --amount-scale {config['amount_scale']}"
+            + (f" --max-seconds {config['max_seconds']}" if config.get("max_seconds") else ""))
     results_dir = state / "hyperfine"
     results_dir.mkdir(parents=True, exist_ok=True)
     (state / "cells").mkdir(parents=True, exist_ok=True)
@@ -470,6 +525,7 @@ def cmd_run(config, config_path, args):
         "config": {name: config[name] for name in ("compiler", "connections", "warmup")},
         "method": {"rounds": args.rounds, "runs_per_round": args.runs, "startup_runs": args.startup_runs,
                    "amounts": {fixture: amount_for(config, fixture) for fixture in fixtures},
+                   "max_seconds": config.get("max_seconds"),
                    "route": ROUTE, "expected_body": BODY.decode(),
                    "idle_gate_percent": args.idle, "idle_after_percent": args.idle_after,
                    "max_run_spread": args.spread, "attempts": args.attempts},
@@ -549,6 +605,8 @@ def main():
                         help="lanes to compare (default: %(default)s)")
     parser.add_argument("--amount-scale", type=float, default=1.0,
                         help="multiply the fixed request counts, e.g. 0.2 for a quick run")
+    parser.add_argument("--max-seconds", type=float,
+                        help="also end each timed run after this many seconds (rate then counts the replies so far)")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("start", "stop", "probe"):
         cell = sub.add_parser(name)
@@ -575,6 +633,7 @@ def main():
     args = parser.parse_args()
     config = load_config(args.config)
     config["amount_scale"] = args.amount_scale
+    config["max_seconds"] = args.max_seconds
     if args.command == "run":
         cmd_run(config, Path(args.config).resolve(), args)
     elif args.command == "smoke":
