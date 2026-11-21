@@ -101,7 +101,8 @@ jobs:
             echo "version=${version}"
           } >> "${GITHUB_OUTPUT}"
 
-  build-v8:
+  # Builds and tests both engines (V8 and QuickJS) on every platform.
+  build:
     needs: metadata
     uses: ./.github/workflows/test-and-build.yml
     with:
@@ -109,16 +110,8 @@ jobs:
       release: true
     secrets: inherit
 
-  build-quickjs:
-    needs: metadata
-    uses: ./.github/workflows/test-and-build-quickjs.yml
-    with:
-      ref: ${{ needs.metadata.outputs.sha }}
-      release: true
-    secrets: inherit
-
   assets:
-    needs: [metadata, build-v8, build-quickjs]
+    needs: [metadata, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

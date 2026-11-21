@@ -25,6 +25,8 @@ benchmarks/results/**/*.log
 benchmarks/results/baselines/**/*.txt
 benchmarks/workloads/bytecode-cache/gen/
 benchmarks/workloads/bytecode-cache/gen-esm/
+benchmarks/frameworks/.build/
+benchmarks/frameworks/*.local.json
 
 /AGENTS.md
 /claude.md

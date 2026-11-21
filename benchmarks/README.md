@@ -235,6 +235,124 @@ What it does not measure:
 - timer cancellation or re-scheduling
 - `setImmediate` or `queueMicrotask` (covered by `promise-microtask-chain`)
 
+## Framework servers on WASIX
+
+`bench-framework-wasix-hosts.py` measures what a change does to real servers:
+`node:http`, Express 5.2.1, Hono 4.12.31 and Next.js 16.1.7 (standalone),
+each running inside the WASIX guest on the host N-API runner and answering
+`GET /api/bench` with the 11-byte body `hello edge\n`. It compares "lanes",
+each a `napi_wasmer` runner plus an Edge.js guest build, so it covers changes
+to Edge.js, to N-API and to Wasmer alike.
+
+Prerequisites: Node.js and npm on the host, `hyperfine`, and a WASIX build
+(`make build-wasix-napi`).
+
+```sh
+# Once: install and build the fixtures (locked versions, needs network).
+benchmarks/frameworks/setup.sh
+
+# Before the change: save the current build as the baseline.
+python3 benchmarks/bench-framework-wasix-hosts.py snapshot baseline
+
+# Make the change and rebuild (make build-wasix-napi), then:
+python3 benchmarks/bench-framework-wasix-hosts.py smoke
+python3 benchmarks/bench-framework-wasix-hosts.py run
+```
+
+`smoke` starts every server once per lane, sends 2,000 requests and checks
+every reply. It takes a few seconds and also flags server logs that mention a
+store-lending error, a V8 check failure or a Rust panic. Its req/s figures
+are unwarmed and only a sanity check.
+
+`run` is the benchmark. For each fixture and lane, a fresh server is started
+and warmed up for 3 seconds with 32 connections, then hyperfine times a fixed
+number of requests (250,000 for `node:http` and Hono, 150,000 for Express,
+20,000 for Next.js) through `bench-framework-load.cjs`, which validates every
+reply and records exact timing and latency percentiles. It does this for two
+rounds of two runs each, rotating fixture order and reversing lane order
+between rounds, then times process start to the first reply. It prints a
+table with each lane's change against the first lane and writes everything
+(artifact hashes, raw runs, summary) to
+`benchmarks/results/framework-wasix-hosts.json`. On an idle machine a full
+run of two lanes takes about 10 minutes.
+
+Useful options:
+
+- `--amount-scale 0.2` (before `run`) with `run --rounds 1` gives a rough
+  answer in about a minute.
+- `run --fixtures http hono` limits the servers.
+- `run --idle 0` turns off the idle-machine gate. By default each cell waits
+  for three seconds of at least 85% idle CPU and is redone (up to three
+  attempts) when the machine was busy afterwards or its two runs differ by
+  more than 6%. On a busy desktop the gate can wait a long time.
+- `run --startup-runs 0` skips the first-reply pass.
+
+The default config is `bench-framework-wasix-hosts.example.json`: the
+`baseline` snapshot against the current `build-wasix/` and
+`build-wasix-napi/` outputs. For other comparisons, write your own config
+(files named `benchmarks/frameworks/*.local.json` are ignored by git) and
+pass `--config`. Paths in a config are relative to the config file. A lane
+takes one of:
+
+- `{"snapshot": "NAME"}`: a build saved with `snapshot NAME`.
+- `{"build": "DIR", "runner": "PATH"}`: a `build-wasix`-style directory
+  (`edgejs.wasm`, `node-lib/`, `icu/`) and a `napi_wasmer` binary.
+- `{"runner", "guest", "builtins", "mounts"}` spelled out.
+
+and optionally `"env"` (guest environment) and `"host_env"` (runner
+environment, for example `{"WASMER_NAPI_COMPILER": "llvm"}`). `snapshot`
+takes `--build` and `--runner` to save something other than the default
+outputs.
+
+### On pull requests
+
+`.github/workflows/test-and-build.yml` builds every lane in parallel, then
+runs each build's Node test suite and framework tests in parallel jobs that
+reuse the build's artifacts. Once the Linux and WASIX builds exist, one job
+benchmarks every runtime on the same machine:
+
+```text
+build-<lane>  -->  test-<lane>
+              -->  test-frameworks-<lane>
+build-{v8,quickjs}-{linux,wasix}  -->  bench  -->  bench-comment
+```
+
+GitHub runners differ from each other by more than the changes being measured,
+so all runtimes share one job: Edge.js V8 and QuickJS, native and WASIX, each
+PR build against the newest finished build of the base branch, and Node.js 24
+and 26 against themselves, as a reference and a measure of the run's noise.
+
+After a warm-up that compiles the WASIX guests, every server is started once,
+which absorbs first-start effects and measures what each server's starts cost,
+so the remaining time can be divided so that all 24 combinations run. Each
+runtime and server is then one cell. Its two lanes run at the same time, each
+pinned to one half of the CPUs. Each lane starts the server twice, on opposite
+halves, to time process start to the first validated response, then puts one
+continuous load on the second server and measures its throughput once on each
+half. A change counts only when both measurements move the same way by more
+than 5% (throughput) or 10% (first response), or by more than 1.5 times the
+largest difference Node.js shows against itself on that server in the same run,
+if that is higher. A combination that passes that bar is measured again at the
+end of the run, with the CPU halves swapped, and is reported only if the change
+shows up again. The whole benchmark takes at most 120 seconds, so its windows
+are short (about a second): confirm small changes locally.
+
+The job writes the report to its summary, and `bench-comment` posts it as one
+pull request comment without waiting for the tests; later pushes update it,
+keeping a short table of earlier runs. The logic is in
+`benchmarks/ci/framework-bench.py`.
+
+The harness's lanes are not limited to WASIX builds: a lane with `"binary"`
+runs a host executable (a native Edge.js build, or Node.js with
+`"node": true`), and a lane with `"package"` runs a Wasmer package directory
+with the `wasmer` CLI (an unpacked `edge-quickjs-wasix.zip`). `--max-seconds`
+caps each timed run, which keeps slow runtimes within a time budget.
+
+Interpret small differences cautiously: on a laptop, run-to-run noise is
+about 3 to 5%, larger for Next.js. Re-run, or use more rounds, before
+trusting a gap of that size. Servers run with `EDGE_BYTECODE_CACHE=0` and
+the Cranelift compiler unless the config says otherwise.
+
 ## Coverage notes
 
 Each benchmark in this directory is intentionally narrow.

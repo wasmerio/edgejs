@@ -1,5 +1,20 @@
 name: test and build
 
+# Builds every Edge.js lane (V8 and QuickJS; Linux, macOS and WASIX) in
+# parallel. Each build then fans out, straight from its artifacts, to its Node
+# test suite and its framework tests. On pull requests, once the Linux and
+# WASIX builds exist, one job benchmarks every runtime on the same machine
+# against the base branch, and bench-comment posts the results as one comment
+# without waiting for the tests.
+#
+#   build-<lane>  -->  test-<lane>
+#                 -->  test-frameworks-<lane>
+#   build-{v8,quickjs}-{linux,wasix}  -->  bench  -->  bench-comment
+#
+# Internal artifacts (build-<lane>) hold what the test jobs read, as tarballs
+# so exec bits and dotfiles survive. Their names must not start with "edge-":
+# release.yml downloads every edge-* artifact as a release asset.
+
 on:
   push:
     branches:
@@ -26,8 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       edge_version: ${{ steps.version.outputs.edge_version }}
-      release_tag: ${{ steps.version.outputs.release_tag }}
-      release_name: ${{ steps.version.outputs.release_name }}
+      v8_release_tag: ${{ steps.version.outputs.v8_release_tag }}
+      quickjs_release_tag: ${{ steps.version.outputs.quickjs_release_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,19 +61,18 @@ jobs:
             exit 1
           fi
           edge_version="${major}.${minor}.${patch}"
-          # Distinct from the QuickJS workflow's "${edge_version}-nightly" tag so
-          # both nightly publishers can target wasmerio/edgejs-nightlies without
-          # clobbering each other's release.
-          release_tag="${edge_version}-v8-nightly"
-          release_name="${release_tag}"
+          # The two nightly publishers target wasmerio/edgejs-nightlies with
+          # distinct tags so they do not clobber each other's release.
           {
             echo "edge_version=${edge_version}"
-            echo "release_tag=${release_tag}"
-            echo "release_name=${release_name}"
+            echo "v8_release_tag=${edge_version}-v8-nightly"
+            echo "quickjs_release_tag=${edge_version}-nightly"
           } >> "${GITHUB_OUTPUT}"
 
-  v8-linux:
-    name: v8-linux
+  # ---------------------------------------------------------------- V8 Linux
+
+  build-v8-linux:
+    name: build-v8-linux
     runs-on: ubuntu-latest
     env:
       NAPI_V8_BUILD_METHOD: prebuilt
@@ -89,7 +103,7 @@ jobs:
           # The prebuilt V8 archive uses ELF compact relocations (CREL), which
           # need LLD 20+: CMake links with it (edge_select_v8_linker), as a
           # local `make build` does.
-          sudo apt-get install -y libicu-dev lldb lld-20
+          sudo apt-get install -y libicu-dev lld-20
 
       - name: Validate public N-API headers stay V8-agnostic
         shell: bash
@@ -104,6 +118,88 @@ jobs:
           make build CMAKE_BUILD_TYPE=Release JOBS=4 \
             CMAKE_ARGS='-DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g1" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g1"'
 
+      # Tests resolve openssl-cli next to the edge binary; without it the TLS
+      # and crypto tests that need it skip instead of failing.
+      - name: Pack build for tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x build-edge/edge && test -x build-edge/openssl-cli
+          tar -czf "${RUNNER_TEMP}/build-v8-linux.tar.gz" build-edge/edge build-edge/openssl-cli
+
+      - name: Upload build for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-v8-linux
+          path: ${{ runner.temp }}/build-v8-linux.tar.gz
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Generate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          make dist-only JOBS=4 ZIP_NAME=edge-linux-amd64.zip
+
+      - name: Upload artifact edge
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-linux-amd64
+          path: edge-linux-amd64.zip
+          overwrite: true
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  test-v8-linux:
+    name: test-v8-linux
+    needs: build-v8-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Install Linux test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y lldb
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-v8-linux
+          path: ${{ runner.temp }}/build
+
+      # The binaries carry the build job's OpenSSL MODULESDIR, an empty
+      # directory under build-edge; recreate it for parity.
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-v8-linux.tar.gz"
+          mkdir -p build-edge/deps/openssl/lib/openssl-modules
+          test -x build-edge/edge && test -x build-edge/openssl-cli
+          EDGE_BYTECODE_CACHE=0 build-edge/edge --version
+
       - name: Test edge
         id: native_tests
         shell: bash
@@ -112,7 +208,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/edge-native-crashes"
           sudo sysctl -w "kernel.core_pattern=${RUNNER_TEMP}/edge-native-crashes/core.%e.%p"
           ulimit -c unlimited
-          make test-only TEST_JOBS=4
+          make -o build-edge/edge test-only TEST_JOBS=4
 
       - name: Capture native crash backtraces
         if: failure() && steps.native_tests.outcome == 'failure'
@@ -133,13 +229,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-intl
+          make -o build-edge/edge test-intl
 
       - name: Test language (explicit resource management, V8 native)
         shell: bash
         run: |
           set -euo pipefail
-          make test-lang
+          make -o build-edge/edge test-lang
+
+  test-frameworks-v8-linux:
+    name: test-frameworks-v8-linux
+    needs: build-v8-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-v8-linux
+          path: ${{ runner.temp }}/build
+
+      # The binaries carry the build job's OpenSSL MODULESDIR, an empty
+      # directory under build-edge; recreate it for parity.
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-v8-linux.tar.gz"
+          mkdir -p build-edge/deps/openssl/lib/openssl-modules
+          test -x build-edge/edge && test -x build-edge/openssl-cli
+          EDGE_BYTECODE_CACHE=0 build-edge/edge --version
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -162,33 +296,18 @@ jobs:
           set -euo pipefail
           FRAMEWORK_TEST_SKIP_SAFE=1 \
             FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
-            make framework-test
+            make -o build-edge/edge framework-test
 
       - name: Test standalone builds (V8 native)
         shell: bash
         run: |
           set -euo pipefail
-          FRAMEWORK_TEST_SKIP_SAFE=1 make standalone-build-test
+          FRAMEWORK_TEST_SKIP_SAFE=1 make -o build-edge/edge standalone-build-test
 
-      - name: Generate dist
-        shell: bash
-        run: |
-          set -euo pipefail
-          make dist-only JOBS=4 ZIP_NAME=edge-linux-amd64.zip
+  # ---------------------------------------------------------------- V8 macOS
 
-      - name: Upload artifact edge
-        uses: actions/upload-artifact@v4
-        with:
-          name: edge-linux-amd64
-          path: edge-linux-amd64.zip
-          if-no-files-found: error
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats || true
-
-  v8-macos:
-    name: v8-macos
+  build-v8-macos:
+    name: build-v8-macos
     runs-on: macos-latest
     env:
       NAPI_V8_BUILD_METHOD: prebuilt
@@ -223,23 +342,131 @@ jobs:
           set -euo pipefail
           make build CMAKE_BUILD_TYPE=Release JOBS=4
 
+      - name: Pack build for tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x build-edge/edge && test -x build-edge/openssl-cli
+          COPYFILE_DISABLE=1 tar --no-xattrs -czf "${RUNNER_TEMP}/build-v8-macos.tar.gz" \
+            build-edge/edge build-edge/openssl-cli
+
+      - name: Upload build for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-v8-macos
+          path: ${{ runner.temp }}/build-v8-macos.tar.gz
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Generate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          make dist-only JOBS=4 ZIP_NAME=edge-darwin-arm64.zip
+
+      - name: Upload artifact edge
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-darwin-arm64
+          path: edge-darwin-arm64.zip
+          overwrite: true
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  test-v8-macos:
+    name: test-v8-macos
+    needs: build-v8-macos
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-v8-macos
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-v8-macos.tar.gz"
+          mkdir -p build-edge/deps/openssl/lib/openssl-modules
+          test -x build-edge/edge && test -x build-edge/openssl-cli
+          EDGE_BYTECODE_CACHE=0 build-edge/edge --version
+
       - name: Test edge
         shell: bash
         run: |
           set -euo pipefail
-          make test-only TEST_JOBS=4
+          make -o build-edge/edge test-only TEST_JOBS=4
 
       - name: Test locale (Intl/ICU, V8 native)
         shell: bash
         run: |
           set -euo pipefail
-          make test-intl
+          make -o build-edge/edge test-intl
 
       - name: Test language (explicit resource management, V8 native)
         shell: bash
         run: |
           set -euo pipefail
-          make test-lang
+          make -o build-edge/edge test-lang
+
+  test-frameworks-v8-macos:
+    name: test-frameworks-v8-macos
+    needs: build-v8-macos
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-v8-macos
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-v8-macos.tar.gz"
+          mkdir -p build-edge/deps/openssl/lib/openssl-modules
+          test -x build-edge/edge && test -x build-edge/openssl-cli
+          EDGE_BYTECODE_CACHE=0 build-edge/edge --version
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -260,7 +487,7 @@ jobs:
       # runners (a gatsby-worker/sharp issue), and the harness has no build-step
       # timeout, so it hangs the whole job — a retry cannot clear a hang. This is
       # the build step, not EdgeJS running the app. Linux builds gatsby fine and
-      # retries the intermittent lmdb segfault instead. Mirrors quickjs-macos.
+      # retries the intermittent lmdb segfault instead. Mirrors test-quickjs-macos.
       - name: Test framework apps (V8 native)
         shell: bash
         run: |
@@ -268,33 +495,18 @@ jobs:
           FRAMEWORK_TEST_SKIP_SAFE=1 \
             FRAMEWORK_TEST_NODE_SKIP='js-docusaurus-staticsite,js-docusaurus2-staticsite' \
             FRAMEWORK_TEST_EXCLUDE='js-gatsby-staticsite,js-gatsby-staticsite2' \
-            make framework-test
+            make -o build-edge/edge framework-test
 
       - name: Test standalone builds (V8 native)
         shell: bash
         run: |
           set -euo pipefail
-          FRAMEWORK_TEST_SKIP_SAFE=1 make standalone-build-test
+          FRAMEWORK_TEST_SKIP_SAFE=1 make -o build-edge/edge standalone-build-test
 
-      - name: Generate dist
-        shell: bash
-        run: |
-          set -euo pipefail
-          make dist-only JOBS=4 ZIP_NAME=edge-darwin-arm64.zip
+  # ---------------------------------------------------------------- V8 WASIX
 
-      - name: Upload artifact edge
-        uses: actions/upload-artifact@v4
-        with:
-          name: edge-darwin-arm64
-          path: edge-darwin-arm64.zip
-          if-no-files-found: error
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats || true
-
-  v8-wasix:
-    name: v8-wasix
+  build-v8-wasix:
+    name: build-v8-wasix
     runs-on: ubuntu-latest
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -357,35 +569,33 @@ jobs:
           set -euo pipefail
           make build-napi-wasmer-cli
 
-      - name: Test edge (V8 WASIX)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make test-wasix-v8-only TEST_JOBS=1
+      # The benchmarks run the PR's build on this runner, and later pull
+      # requests compare against the one their base branch's build uploaded.
+      - name: Upload N-API runner
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-wasmer-linux-amd64
+          path: build-wasix-napi/target/release/napi_wasmer
+          overwrite: true
+          if-no-files-found: error
 
-      - name: Test locale (Intl/ICU, V8 WASIX)
+      - name: Pack build for tests
         shell: bash
         run: |
           set -euo pipefail
-          make test-wasix-v8-intl
+          tar -czf "${RUNNER_TEMP}/build-v8-wasix.tar.gz" \
+            build-wasix/edgejs.wasm build-wasix/node-lib build-wasix/icu \
+            build-wasix-napi/target/release/napi_wasmer
 
-      - name: Test child processes (V8 WASIX)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make test-wasix-v8-process
-
-      - name: Test framework apps (V8 WASIX)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make framework-test-v8-wasix
-
-      - name: Test standalone builds (V8 WASIX)
-        shell: bash
-        run: |
-          set -euo pipefail
-          make standalone-build-test-v8-wasix
+      - name: Upload build for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-v8-wasix
+          path: ${{ runner.temp }}/build-v8-wasix.tar.gz
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
 
       - name: Generate dist
         shell: bash
@@ -435,26 +645,1226 @@ jobs:
         with:
           name: edge-wasix
           path: edge-wasix.zip
+          overwrite: true
           if-no-files-found: error
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
 
-  publish-nightly:
-    name: publish-nightly
+  test-v8-wasix:
+    name: test-v8-wasix
+    needs: build-v8-wasix
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-v8-wasix
+          path: ${{ runner.temp }}/build
+
+      # -o keeps make from rebuilding the guest or the runner (the latter is a
+      # phony cargo build) when the restored files are present.
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-v8-wasix.tar.gz"
+          test -s build-wasix/edgejs.wasm
+          test -f build-wasix/node-lib/.edge-builtin-catalog
+          test -f build-wasix/node-lib/internal/bootstrap/realm.js
+          test -f build-wasix/icu/icudt78l/res_index.res
+          test -x build-wasix-napi/target/release/napi_wasmer
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Test edge (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm test-wasix-v8-only TEST_JOBS=4
+
+      - name: Test locale (Intl/ICU, V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm test-wasix-v8-intl
+
+      - name: Test child processes (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm test-wasix-v8-process
+
+  test-frameworks-v8-wasix:
+    name: test-frameworks-v8-wasix
+    needs: build-v8-wasix
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-v8-wasix
+          path: ${{ runner.temp }}/build
+
+      # -o keeps make from rebuilding the guest or the runner (the latter is a
+      # phony cargo build) when the restored files are present.
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-v8-wasix.tar.gz"
+          test -s build-wasix/edgejs.wasm
+          test -f build-wasix/node-lib/.edge-builtin-catalog
+          test -f build-wasix/node-lib/internal/bootstrap/realm.js
+          test -f build-wasix/icu/icudt78l/res_index.res
+          test -x build-wasix-napi/target/release/napi_wasmer
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Test framework apps (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm framework-test-v8-wasix
+
+      - name: Test standalone builds (V8 WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm standalone-build-test-v8-wasix
+
+  # ----------------------------------------------------------- QuickJS Linux
+
+  build-quickjs-linux:
+    name: build-quickjs-linux
+    runs-on: ubuntu-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libicu-dev
+
+      - name: Validate public N-API headers stay V8-agnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+
+      # Which Wasmer the build links against is controlled by repo Actions
+      # variables (Settings -> Secrets and variables -> Actions -> Variables):
+      # WASMER_SOURCE_REF (build a wasmer commit from source),
+      # WASMER_ARTIFACT_RUN_ID (prebuilt dist from a wasmer Builds run; needs
+      # the WASMER_ARTIFACTS_TOKEN secret), or neither for the released
+      # version (WASMER_RELEASE_VERSION overrides the pin). See
+      # scripts/ci/provision-wasmer.sh. The Wasmer C API links statically, so
+      # the test job needs none of it.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve native
+
+      # Explicit restore/save (not actions/cache) so the expensive source
+      # build is saved right after provisioning succeeds, even when a later
+      # step fails — iterating on a red branch shouldn't rebuild wasmer.
+      - name: Restore Wasmer source build cache
+        id: wasmer-cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh native
+
+      - name: Save Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source' && steps.wasmer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Build edge (QuickJS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make build-edge-quickjs-cli CMAKE_BUILD_TYPE=Release JOBS=4
+
+      - name: Pack build for tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x build-edge-quickjs-cli/edge
+          tar -czf "${RUNNER_TEMP}/build-quickjs-linux.tar.gz" build-edge-quickjs-cli/edge
+
+      - name: Upload build for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-quickjs-linux
+          path: ${{ runner.temp }}/build-quickjs-linux.tar.gz
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Generate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          make dist-only BUILD_DIR=build-edge-quickjs-cli JOBS=4 ZIP_NAME=edge-quickjs-linux-amd64.zip
+
+      - name: Upload artifact edge
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-quickjs-linux-amd64
+          path: edge-quickjs-linux-amd64.zip
+          overwrite: true
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  test-quickjs-linux:
+    name: test-quickjs-linux
+    needs: build-quickjs-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-quickjs-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-quickjs-linux.tar.gz"
+          test -x build-edge-quickjs-cli/edge
+          EDGE_BYTECODE_CACHE=0 build-edge-quickjs-cli/edge --version
+
+      - name: Test edge (QuickJS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-only TEST_JOBS=4
+
+      - name: Test locale (Intl/ICU, QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-intl
+
+      - name: Test language (explicit resource management, QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-lang
+
+  test-frameworks-quickjs-linux:
+    name: test-frameworks-quickjs-linux
+    needs: build-quickjs-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-quickjs-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-quickjs-linux.tar.gz"
+          test -x build-edge-quickjs-cli/edge
+          EDGE_BYTECODE_CACHE=0 build-edge-quickjs-cli/edge --version
+
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
+
+  # ----------------------------------------------------------- QuickJS macOS
+
+  build-quickjs-macos:
+    name: build-quickjs-macos
+    runs-on: macos-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Validate public N-API headers stay V8-agnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -nE "v8::|<v8.h>|\"v8.h\"" napi/include/js_native_api.h napi/include/node_api.h
+
+      # See build-quickjs-linux for how Wasmer provisioning modes work.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve native
+
+      - name: Restore Wasmer source build cache
+        id: wasmer-cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh native
+
+      - name: Save Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source' && steps.wasmer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Build edge (QuickJS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make build-edge-quickjs-cli CMAKE_BUILD_TYPE=Release JOBS=4
+
+      - name: Pack build for tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x build-edge-quickjs-cli/edge
+          COPYFILE_DISABLE=1 tar --no-xattrs -czf "${RUNNER_TEMP}/build-quickjs-macos.tar.gz" \
+            build-edge-quickjs-cli/edge
+
+      - name: Upload build for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-quickjs-macos
+          path: ${{ runner.temp }}/build-quickjs-macos.tar.gz
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Generate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          make dist-only BUILD_DIR=build-edge-quickjs-cli JOBS=4 ZIP_NAME=edge-quickjs-darwin-arm64.zip
+
+      - name: Upload artifact edge
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-quickjs-darwin-arm64
+          path: edge-quickjs-darwin-arm64.zip
+          overwrite: true
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  test-quickjs-macos:
+    name: test-quickjs-macos
+    needs: build-quickjs-macos
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-quickjs-macos
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-quickjs-macos.tar.gz"
+          test -x build-edge-quickjs-cli/edge
+          EDGE_BYTECODE_CACHE=0 build-edge-quickjs-cli/edge --version
+
+      - name: Test edge (QuickJS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-only TEST_JOBS=4
+
+      - name: Test locale (Intl/ICU, QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-intl
+
+      - name: Test language (explicit resource management, QuickJS native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-quickjs-lang
+
+  test-frameworks-quickjs-macos:
+    name: test-frameworks-quickjs-macos
+    needs: build-quickjs-macos
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-quickjs-macos
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-quickjs-macos.tar.gz"
+          test -x build-edge-quickjs-cli/edge
+          EDGE_BYTECODE_CACHE=0 build-edge-quickjs-cli/edge --version
+
+      - name: Test framework apps (QuickJS native)
+        shell: bash
+        # Exclude js-gatsby-* on macOS only: `gatsby build` hangs on GitHub
+        # macOS runners (a gatsby-worker/sharp issue), and the harness has no
+        # build-step timeout, so it hangs the whole job. This is the build
+        # step, not EdgeJS running the app. Linux/WASIX build gatsby fine and
+        # keep it covered.
+        env:
+          FRAMEWORK_TEST_EXCLUDE: js-gatsby-staticsite,js-gatsby-staticsite2
+        run: |
+          set -euo pipefail
+          make framework-test-quickjs-native
+
+      - name: Test standalone builds (QuickJS native)
+        shell: bash
+        env:
+          FRAMEWORK_TEST_EXCLUDE: js-gatsby-staticsite,js-gatsby-staticsite2
+        run: |
+          set -euo pipefail
+          make standalone-build-test-quickjs-native
+
+  # ----------------------------------------------------------- QuickJS WASIX
+
+  build-quickjs-wasix:
+    name: build-quickjs-wasix
+    runs-on: ubuntu-latest
+    outputs:
+      wasmer_mode: ${{ steps.wasmer-provision.outputs.mode }}
+      wasmer_cache_key: ${{ steps.wasmer-provision.outputs.cache_key }}
+      wasmer_resolved_sha: ${{ steps.wasmer-sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Install wasixcc
+        uses: wasix-org/wasixcc@v0.4.7
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          sysroot-tag: v2026-10-02.1
+          version: v0.4.7
+
+      # See build-quickjs-linux for how Wasmer provisioning modes work. In
+      # source mode this builds the wasmer CLI (with LLVM, since the WASIX
+      # runner scripts pass --llvm); the release C-API headers still serve the
+      # edge compile, as WASIX resolves the symbols at runtime via the host.
+      # test-quickjs-wasix provisions the same CLI from this job's outputs.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve wasix
+
+      - name: Record resolved Wasmer revision
+        id: wasmer-sha
+        shell: bash
+        run: echo "sha=${WASMER_RESOLVED_SHA:-}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore Wasmer source build cache
+        id: wasmer-cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh wasix
+
+      - name: Save Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source' && steps.wasmer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Build edge (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make build-quickjs-wasix
+
+      # The quickjs-wasm package maps these build outputs and the staged pnpm
+      # files (gitignored, written by the build).
+      - name: Pack build for tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "${RUNNER_TEMP}/build-quickjs-wasix.tar.gz" \
+            build-quickjs-wasix/edgejs.wasm build-quickjs-wasix/node-lib build-quickjs-wasix/icu \
+            quickjs-wasm/pnpm/pnpm.cjs quickjs-wasm/pnpm/worker.bundle.js \
+            quickjs-wasm/pnpm/LICENSE quickjs-wasm/pnpm/package.json
+
+      - name: Upload build for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-quickjs-wasix
+          path: ${{ runner.temp }}/build-quickjs-wasix.tar.gz
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Generate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          make dist-only BUILD_DIR=build-quickjs-wasix JOBS=4 ZIP_NAME=edge-quickjs-wasix.zip
+
+      # The WASIX build reads builtin JS and ICU data from the package
+      # filesystem, so check the dist maps both staged trees and that bin/edge
+      # no longer embeds them, then run the packaged dist itself.
+      - name: Validate dist package (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release.py check-dist --dist dist
+          wasmer package build --check dist
+
+      - name: Smoke test dist static data (QuickJS WASIX)
+        shell: bash
+        env:
+          # German month names and Shift_JIS decoding both need ICU data read
+          # from /usr/share/edge-icu; bootstrap itself needs /node-lib.
+          DIST_SMOKE_JS: >-
+            [new Intl.DateTimeFormat('de', {month: 'long', timeZone: 'UTC'}).format(0),
+            new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0])).codePointAt(0).toString(16)].join(' ')
+        run: |
+          set -euo pipefail
+          output="$(wasmer run --stack-size 4194304 dist -- -p "${DIST_SMOKE_JS}")"
+          printf '%s\n' "${output}"
+          test "${output}" = "Januar 3042"
+
+      - name: Upload artifact edge
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-quickjs-wasix
+          path: edge-quickjs-wasix.zip
+          overwrite: true
+          if-no-files-found: error
+
+  test-quickjs-wasix:
+    name: test-quickjs-wasix
+    needs: build-quickjs-wasix
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      # The tests run the guest with the wasmer CLI. Provision the one the
+      # build job used: its resolved revision, so a moving source ref cannot
+      # give a different CLI, and its cache entry, so source mode does not
+      # rebuild it.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve wasix
+
+      - name: Restore Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ needs.build-quickjs-wasix.outputs.wasmer_cache_key || steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh wasix
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-quickjs-wasix
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-quickjs-wasix.tar.gz"
+          test -s build-quickjs-wasix/edgejs.wasm
+          test -f build-quickjs-wasix/node-lib/.edge-builtin-catalog
+          test -f build-quickjs-wasix/node-lib/internal/bootstrap/realm.js
+          test -f build-quickjs-wasix/icu/icudt78l/res_index.res
+          test -f quickjs-wasm/pnpm/pnpm.cjs
+          command -v wasmer
+
+      - name: Test edge (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-quickjs-wasix/edgejs.wasm test-wasix-quickjs-only TEST_JOBS=4
+
+      - name: Smoke test safe mode (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-wasix-safe-mode WASIX_PACKAGE_DIR="$PWD/quickjs-wasm"
+
+      - name: Test locale (Intl/ICU, QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-quickjs-wasix/edgejs.wasm test-wasix-quickjs-intl
+
+      - name: Test child processes (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-quickjs-wasix/edgejs.wasm test-wasix-quickjs-process
+
+      - name: Smoke test npm/pnpm aliases (QuickJS WASIX)
+        shell: bash
+        run: make test-wasix-pnpm WASIX_PACKAGE_DIR="$PWD/quickjs-wasm"
+
+  test-frameworks-quickjs-wasix:
+    name: test-frameworks-quickjs-wasix
+    needs: build-quickjs-wasix
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Ensure submodules are initialized
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      # The tests run the guest with the wasmer CLI. Provision the one the
+      # build job used: its resolved revision, so a moving source ref cannot
+      # give a different CLI, and its cache entry, so source mode does not
+      # rebuild it.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve wasix
+
+      - name: Restore Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ needs.build-quickjs-wasix.outputs.wasmer_cache_key || steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh wasix
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-quickjs-wasix
+          path: ${{ runner.temp }}/build
+
+      - name: Restore build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf "${RUNNER_TEMP}/build/build-quickjs-wasix.tar.gz"
+          test -s build-quickjs-wasix/edgejs.wasm
+          test -f build-quickjs-wasix/node-lib/.edge-builtin-catalog
+          test -f build-quickjs-wasix/node-lib/internal/bootstrap/realm.js
+          test -f build-quickjs-wasix/icu/icudt78l/res_index.res
+          test -f quickjs-wasm/pnpm/pnpm.cjs
+          command -v wasmer
+
+      # The framework tests wait 45 s for each server, and on a fresh runner
+      # the first start spends longer than that compiling the guest with LLVM.
+      - name: Compile the guest (QuickJS WASIX)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          WASMER_BIN=wasmer EDGEJS_ROOT="${PWD}" WASIX_EDGEJS_PACKAGE_DIR="${PWD}/quickjs-wasm" \
+            scripts/edge-wasix-node-runner.sh -p "process.versions.edge"
+
+      - name: Test framework apps (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-quickjs-wasix/edgejs.wasm framework-test-quickjs-wasix
+
+      - name: Test standalone builds (QuickJS WASIX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -o build-quickjs-wasix/edgejs.wasm standalone-build-test-quickjs-wasix
+
+  # -------------------------------------------------------------- Benchmarks
+  #
+  # Pull requests only (release.yml calls this workflow with a ref and skips
+  # them). One job measures every runtime on the same machine, because GitHub
+  # runners differ by more than the changes being measured: Edge.js V8 and
+  # QuickJS, native and WASIX, each PR build against its base branch build,
+  # and Node.js 24 and 26 against themselves as a reference and a measure of
+  # the noise. See benchmarks/ci/framework-bench.py. A runtime whose build
+  # failed is reported as missing; the others are still measured.
+  bench:
+    name: bench
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && !inputs.ref }}
+    needs:
+      - build-v8-linux
+      - build-v8-wasix
+      - build-quickjs-linux
+      - build-quickjs-wasix
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - name: Remember Node.js 26
+        shell: bash
+        run: echo "BENCH_NODE26=$(command -v node)" >> "${GITHUB_ENV}"
+
+      # Last, so Node.js 24 is on PATH for the fixtures and load generator.
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Remember Node.js 24
+        shell: bash
+        run: echo "BENCH_NODE24=$(command -v node)" >> "${GITHUB_ENV}"
+
+      - name: Restore benchmark fixtures
+        id: fixtures
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/frameworks/.build
+          key: framework-fixtures-${{ runner.os }}-node24-${{ hashFiles('benchmarks/frameworks/**') }}
+
+      - name: Build benchmark fixtures
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          benchmarks/frameworks/setup.sh
+
+      # The QuickJS WASIX guest needs the wasmer CLI the build and tests use
+      # (it imports wasm_c_api_v0, which older releases lack). Only that
+      # runtime depends on it, so a failure here must not stop the others.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        if: needs.build-quickjs-wasix.result == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve wasix
+
+      - name: Restore Wasmer source build cache
+        if: needs.build-quickjs-wasix.result == 'success' && steps.wasmer-provision.outputs.mode == 'source'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ needs.build-quickjs-wasix.outputs.wasmer_cache_key || steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        if: needs.build-quickjs-wasix.result == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh wasix
+
+      - name: Download PR builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "{edge-linux-amd64,edge-wasix,edge-quickjs-linux-amd64,edge-quickjs-wasix,napi-wasmer-linux-amd64}"
+          path: ${{ runner.temp }}/bench/artifacts
+
+      - name: Prepare PR and base builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py prepare \
+            --artifacts "${RUNNER_TEMP}/bench/artifacts" \
+            --repo "${{ github.repository }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --head-sha "${{ github.sha }}" \
+            --out "${RUNNER_TEMP}/bench/builds"
+
+      - name: Benchmark all runtimes
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py run \
+            --builds "${RUNNER_TEMP}/bench/builds" \
+            --node24 "${BENCH_NODE24}" --node26 "${BENCH_NODE26}" \
+            --out "${RUNNER_TEMP}/bench/results"
+
+      # Readable in the job's summary before the comment is posted.
+      - name: Summarize benchmark
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py report \
+            --results "${RUNNER_TEMP}/bench/results/results.json" \
+            --repo "${{ github.repository }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --run-id "${{ github.run_id }}"
+
+      - name: Upload benchmark results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-bench
+          path: |
+            ${{ runner.temp }}/bench/results/results.json
+            ${{ runner.temp }}/bench/results/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+  # Posts or updates one comment with the results as soon as the benchmark
+  # finishes, including when it failed. It uses the repository's default
+  # token and declares no permissions, because release.yml calls this
+  # workflow with read-only permissions. Pull requests from forks get a
+  # read-only token: the comment then fails and the report is only in the
+  # job summary.
+  bench-comment:
+    name: bench-comment
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && !inputs.ref }}
+    needs: bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download benchmark results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: framework-bench
+          path: ${{ runner.temp }}/bench-results
+
+      - name: Comment on the pull request
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py report --post \
+            --results "${RUNNER_TEMP}/bench-results/results.json" \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --run-id "${{ github.run_id }}" \
+            --out "${RUNNER_TEMP}/bench-comment.md"
+
+  # ------------------------------------------------------------ Nightlies
+
+  publish-nightly-v8:
+    name: publish-nightly-v8
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.release }}
     runs-on: ubuntu-latest
     needs:
       - metadata
-      - v8-linux
-      - v8-macos
-      - v8-wasix
+      - test-v8-linux
+      - test-frameworks-v8-linux
+      - test-v8-macos
+      - test-frameworks-v8-macos
+      - test-v8-wasix
+      - test-frameworks-v8-wasix
     env:
       GH_TOKEN: ${{ secrets.RELEASE_PLEASE_GH_TOKEN }}
       TARGET_REPO: wasmerio/edgejs-nightlies
-      RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
-      RELEASE_NAME: ${{ needs.metadata.outputs.release_name }}
+      RELEASE_TAG: ${{ needs.metadata.outputs.v8_release_tag }}
+      RELEASE_NAME: ${{ needs.metadata.outputs.v8_release_tag }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
@@ -603,13 +2013,222 @@ jobs:
           "${HOME}/.wasmer/bin/wasmer" --version
 
       # The nightly runner has no N-API-capable Wasmer, so this package gets
-      # the static checks here; the runtime smoke ran in the v8-wasix job.
+      # the static checks here; the runtime smoke ran in build-v8-wasix.
       - name: Validate WASIX package
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/ci/release.py check-dist --dist "${{ steps.wasmer.outputs.wasix_dist_dir }}"
           wasmer package build --check "${{ steps.wasmer.outputs.wasix_dist_dir }}"
+
+      - name: Publish to wasmer.wtf
+        env:
+          WASMER_TOKEN: ${{ secrets.DEV_BACKEND_CIUSER_TOKEN }}
+          EDGE_VERSION: ${{ steps.wasmer.outputs.edge_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wasmer publish "${{ steps.wasmer.outputs.wasix_dist_dir }}" \
+            --registry wasmer.wtf \
+            --token "${WASMER_TOKEN}" \
+            --version="${EDGE_VERSION}"
+
+      - name: Publish to wasmer.io
+        env:
+          WASMER_TOKEN: ${{ secrets.PROD_BACKEND_CIUSER_TOKEN }}
+          EDGE_VERSION: ${{ steps.wasmer.outputs.edge_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wasmer publish "${{ steps.wasmer.outputs.wasix_dist_dir }}" \
+            --registry wasmer.io \
+            --token "${WASMER_TOKEN}" \
+            --version="${EDGE_VERSION}"
+
+  publish-nightly-quickjs:
+    name: publish-nightly-quickjs
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.release }}
+    runs-on: ubuntu-latest
+    needs:
+      - metadata
+      - test-quickjs-linux
+      - test-frameworks-quickjs-linux
+      - test-quickjs-macos
+      - test-frameworks-quickjs-macos
+      - test-quickjs-wasix
+      - test-frameworks-quickjs-wasix
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PLEASE_GH_TOKEN }}
+      TARGET_REPO: wasmerio/edgejs-nightlies
+      RELEASE_TAG: ${{ needs.metadata.outputs.quickjs_release_tag }}
+      RELEASE_NAME: ${{ needs.metadata.outputs.quickjs_release_tag }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-quickjs-linux-amd64
+          path: release-assets/linux
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-quickjs-darwin-arm64
+          path: release-assets/macos
+
+      - name: Download WASIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-quickjs-wasix
+          path: release-assets/wasix
+
+      - name: Collect release assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find release-assets -type f -name '*.zip' | sort)
+          {
+            echo "asset_count=${#files[@]}"
+            echo "asset_list<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+          printf 'Discovered %s release asset(s)\n' "${#files[@]}"
+          printf '%s\n' "${files[@]}"
+
+      - name: Prepare Wasmer publish assets
+        id: wasmer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          linux_zip="$(find release-assets/linux -type f -name '*.zip' | head -n 1)"
+          wasix_zip="$(find release-assets/wasix -type f -name '*.zip' | head -n 1)"
+
+          if [[ -z "${linux_zip}" || ! -f "${linux_zip}" ]]; then
+            echo "Missing Linux artifact zip" >&2
+            exit 1
+          fi
+          if [[ -z "${wasix_zip}" || ! -f "${wasix_zip}" ]]; then
+            echo "Missing WASIX artifact zip" >&2
+            exit 1
+          fi
+
+          linux_dir="release-assets/linux/unpacked"
+          wasix_dir="release-assets/wasix/unpacked"
+          rm -rf "${linux_dir}" "${wasix_dir}"
+          mkdir -p "${linux_dir}" "${wasix_dir}"
+
+          unzip -q "${linux_zip}" -d "${linux_dir}"
+          unzip -q "${wasix_zip}" -d "${wasix_dir}"
+
+          edge_bin="${linux_dir}/bin/edge"
+          if [[ ! -x "${edge_bin}" ]]; then
+            echo "Expected packaged edge binary at ${edge_bin}" >&2
+            exit 1
+          fi
+
+          edge_version="$("${edge_bin}" -p "process.versions.edge")"
+          if [[ -z "${edge_version}" ]]; then
+            echo "Failed to determine EDGE version from packaged binary" >&2
+            exit 1
+          fi
+
+          if [[ ! -f "${wasix_dir}/wasmer.toml" ]]; then
+            echo "Expected wasmer.toml in ${wasix_dir}" >&2
+            exit 1
+          fi
+
+          {
+            echo "edge_version=${edge_version}"
+            echo "wasix_dist_dir=${wasix_dir}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Create release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "Automated nightly build for EDGE ${{ steps.wasmer.outputs.edge_version }}."
+            echo
+            echo "- Source repo: ${GITHUB_REPOSITORY}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Workflow run: ${RUN_URL}"
+            echo "- Uploaded assets from this workflow: ${{ steps.assets.outputs.asset_count }}"
+          } > release-notes.md
+
+      - name: Ensure nightly release exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_ref="$(gh repo view "${TARGET_REPO}" --json defaultBranchRef --jq '.defaultBranchRef.name')"
+          if [[ -z "${target_ref}" ]]; then
+            echo "Failed to resolve default branch for ${TARGET_REPO}" >&2
+            exit 1
+          fi
+          if ! gh release view "${RELEASE_TAG}" --repo "${TARGET_REPO}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --repo "${TARGET_REPO}" \
+              --target "${target_ref}" \
+              --title "${RELEASE_NAME}" \
+              --notes-file release-notes.md \
+              --prerelease \
+              --latest=false || true
+          fi
+          release_id="$(gh api "repos/${TARGET_REPO}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          gh api \
+            --method PATCH \
+            "repos/${TARGET_REPO}/releases/${release_id}" \
+            -f name="${RELEASE_NAME}" \
+            -F prerelease=true \
+            -F make_latest=false \
+            -F body=@release-notes.md \
+            >/dev/null
+
+      - name: Upload nightly assets
+        if: ${{ steps.assets.outputs.asset_count != '0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(printf '%s\n' "${{ steps.assets.outputs.asset_list }}" | sed '/^$/d')
+          gh release upload "${RELEASE_TAG}" \
+            --repo "${TARGET_REPO}" \
+            --clobber \
+            "${files[@]}"
+
+      - name: Install Wasmer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl https://get.wasmer.io -sSfL | sh -s "v7.2.0"
+          echo "${HOME}/.wasmer/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.wasmer/bin/wasmer" --version
+
+      - name: Validate WASIX package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release.py check-dist --dist "${{ steps.wasmer.outputs.wasix_dist_dir }}"
+          wasmer package build --check "${{ steps.wasmer.outputs.wasix_dist_dir }}"
+
+      - name: Smoke test WASIX package
+        shell: bash
+        env:
+          # German month names and Shift_JIS decoding both need ICU data read
+          # from /usr/share/edge-icu; bootstrap itself needs /node-lib.
+          DIST_SMOKE_JS: >-
+            [new Intl.DateTimeFormat('de', {month: 'long', timeZone: 'UTC'}).format(0),
+            new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0])).codePointAt(0).toString(16)].join(' ')
+        run: |
+          set -euo pipefail
+          output="$(wasmer run --stack-size 4194304 "${{ steps.wasmer.outputs.wasix_dist_dir }}" -- -p "${DIST_SMOKE_JS}")"
+          printf '%s\n' "${output}"
+          test "${output}" = "Januar 3042"
 
       - name: Publish to wasmer.wtf
         env:

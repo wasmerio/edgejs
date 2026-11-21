@@ -274,6 +274,13 @@ WASIX_SLOW_WEBCRYPTO_TESTS := \
   parallel/test-webcrypto-util.js \
   parallel/test-webcrypto-webidl.js \
   parallel/test-webcrypto-wrap-unwrap.js
+# These start further guests, about 5s each when run alone, so four at a time
+# on a 4-vCPU runner pass the default 10s limit.
+WASIX_SLOW_SUBPROCESS_TESTS := $(patsubst test/%,%,$(wildcard \
+  test/client-proxy/test-*.js \
+  test/client-proxy/test-*.mjs \
+  test/parallel/test-tls-get-ca-certificates-*.js \
+  test/parallel/test-tls-off-thread-cert-loading-*.js))
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
 WASIX_SLOW_TESTS := \
   parallel/test-crypto-oneshot-hash-xof.js \
@@ -281,8 +288,14 @@ WASIX_SLOW_TESTS := \
   parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-stringbytes-external.js \
   parallel/test-url-parse-invalid-input.js \
-  $(WASIX_SLOW_WEBCRYPTO_TESTS)
+  $(WASIX_SLOW_WEBCRYPTO_TESTS) \
+  $(WASIX_SLOW_SUBPROCESS_TESTS)
 WASIX_SLOW_TEST_TIMEOUT_SCALE ?= 12
+# V8 WASIX starts a guest for every process a test spawns: over 100 tests take
+# 4-7s alone, so four at a time on a 4-vCPU runner pass the default 10s limit.
+# The scale keeps the slow tests above at the same 120s.
+WASIX_V8_TEST_TIMEOUT ?= 30
+WASIX_V8_SLOW_TEST_TIMEOUT_SCALE ?= 4
 WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
   $(WASIX_SKIP_UNIX_SOCKET_TESTS) \
   $(WASIX_SKIP_CLUSTER_FORK_TESTS) \
@@ -493,10 +506,10 @@ $(WASIX_V8_STATIC_DATA): | $(WASIX_EDGEJS_WASM)
 
 test-wasix-v8-only: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	WASIX_SLOW_TESTS="$(subst $(SPACE),$(COMMA),$(strip $(WASIX_SLOW_TESTS)))" \
-	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_SLOW_TEST_TIMEOUT_SCALE)" \
+	WASIX_SLOW_TEST_TIMEOUT_SCALE="$(WASIX_V8_SLOW_TEST_TIMEOUT_SCALE)" \
 	NODE_TEST_RUNNER=$(WASIX_QUICKJS_NODE_TEST_RUNNER) $(WASIX_V8_LANE_ENV) ./test/nodejs_test_harness --category=node:buffer,node:console,node:dgram,node:diagnostics_channel,node:dns,node:events,node:http,node:https,node:os,node:path,node:punycode,node:querystring,node:stream,node:string_decoder,node:tty,node:url,node:zlib,node:crypto,node:domain,node:http2,node:tls,node:sys \
 	  --skip-tests=$(EDGE_NODE_TEST_SKIP_TESTS),$(WASIX_SKIP_ENV_TESTS),$(subst $(SPACE),$(COMMA),$(strip $(V8_WASIX_SKIP_TESTS))) \
-	  -j $(TEST_JOBS)
+	  --timeout=$(WASIX_V8_TEST_TIMEOUT) -j $(TEST_JOBS)
 
 test-wasix-v8-intl: $(WASIX_EDGEJS_WASM) $(WASIX_V8_STATIC_DATA) build-napi-wasmer-cli
 	@test -x "$(WASIX_V8_RUNNER_BIN)" || { \
