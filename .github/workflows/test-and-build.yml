@@ -1638,6 +1638,16 @@ jobs:
           test -f quickjs-wasm/pnpm/pnpm.cjs
           command -v wasmer
 
+      # The framework tests wait 45 s for each server, and on a fresh runner
+      # the first start spends longer than that compiling the guest with LLVM.
+      - name: Compile the guest (QuickJS WASIX)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          WASMER_BIN=wasmer EDGEJS_ROOT="${PWD}" WASIX_EDGEJS_PACKAGE_DIR="${PWD}/quickjs-wasm" \
+            scripts/edge-wasix-node-runner.sh -p "process.versions.edge"
+
       - name: Test framework apps (QuickJS WASIX)
         shell: bash
         run: |

@@ -274,6 +274,13 @@ WASIX_SLOW_WEBCRYPTO_TESTS := \
   parallel/test-webcrypto-util.js \
   parallel/test-webcrypto-webidl.js \
   parallel/test-webcrypto-wrap-unwrap.js
+# These start further guests, about 5s each when run alone, so four at a time
+# on a 4-vCPU runner pass the default 10s limit.
+WASIX_SLOW_SUBPROCESS_TESTS := $(patsubst test/%,%,$(wildcard \
+  test/client-proxy/test-*.js \
+  test/client-proxy/test-*.mjs \
+  test/parallel/test-tls-get-ca-certificates-*.js \
+  test/parallel/test-tls-off-thread-cert-loading-*.js))
 # CI-only harness timeouts under parallel WASIX load (default harness timeout is 10s).
 WASIX_SLOW_TESTS := \
   parallel/test-crypto-oneshot-hash-xof.js \
@@ -281,7 +288,8 @@ WASIX_SLOW_TESTS := \
   parallel/test-http2-respond-file-with-pipe.js \
   parallel/test-stringbytes-external.js \
   parallel/test-url-parse-invalid-input.js \
-  $(WASIX_SLOW_WEBCRYPTO_TESTS)
+  $(WASIX_SLOW_WEBCRYPTO_TESTS) \
+  $(WASIX_SLOW_SUBPROCESS_TESTS)
 WASIX_SLOW_TEST_TIMEOUT_SCALE ?= 12
 WASIX_SKIP_ENV_TESTS ?= $(subst $(SPACE),$(COMMA),$(strip \
   $(WASIX_SKIP_UNIX_SOCKET_TESTS) \
