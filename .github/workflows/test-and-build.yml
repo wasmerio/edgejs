@@ -357,6 +357,15 @@ jobs:
           set -euo pipefail
           make build-napi-wasmer-cli
 
+      # framework-bench runs the PR's build on this runner, and later pull
+      # requests compare against the one their base branch's build uploaded.
+      - name: Upload N-API runner
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-wasmer-linux-amd64
+          path: build-wasix-napi/target/release/napi_wasmer
+          if-no-files-found: error
+
       - name: Test edge (V8 WASIX)
         shell: bash
         run: |
@@ -440,6 +449,124 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
+
+  # Benchmarks the PR's WASIX build against its base branch's build and posts
+  # or updates one comment on the pull request. Both builds run at the same
+  # time, each pinned to half of the runner's CPUs; see
+  # benchmarks/ci/framework-bench.py. The job uses the repository's default
+  # token to comment, so it declares no permissions: release.yml calls this
+  # workflow with read-only permissions (the job is skipped there).
+  framework-bench:
+    name: framework-bench
+    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
+    needs: v8-wasix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Restore benchmark fixtures
+        id: fixtures
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/frameworks/.build
+          key: framework-fixtures-${{ runner.os }}-node24-${{ hashFiles('benchmarks/frameworks/**') }}
+
+      - name: Build benchmark fixtures
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          benchmarks/frameworks/setup.sh
+
+      - name: Install hyperfine
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v1.20.0
+          curl -sSfL "https://github.com/sharkdp/hyperfine/releases/download/${version}/hyperfine-${version}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/hyperfine-${version}-x86_64-unknown-linux-musl" >> "${GITHUB_PATH}"
+
+      - name: Download PR build
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-wasix
+          path: ${{ runner.temp }}/bench/head/artifact
+
+      - name: Download PR N-API runner
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-wasmer-linux-amd64
+          path: ${{ runner.temp }}/bench/head/runner
+
+      - name: Prepare PR build
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="${RUNNER_TEMP}/bench/head"
+          unzip -q "${head}/artifact/edge-wasix.zip" -d "${head}/dist"
+          chmod +x "${head}/runner/napi_wasmer"
+
+      - name: Download base build
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py fetch-base \
+            --repo "${{ github.repository }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --head-sha "${{ github.sha }}" \
+            --head-runner "${RUNNER_TEMP}/bench/head/runner/napi_wasmer" \
+            --out "${RUNNER_TEMP}/bench/base"
+
+      - name: Benchmark PR and base builds
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py run \
+            --head "${RUNNER_TEMP}/bench/head" \
+            --base "${RUNNER_TEMP}/bench/base" \
+            --out "${RUNNER_TEMP}/bench/out"
+
+      - name: Upload benchmark results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-bench
+          path: |
+            ${{ runner.temp }}/bench/out/*.json
+            ${{ runner.temp }}/bench/out/*.log
+            ${{ runner.temp }}/bench/base/meta.json
+          if-no-files-found: ignore
+
+      # Pull requests from forks get a read-only token: the comment then fails
+      # and the analysis is only in the job summary.
+      - name: Comment on the pull request
+        if: ${{ !cancelled() && hashFiles(format('{0}/bench/out/results.json', runner.temp)) != '' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py comment --post \
+            --results "${RUNNER_TEMP}/bench/out/results.json" \
+            --base-meta "${RUNNER_TEMP}/bench/base/meta.json" \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --run-id "${{ github.run_id }}" \
+            --out "${RUNNER_TEMP}/bench/out/comment.md"
 
   publish-nightly:
     name: publish-nightly

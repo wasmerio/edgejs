@@ -304,6 +304,21 @@ environment, for example `{"WASMER_NAPI_COMPILER": "llvm"}`). `snapshot`
 takes `--build` and `--runner` to save something other than the default
 outputs.
 
+### On pull requests
+
+The `framework-bench` job in `.github/workflows/test-and-build.yml` runs this
+benchmark on every pull request from a branch of this repository, after the
+`v8-wasix` job has built the PR. It downloads that build (`edge-wasix` and
+`napi-wasmer-linux-amd64`) and the newest finished build of the base branch,
+runs both at the same time on one runner, each pinned to half of its CPUs and
+swapping halves between rounds, and posts the comparison as a pull request
+comment. Later pushes update the same comment, which keeps a short table of
+earlier runs. The benchmark itself is capped at about 100 seconds, so it uses
+10% of the request counts above: it catches large changes, and smaller ones
+need a local run. `benchmarks/ci/framework-bench.py` holds the logic; its
+`run` and `comment` subcommands also work locally on two directories that
+each hold `dist/` (an unpacked `edge-wasix.zip`) and `runner/napi_wasmer`.
+
 Interpret small differences cautiously: on a laptop, run-to-run noise is
 about 3 to 5%, larger for Next.js. Re-run, or use more rounds, before
 trusting a gap of that size. Servers run with `EDGE_BYTECODE_CACHE=0` and
