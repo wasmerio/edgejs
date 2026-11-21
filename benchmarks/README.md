@@ -322,13 +322,18 @@ so all runtimes share one job: Edge.js V8 and QuickJS, native and WASIX, each
 PR build against the newest finished build of the base branch, and Node.js 24
 and 26 against themselves, as a reference and a measure of the run's noise.
 
-After a warm-up that compiles the WASIX guests, each runtime and server is one
-cell. Its two lanes run at the same time, each pinned to one half of the CPUs.
-Each lane starts the server twice, on opposite halves, to time process start to
-the first validated response, then warms the second server up and measures its
-throughput once on each half. A change counts only when both measurements
-agree. Measurement windows are sized so the whole benchmark takes about 110
-seconds, so they are short (about a second): confirm small changes locally.
+After a warm-up that compiles the WASIX guests, every server is started once,
+which absorbs first-start effects and measures what each server's starts cost,
+so the remaining time can be divided so that all 24 combinations run. Each
+runtime and server is then one cell. Its two lanes run at the same time, each
+pinned to one half of the CPUs. Each lane starts the server twice, on opposite
+halves, to time process start to the first validated response, then puts one
+continuous load on the second server and measures its throughput once on each
+half. A change counts only when both measurements move the same way by more
+than 5% (throughput) or 10% (first response), or by more than 1.5 times the
+largest difference Node.js shows against itself on that server in the same run,
+if that is higher. The whole benchmark takes about 115 seconds, so its windows
+are short (about a second): confirm small changes locally.
 
 The job writes the report to its summary, and `bench-comment` posts it as one
 pull request comment without waiting for the tests; later pushes update it,

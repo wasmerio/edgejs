@@ -31,6 +31,7 @@ import json
 import math
 import os
 from pathlib import Path
+import select
 import shutil
 import socket
 import statistics
@@ -60,15 +61,16 @@ RUNTIMES = {
 FIXTURE_NAMES = {"http": "node:http", "express": "Express", "hono": "Hono", "next": "Next.js"}
 SIDES = ("head", "base")
 CONNECTIONS = 32
-# More requests than any timed run can complete; the time limit ends it.
-LOAD_AMOUNT = 500_000
 # A server start that takes longer than this counts as hung.
 START_TIMEOUT = 20
 # A change counts only when both measurements move the same way by more than
-# this (twice this with a single measurement). Shared runners produce one-off
-# outliers of 10-20% even between identical binaries.
-THROUGHPUT_FLOOR = 0.03
-STARTUP_FLOOR = 0.05
+# a bar (twice it with a single measurement): this floor, or NOISE_FACTOR times
+# the largest difference Node.js shows against itself on that server in the
+# same run, whichever is higher. Separately built identical sources differ by
+# a few percent, and these measurement windows are about a second long.
+THROUGHPUT_FLOOR = 0.05
+STARTUP_FLOOR = 0.10
+NOISE_FACTOR = 1.5
 
 
 def gh(*args, **kwargs):
@@ -231,6 +233,10 @@ def cpu_halves():
     return set(cpus[:half]), set(cpus[half:])
 
 
+def cpu_list():
+    return sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else list(range(os.cpu_count() or 2))
+
+
 def pin_process(pid, cpus):
     """Moves every thread of a running process to `cpus`."""
     if cpus is None:
@@ -275,54 +281,73 @@ class ServerHung(RuntimeError):
     """A server that neither answered nor exited in time."""
 
 
+class LoadStream:
+    """A load generator that keeps running and reports windows on request."""
+
+    def __init__(self, bench, port):
+        harness, config = bench.harness, bench.config
+        command = [config["node"], str(BENCH / "bench-framework-stream.cjs"), str(harness.autocannon_dir(config)),
+                   f"http://{harness.HOST}:{port}{harness.ROUTE}", str(CONNECTIONS), harness.BODY.decode()]
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, start_new_session=True)
+        self.buffer = b""
+        bench.track(self.process)
+
+    def read(self, timeout):
+        deadline = time.monotonic() + timeout
+        descriptor = self.process.stdout.fileno()
+        while b"\n" not in self.buffer:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([descriptor], [], [], left)[0]:
+                raise ServerHung(f"no reply from the server within {timeout:g} s")
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                raise RuntimeError("the load generator exited")
+            self.buffer += chunk
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        return json.loads(line)
+
+    def mark(self):
+        self.process.stdin.write(b"mark\n")
+        self.process.stdin.flush()
+        return self.read(10)
+
+
 class Bench:
     """Runs the cells: one runtime and fixture, both lanes at the same time."""
 
     def __init__(self, harness, config, out):
         self.harness, self.config, self.out = harness, config, out
         (out / "logs").mkdir(parents=True, exist_ok=True)
-        (out / "samples").mkdir(parents=True, exist_ok=True)
         self.sequence = 0
         self.lock = threading.Lock()
-        self.servers = set()
+        self.processes = set()
 
     def path(self, directory, lane, fixture, suffix):
         with self.lock:
             self.sequence += 1
             return self.out / directory / f"{lane}-{fixture}-{self.sequence}{suffix}"
 
+    def track(self, process):
+        with self.lock:
+            self.processes.add(process.pid)
+
     def stop(self, process):
         self.harness.kill_group(process.pid)
         with self.lock:
-            self.servers.discard(process.pid)
+            self.processes.discard(process.pid)
 
     def kill_all(self):
-        """The hard limit: killing the servers unblocks whatever waits on them."""
+        """The hard limit: killing the processes unblocks whatever waits on them."""
         with self.lock:
-            pids = list(self.servers)
+            pids = list(self.processes)
         for pid in pids:
             self.harness.kill_group(pid)
-
-    def load(self, lane, fixture, port, seconds, warmup=False):
-        output = self.path("samples", lane, fixture, ".jsonl")
-        command = self.harness.load_command({**self.config, "max_seconds": seconds}, port, LOAD_AMOUNT,
-                                            CONNECTIONS, output)
-        done = subprocess.run(command, capture_output=True, text=True, timeout=seconds + 20)
-        lines = output.read_text().splitlines() if output.exists() else []
-        sample = json.loads(lines[-1]) if lines else None
-        # A cold server may answer too few requests to warm up: that is fine,
-        # but a wrong or failed reply is not.
-        if warmup and sample and not (sample["non200"] or sample["errors"] or sample["mismatches"]):
-            return sample
-        if done.returncode != 0 or not sample or not sample["ok"]:
-            raise RuntimeError(f"load failed: {sample or done.stderr.strip()[-300:]}")
-        return sample
 
     def start(self, lane, fixture):
         log_path = self.path("logs", lane, fixture, ".log")
         process, port, started, _ = self.harness.spawn_server(self.config, lane, fixture, log_path)
-        with self.lock:
-            self.servers.add(process.pid)
+        self.track(process)
         try:
             _, first_ms = self.harness.wait_ready(process, port, started, timeout=START_TIMEOUT)
         except Exception as error:
@@ -336,8 +361,8 @@ class Bench:
 
     def lane(self, lane, fixture, pins, warmup, seconds, barrier, result):
         """One lane of a cell: a timed start, then a fresh server that is
-        warmed up and measured on each CPU half."""
-        process = None
+        warmed up and measured on each CPU half under one continuous load."""
+        process = load = None
 
         def on(cpus):
             if cpus is not None:
@@ -354,11 +379,20 @@ class Bench:
             process, port, first_ms = self.start(lane, fixture)
             result["first_ms"].append(first_ms)
             barrier.wait(timeout=45)
-            self.load(lane, fixture, port, warmup, warmup=True)
+            load = LoadStream(self, port)
+            load.read(START_TIMEOUT)
+            time.sleep(warmup)
             for cpus in (pins[1], pins[0]):
-                on(cpus)
                 pin_process(process.pid, cpus)
-                sample = self.load(lane, fixture, port, seconds)
+                pin_process(load.process.pid, cpus)
+                barrier.wait(timeout=45)
+                load.mark()  # Drops what came before this window.
+                time.sleep(seconds)
+                sample = load.mark()
+                if sample["requests"] == 0:
+                    raise ServerHung(f"no replies in a {seconds:.2f} s window")
+                if not sample["ok"]:
+                    raise RuntimeError(f"bad replies: {sample}")
                 result["runs"].append({"req_per_sec": sample["req_per_sec"], "requests": sample["requests"],
                                        "p99_ms": sample["latency_ms"]["p99"]})
         except threading.BrokenBarrierError:
@@ -369,6 +403,8 @@ class Bench:
             result["hung"] = isinstance(error, (ServerHung, subprocess.TimeoutExpired))
             barrier.abort()
         finally:
+            if load is not None:
+                self.stop(load.process)
             if process is not None:
                 self.stop(process)
 
@@ -388,6 +424,36 @@ class Bench:
             thread.join()
         watchdog.cancel()
         return results
+
+    def calibrate(self, names, fixtures):
+        """Starts every server once, several at a time. This absorbs first-start
+        effects, finds broken servers before any time is planned around them,
+        and measures what each cell's server starts will cost.
+
+        Returns ({(runtime, fixture): seconds}, {(runtime, fixture): error},
+        {runtimes that hung})."""
+        costs, broken, hung = {}, {}, set()
+
+        def one(name, side, fixture):
+            if name in hung:
+                return
+            try:
+                process, _, first_ms = self.start(f"{name}-{side}", fixture)
+                self.stop(process)
+                with self.lock:
+                    costs[(name, fixture)] = max(costs.get((name, fixture), 0.0), first_ms / 1000)
+            except Exception as error:  # noqa: BLE001 - reported per cell
+                lane = "PR" if side == "head" else "base"
+                with self.lock:
+                    broken[(name, fixture)] = f"{lane} build: {str(error).splitlines()[0][:160]}"
+                    if isinstance(error, ServerHung):
+                        hung.add(name)
+
+        jobs = [(name, side, fixture) for fixture in fixtures for name in names for side in SIDES]
+        with ThreadPoolExecutor(max(2, len(cpu_list()))) as pool:
+            for future in [pool.submit(one, *job) for job in jobs]:
+                future.result()
+        return costs, broken, hung
 
 
 def identify(harness, config, lane, timeout):
@@ -452,37 +518,56 @@ def cmd_run(args):
     bench = Bench(harness, config, out)
     cells, notes = [], []
     hard_deadline = started + args.hard_limit
+    calibrate_s = 0.0
 
     def save():
         """After every cell, so even a killed step leaves what it measured."""
         data = {"machine": {**machine_info(), "cpu_pinning": bool(halves)},
                 "params": {"warmup_s": args.warmup, "connections": CONNECTIONS, "budget_s": args.budget},
                 "runtimes": runtimes, "cells": cells, "notes": notes,
-                "warmup_elapsed_s": warm_s, "elapsed_s": time.monotonic() - started}
+                "warmup_elapsed_s": warm_s, "calibrate_elapsed_s": calibrate_s,
+                "elapsed_s": time.monotonic() - started}
         temporary = out / "results.json.tmp"
         temporary.write_text(json.dumps(data, indent=2) + "\n")
         os.replace(temporary, out / "results.json")
         return data
 
     save()
-    remaining_cells = len(names) * len(fixtures)
+    calibrate_started = time.monotonic()
+    costs, broken, hung = bench.calibrate(names, fixtures)
+    for (name, fixture), error in broken.items():
+        notes.append(f"{RUNTIMES[name]['title']} {FIXTURE_NAMES[fixture]} failed to start ({error})")
+    for name in hung:
+        notes.append(f"{RUNTIMES[name]['title']}: not measured, a server hung")
+    names = [name for name in names if name not in hung]
+    # Let the compile caches and logs reach the disk, so their writeback does
+    # not land on the first measurements.
+    os.sync()
+    calibrate_s = time.monotonic() - calibrate_started
+    log(f"calibration took {calibrate_s:.0f} s")
+
+    pending = [(name, fixture) for fixture in fixtures for name in names if (name, fixture) not in broken]
+
+    def cell_cost(cell):
+        return args.warmup + 2 * costs.get(cell, 1.0) + args.overhead
+
     stop = False
     for fixture in fixtures:
-        # One measuring time per fixture, so its row comparisons are like for
-        # like, sized to what is left of the budget.
-        left = deadline - time.monotonic()
-        per_cell = left / max(1, remaining_cells)
-        seconds = min(args.max_seconds, max(args.min_seconds, (per_cell - args.warmup - args.overhead) / 2))
+        # One measuring time per fixture, so its rows compare like for like,
+        # from what is left after every remaining cell's starts and warm-up.
+        left = deadline - time.monotonic() - sum(cell_cost(cell) for cell in pending)
+        seconds = min(args.max_seconds, max(args.min_seconds, left / max(1, 2 * len(pending))))
         for name in list(names):
-            estimate = args.warmup + 2 * seconds + args.overhead
-            if time.monotonic() + estimate > deadline + args.grace:
+            if (name, fixture) not in pending:
+                continue
+            if time.monotonic() + cell_cost((name, fixture)) + 2 * seconds > deadline + args.grace:
                 notes.append(f"stopped at the {args.budget:.0f} s budget before {RUNTIMES[name]['title']} "
                              f"{FIXTURE_NAMES[fixture]}")
                 stop = True
                 break
             cell_started = time.monotonic()
             results = bench.cell(name, fixture, halves, args.warmup, seconds, hard_deadline)
-            remaining_cells -= 1
+            pending.remove((name, fixture))
             errors = {side: r["error"] for side, r in results.items() if r["error"]}
             for side, error in errors.items():
                 log(f"{name} {fixture} {side}: {error}")
@@ -494,8 +579,8 @@ def cmd_run(args):
                              + cause["error"].splitlines()[0][:160])
                 # A runtime that hangs would use up the others' time.
                 if any(r.get("hung") for r in causes.values()):
-                    later = len(fixtures) - fixtures.index(fixture) - 1
-                    remaining_cells -= later
+                    later = [cell for cell in pending if cell[0] == name]
+                    pending = [cell for cell in pending if cell[0] != name]
                     names.remove(name)
                     if later:
                         notes.append(f"{RUNTIMES[name]['title']}: skipped its remaining servers after a hang")
@@ -521,10 +606,10 @@ def geometric_mean(values):
     return math.exp(statistics.mean(math.log(value) for value in values))
 
 
-def agreement(changes, floor, higher_is_better=True):
+def agreement(changes, bar, higher_is_better=True):
     """better/worse only when every paired measurement moves the same way by
-    more than the floor (twice the floor with a single measurement)."""
-    limit = floor if len(changes) > 1 else 2 * floor
+    more than the bar (twice the bar with a single measurement)."""
+    limit = bar if len(changes) > 1 else 2 * bar
     if changes and all(c > limit for c in changes):
         return "better" if higher_is_better else "worse"
     if changes and all(c < -limit for c in changes):
@@ -536,26 +621,46 @@ VERDICT_TEXT = {"same": "≈ no significant change", "better": "🟢 improved", 
 MARKS = {"better": " 🟢", "worse": " 🔴", "same": ""}
 
 
-def analyze_cell(cell):
+def paired_changes(cell):
+    """The PR/base differences of a cell's paired runs and starts."""
+    head, base = cell["lanes"]["head"], cell["lanes"]["base"]
+    runs = [h["req_per_sec"] / b["req_per_sec"] - 1 for h, b in zip(head["runs"], base["runs"])]
+    starts = [h / b - 1 for h, b in zip(head["first_ms"], base["first_ms"])]
+    return runs, starts
+
+
+def noise_bars(data):
+    """{fixture: (throughput bar, startup bar)} from the Node.js A/A cells."""
+    largest = {fixture: [0.0, 0.0] for fixture in FIXTURE_NAMES}
+    for cell in data.get("cells", []):
+        if RUNTIMES[cell["runtime"]].get("reference"):
+            runs, starts = paired_changes(cell)
+            entry = largest[cell["fixture"]]
+            entry[0] = max([entry[0]] + [abs(c) for c in runs])
+            entry[1] = max([entry[1]] + [abs(c) for c in starts])
+    return {fixture: (max(THROUGHPUT_FLOOR, NOISE_FACTOR * runs), max(STARTUP_FLOOR, NOISE_FACTOR * starts))
+            for fixture, (runs, starts) in largest.items()}
+
+
+def analyze_cell(cell, bars):
     head, base = cell["lanes"]["head"], cell["lanes"]["base"]
     row = {"seconds": cell["seconds"]}
+    runs, starts = paired_changes(cell)
     # Each pair of measurements ran at the same time, on opposite CPU halves.
     pairs = list(zip(head["runs"], base["runs"]))
     if pairs and not head["error"] and not base["error"]:
-        changes = [h["req_per_sec"] / b["req_per_sec"] - 1 for h, b in pairs]
         row.update(base=statistics.mean(b["req_per_sec"] for _, b in pairs),
                    head=statistics.mean(h["req_per_sec"] for h, _ in pairs),
-                   change=geometric_mean([1 + c for c in changes]) - 1, round_changes=changes,
-                   verdict=agreement(changes, THROUGHPUT_FLOOR),
+                   change=geometric_mean([1 + c for c in runs]) - 1, round_changes=runs,
+                   verdict=agreement(runs, bars[0]),
                    p99_base=statistics.median(b["p99_ms"] for _, b in pairs),
                    p99_head=statistics.median(h["p99_ms"] for h, _ in pairs))
     first_pairs = list(zip(head["first_ms"], base["first_ms"]))
     if first_pairs:
-        changes = [h / b - 1 for h, b in first_pairs]
         row.update(first_base=statistics.median(b for _, b in first_pairs),
                    first_head=statistics.median(h for h, _ in first_pairs),
-                   first_change=geometric_mean([1 + c for c in changes]) - 1, first_pass_changes=changes,
-                   first_verdict=agreement(changes, STARTUP_FLOOR, higher_is_better=False))
+                   first_change=geometric_mean([1 + c for c in starts]) - 1, first_pass_changes=starts,
+                   first_verdict=agreement(starts, bars[1], higher_is_better=False))
     return row
 
 
@@ -563,8 +668,9 @@ def analyze(data):
     """{runtime: {"rows": {fixture: row}, "meta": ..., "error": ...}}"""
     found = {name: {"rows": {}, "meta": (data.get("runtimes", {}).get(name) or {}).get("meta") or {},
                     "error": (data.get("runtimes", {}).get(name) or {}).get("error")} for name in RUNTIMES}
+    bars = noise_bars(data)
     for cell in data.get("cells", []):
-        row = analyze_cell(cell)
+        row = analyze_cell(cell, bars[cell["fixture"]])
         if "head" in row or "first_head" in row:
             found[cell["runtime"]]["rows"][cell["fixture"]] = row
     return found
@@ -691,10 +797,13 @@ def method_text(data):
             f"the same time, {pinning}. Each lane starts the server twice, on opposite halves, to time process "
             "start to the first validated response, warms the second server up for "
             f"{params['warmup_s']:g} s with {params['connections']} connections, and times it for {window} on "
-            "each half, with every reply validated; the lanes swap halves between the two measurements. A "
+            "each half under one continuous load, with every reply validated; the lanes swap halves between "
+            "the two measurements. Every server is started once before measuring, which is not counted. A "
             f"change counts only when both measurements move the same way by more than {THROUGHPUT_FLOOR:.0%} "
-            f"(throughput) or {STARTUP_FLOOR:.0%} (first response). These windows are short: confirm "
-            "single-digit changes locally with `benchmarks/bench-framework-wasix-hosts.py`.")
+            f"(throughput) or {STARTUP_FLOOR:.0%} (first response), or by more than {NOISE_FACTOR:g} times the "
+            "largest difference Node.js shows against itself on that server in the same run, if that is "
+            "higher. These windows are short: confirm small changes locally with "
+            "`benchmarks/bench-framework-wasix-hosts.py`.")
 
 
 def render(args, data, history):
@@ -820,13 +929,13 @@ def main():
     run.add_argument("--node24", help="Node.js 24 binary")
     run.add_argument("--node26", help="Node.js 26 binary")
     run.add_argument("--out", required=True)
-    run.add_argument("--budget", type=float, default=110, help="seconds for the whole benchmark")
+    run.add_argument("--budget", type=float, default=115, help="seconds for the whole benchmark")
     run.add_argument("--grace", type=float, default=5, help="seconds a last cell may run past the budget")
-    run.add_argument("--hard-limit", type=float, default=135, help="seconds after which running servers are killed")
+    run.add_argument("--hard-limit", type=float, default=125, help="seconds after which running servers are killed")
     run.add_argument("--warmup", type=float, default=0.75, help="load before measuring, seconds")
-    run.add_argument("--min-seconds", type=float, default=0.75, help="shortest measurement")
+    run.add_argument("--min-seconds", type=float, default=0.5, help="shortest measurement")
     run.add_argument("--max-seconds", type=float, default=2.0, help="longest measurement")
-    run.add_argument("--overhead", type=float, default=1.0, help="seconds per cell for server starts and stops")
+    run.add_argument("--overhead", type=float, default=0.5, help="seconds per cell beyond starts and measuring")
     report = sub.add_parser("report")
     report.add_argument("--results", required=True)
     report.add_argument("--repo", required=True)
