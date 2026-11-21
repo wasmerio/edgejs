@@ -705,7 +705,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm test-wasix-v8-only TEST_JOBS=1
+          make -o build-napi-wasmer-cli -o build-wasix/edgejs.wasm test-wasix-v8-only TEST_JOBS=4
 
       - name: Test locale (Intl/ICU, V8 WASIX)
         shell: bash
@@ -970,7 +970,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-quickjs-only TEST_JOBS=1
+          make test-quickjs-only TEST_JOBS=4
 
       - name: Test locale (Intl/ICU, QuickJS native)
         shell: bash
@@ -1217,7 +1217,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make test-quickjs-only TEST_JOBS=1
+          make test-quickjs-only TEST_JOBS=4
 
       - name: Test locale (Intl/ICU, QuickJS native)
         shell: bash
@@ -1534,7 +1534,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make -o build-quickjs-wasix/edgejs.wasm test-wasix-quickjs-only TEST_JOBS=1
+          make -o build-quickjs-wasix/edgejs.wasm test-wasix-quickjs-only TEST_JOBS=4
 
       - name: Smoke test safe mode (QuickJS WASIX)
         shell: bash
