@@ -332,7 +332,9 @@ continuous load on the second server and measures its throughput once on each
 half. A change counts only when both measurements move the same way by more
 than 5% (throughput) or 10% (first response), or by more than 1.5 times the
 largest difference Node.js shows against itself on that server in the same run,
-if that is higher. The whole benchmark takes about 115 seconds, so its windows
+if that is higher. A combination that passes that bar is measured again at the
+end of the run, with the CPU halves swapped, and is reported only if the change
+shows up again. The whole benchmark takes at most 120 seconds, so its windows
 are short (about a second): confirm small changes locally.
 
 The job writes the report to its summary, and `bench-comment` posts it as one

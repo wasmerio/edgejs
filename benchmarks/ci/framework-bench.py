@@ -555,7 +555,7 @@ def cmd_run(args):
     for fixture in fixtures:
         # One measuring time per fixture, so its rows compare like for like,
         # from what is left after every remaining cell's starts and warm-up.
-        left = deadline - time.monotonic() - sum(cell_cost(cell) for cell in pending)
+        left = deadline - args.retest_reserve - time.monotonic() - sum(cell_cost(cell) for cell in pending)
         seconds = min(args.max_seconds, max(args.min_seconds, left / max(1, 2 * len(pending))))
         for name in list(names):
             if (name, fixture) not in pending:
@@ -593,6 +593,27 @@ def cmd_run(args):
         if stop:
             break
 
+    # A flag only stands if it shows up again: noise on these runners can last
+    # a few seconds, long enough to affect every measurement of one cell. The
+    # lanes swap CPU halves, so neither keeps the one it was flagged on.
+    by_key = {(cell["runtime"], cell["fixture"]): cell for cell in cells}
+    for name, fixture in flagged_cells(save()):
+        cell = by_key[(name, fixture)]
+        if name not in names:
+            continue
+        if time.monotonic() + cell_cost((name, fixture)) + 2 * cell["seconds"] > deadline + args.grace:
+            notes.append("ran out of time to re-measure every flagged change")
+            break
+        cell_started = time.monotonic()
+        swapped = (halves[1], halves[0]) if halves else None
+        results = bench.cell(name, fixture, swapped, args.warmup, cell["seconds"], hard_deadline)
+        cell["retest"] = {"lanes": results, "elapsed_s": time.monotonic() - cell_started}
+        for side, r in results.items():
+            if r["error"] and not r.get("stopped"):
+                log(f"re-measuring {name} {fixture} {side}: {r['error']}")
+        log(f"re-measured {name:15} {fixture:8} {time.monotonic() - cell_started:4.1f} s")
+        save()
+
     data = save()
     log(f"benchmark took {data['elapsed_s']:.0f} s")
     if not any(cell["lanes"]["head"]["runs"] and cell["lanes"]["base"]["runs"] for cell in cells):
@@ -617,8 +638,9 @@ def agreement(changes, bar, higher_is_better=True):
     return "same"
 
 
-VERDICT_TEXT = {"same": "≈ no significant change", "better": "🟢 improved", "worse": "🔴 regressed"}
-MARKS = {"better": " 🟢", "worse": " 🔴", "same": ""}
+VERDICT_TEXT = {"same": "≈ no significant change", "better": "🟢 improved", "worse": "🔴 regressed",
+                "unconfirmed": "⚠️ not re-measured"}
+MARKS = {"better": " 🟢", "worse": " 🔴", "same": "", "unconfirmed": " ⚠️"}
 
 
 def paired_changes(cell):
@@ -642,25 +664,52 @@ def noise_bars(data):
             for fixture, (runs, starts) in largest.items()}
 
 
+def confirmed(verdict, retest_changes, bar, higher_is_better=True):
+    """A flag stands only if the re-measurement moves the same way past the bar."""
+    if verdict == "same":
+        return "same"
+    if not retest_changes:
+        return "unconfirmed"
+    return verdict if agreement(retest_changes, bar, higher_is_better) == verdict else "same"
+
+
 def analyze_cell(cell, bars):
     head, base = cell["lanes"]["head"], cell["lanes"]["base"]
     row = {"seconds": cell["seconds"]}
     runs, starts = paired_changes(cell)
+    retest_runs, retest_starts = [], []
+    retest = cell.get("retest")
+    if retest and not retest["lanes"]["head"]["error"] and not retest["lanes"]["base"]["error"]:
+        retest_runs, retest_starts = paired_changes(retest)
     # Each pair of measurements ran at the same time, on opposite CPU halves.
     pairs = list(zip(head["runs"], base["runs"]))
     if pairs and not head["error"] and not base["error"]:
-        row.update(base=statistics.mean(b["req_per_sec"] for _, b in pairs),
-                   head=statistics.mean(h["req_per_sec"] for h, _ in pairs),
-                   change=geometric_mean([1 + c for c in runs]) - 1, round_changes=runs,
-                   verdict=agreement(runs, bars[0]),
-                   p99_base=statistics.median(b["p99_ms"] for _, b in pairs),
-                   p99_head=statistics.median(h["p99_ms"] for h, _ in pairs))
+        flag = agreement(runs, bars[0])
+        # A flagged first measurement may be the noise itself, so the numbers
+        # shown for it are the re-measured ones.
+        shown, shown_changes = pairs, runs
+        if flag != "same" and retest_runs:
+            shown = list(zip(retest["lanes"]["head"]["runs"], retest["lanes"]["base"]["runs"]))
+            shown_changes = retest_runs
+        row.update(base=statistics.mean(b["req_per_sec"] for _, b in shown),
+                   head=statistics.mean(h["req_per_sec"] for h, _ in shown),
+                   change=geometric_mean([1 + c for c in shown_changes]) - 1, round_changes=runs,
+                   first_flag=flag, retest_changes=retest_runs,
+                   verdict=confirmed(flag, retest_runs, bars[0]),
+                   p99_base=statistics.median(b["p99_ms"] for _, b in shown),
+                   p99_head=statistics.median(h["p99_ms"] for h, _ in shown))
     first_pairs = list(zip(head["first_ms"], base["first_ms"]))
     if first_pairs:
-        row.update(first_base=statistics.median(b for _, b in first_pairs),
-                   first_head=statistics.median(h for h, _ in first_pairs),
-                   first_change=geometric_mean([1 + c for c in starts]) - 1, first_pass_changes=starts,
-                   first_verdict=agreement(starts, bars[1], higher_is_better=False))
+        flag = agreement(starts, bars[1], higher_is_better=False)
+        shown, shown_changes = first_pairs, starts
+        if flag != "same" and retest_starts:
+            shown = list(zip(retest["lanes"]["head"]["first_ms"], retest["lanes"]["base"]["first_ms"]))
+            shown_changes = retest_starts
+        row.update(first_base=statistics.median(b for _, b in shown),
+                   first_head=statistics.median(h for h, _ in shown),
+                   first_change=geometric_mean([1 + c for c in shown_changes]) - 1, first_pass_changes=starts,
+                   start_flag=flag, first_retest_changes=retest_starts,
+                   first_verdict=confirmed(flag, retest_starts, bars[1], higher_is_better=False))
     return row
 
 
@@ -674,6 +723,21 @@ def analyze(data):
         if "head" in row or "first_head" in row:
             found[cell["runtime"]]["rows"][cell["fixture"]] = row
     return found
+
+
+def flagged_cells(data):
+    """Edge.js cells with an unconfirmed flag, regressions and largest first."""
+    flagged = []
+    for name, entry in analyze(data).items():
+        if RUNTIMES[name].get("reference"):
+            continue
+        for fixture, row in entry["rows"].items():
+            flags = [(row["first_flag"], row["change"]) for _ in [0] if row.get("verdict") == "unconfirmed"]
+            flags += [(row["start_flag"], row["first_change"]) for _ in [0] if row.get("first_verdict") == "unconfirmed"]
+            if flags:
+                regression = any(flag == "worse" for flag, _ in flags)
+                flagged.append((not regression, -max(abs(change) for _, change in flags), name, fixture))
+    return [(name, fixture) for _, _, name, fixture in sorted(flagged)]
 
 
 def short(sha):
@@ -726,6 +790,8 @@ def runtime_table(name, entry, args):
                 continue
             if "head" in r:
                 per_run = ", ".join(f"{c:+.1%}" for c in r["round_changes"])
+                if r.get("retest_changes"):
+                    per_run += "; re-measured " + ", ".join(f"{c:+.1%}" for c in r["retest_changes"])
                 throughput = (f"{r['base']:,.0f} | {r['head']:,.0f} | {r['change']:+.1%} <sub>({per_run})</sub> | "
                               + ("reference" if reference else VERDICT_TEXT[r["verdict"]])
                               + f" | {r['p99_base']:.2f} → {r['p99_head']:.2f} ms")
@@ -733,6 +799,8 @@ def runtime_table(name, entry, args):
                 throughput = "– | – | – | no result | –"
             if "first_head" in r:
                 per_start = ", ".join(f"{c:+.0%}" for c in r["first_pass_changes"])
+                if r.get("first_retest_changes"):
+                    per_start += "; re-measured " + ", ".join(f"{c:+.0%}" for c in r["first_retest_changes"])
                 startup = (f"{r['first_base']:.0f} → {r['first_head']:.0f} ms ({r['first_change']:+.0%} "
                            f"<sub>({per_start})</sub>) | "
                            + ("reference" if reference else VERDICT_TEXT[r["first_verdict"]]))
@@ -757,7 +825,7 @@ def runtime_table(name, entry, args):
 
 def findings(analysis):
     """Significant changes across the Edge.js runtimes, as headline lines."""
-    found = {"worse": [], "better": [], "slower": [], "faster": []}
+    found = {"worse": [], "better": [], "slower": [], "faster": [], "unconfirmed": []}
     measured = []
     for name, entry in analysis.items():
         if not entry["rows"] or RUNTIMES[name].get("reference"):
@@ -770,6 +838,10 @@ def findings(analysis):
             if row.get("first_verdict") in ("worse", "better"):
                 found["slower" if row["first_verdict"] == "worse" else "faster"].append(
                     f"{label} ({row['first_change']:+.0%})")
+            if row.get("verdict") == "unconfirmed":
+                found["unconfirmed"].append(f"{label} throughput ({row['change']:+.1%})")
+            if row.get("first_verdict") == "unconfirmed":
+                found["unconfirmed"].append(f"{label} first response ({row['first_change']:+.0%})")
     lines = []
     if found["worse"]:
         lines.append("🔴 **Throughput regressed:** " + "; ".join(found["worse"]) + ".")
@@ -779,6 +851,8 @@ def findings(analysis):
         lines.append("🟢 **Throughput improved:** " + "; ".join(found["better"]) + ".")
     if found["faster"]:
         lines.append("🟢 **Faster time to first response:** " + "; ".join(found["faster"]) + ".")
+    if found["unconfirmed"]:
+        lines.append("⚠️ **Possible changes, not re-measured in time:** " + "; ".join(found["unconfirmed"]) + ".")
     if measured and not any(found.values()):
         edge_count = sum(not r.get("reference") for r in RUNTIMES.values())
         lines.append("**No significant change** in throughput or time to first response in "
@@ -798,7 +872,9 @@ def method_text(data):
             "start to the first validated response, warms the second server up for "
             f"{params['warmup_s']:g} s with {params['connections']} connections, and times it for {window} on "
             "each half under one continuous load, with every reply validated; the lanes swap halves between "
-            "the two measurements. Every server is started once before measuring, which is not counted. A "
+            "the two measurements. Every server is started once before measuring, which is not counted. "
+            "A flagged change is measured again at the end of the run, with the halves swapped, and only "
+            "reported if it shows up again, with the re-measured numbers. A "
             f"change counts only when both measurements move the same way by more than {THROUGHPUT_FLOOR:.0%} "
             f"(throughput) or {STARTUP_FLOOR:.0%} (first response), or by more than {NOISE_FACTOR:g} times the "
             "largest difference Node.js shows against itself on that server in the same run, if that is "
@@ -932,6 +1008,7 @@ def main():
     run.add_argument("--budget", type=float, default=115, help="seconds for the whole benchmark")
     run.add_argument("--grace", type=float, default=5, help="seconds a last cell may run past the budget")
     run.add_argument("--hard-limit", type=float, default=125, help="seconds after which running servers are killed")
+    run.add_argument("--retest-reserve", type=float, default=6, help="seconds kept for re-measuring flagged changes")
     run.add_argument("--warmup", type=float, default=0.75, help="load before measuring, seconds")
     run.add_argument("--min-seconds", type=float, default=0.5, help="shortest measurement")
     run.add_argument("--max-seconds", type=float, default=2.0, help="longest measurement")
