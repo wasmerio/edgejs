@@ -6,8 +6,12 @@
 // and exits at once, so both its own elapsed time and the process wall time
 // that hyperfine sees are exact.
 //
-// With a max-seconds argument the run also stops at that time limit, and its
-// rate counts the responses received so far ("stopped_at_limit" is true).
+// With a max-seconds argument the run also stops at that time limit
+// ("stopped_at_limit" is true). Its rate is then measured from the moment every
+// connection has had a response up to the limit, so that connecting and ramping
+// up, a large share of a run this short on a slow server, does not count, while
+// a server that stalls before the limit still does. Such a run needs more
+// responses than connections.
 //
 // usage: node load.cjs <autocannon-dir> <url> <amount> <connections> <expected-body> <output.jsonl> [max-seconds]
 'use strict';
@@ -25,16 +29,20 @@ let mismatches = 0;
 let finished = false;
 
 let stoppedAtLimit = false;
+let rampEnd = null;
+let limitAt = null;
 
 function finish(elapsedNs, complete) {
   if (finished) return;
   finished = true;
   const sorted = latencies.subarray(0, responses).sort();
   const at = (q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null);
-  const seconds = Number(elapsedNs) / 1e9;
+  const steady = stoppedAtLimit && rampEnd !== null && responses > connections;
+  const seconds = Number(steady ? limitAt - rampEnd : elapsedNs) / 1e9;
+  const counted = steady ? responses - connections : responses;
   const ok = complete && non200 === 0 && errors === 0 && mismatches === 0;
   fs.appendFileSync(output, JSON.stringify({
-    ok, requests: responses, seconds, req_per_sec: responses / seconds, stopped_at_limit: stoppedAtLimit,
+    ok, requests: responses, seconds, req_per_sec: counted / seconds, stopped_at_limit: stoppedAtLimit,
     non200, errors, mismatches,
     latency_ms: { p50: at(0.5), p90: at(0.9), p99: at(0.99), max: at(1) },
   }) + '\n');
@@ -46,6 +54,7 @@ const instance = autocannon({ url, connections, pipelining: 1, amount, timeout: 
 instance.on('response', (client, statusCode, bytes, responseTime) => {
   if (statusCode !== 200) non200++;
   latencies[responses++] = responseTime;
+  if (responses === connections) rampEnd = process.hrtime.bigint();
   if (responses === amount) finish(process.hrtime.bigint() - start, true);
 });
 instance.on('reqError', () => { errors++; });
@@ -53,7 +62,8 @@ instance.on('reqMismatch', () => { mismatches++; });
 if (maxSecondsArg) {
   setTimeout(() => {
     stoppedAtLimit = true;
-    finish(process.hrtime.bigint() - start, responses > 0);
+    limitAt = process.hrtime.bigint();
+    finish(limitAt - start, responses > connections);
   }, Number(maxSecondsArg) * 1000).unref();
 }
 // Only reached when errors or mismatches kept the run from completing.

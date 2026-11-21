@@ -2,13 +2,14 @@ name: test and build
 
 # Builds every Edge.js lane (V8 and QuickJS; Linux, macOS and WASIX) in
 # parallel. Each build then fans out, straight from its artifacts, to its Node
-# test suite, its framework tests and, on pull requests, a benchmark against
-# the base branch. bench-comment posts all benchmark results as one comment as
-# soon as the benchmarks finish, without waiting for the tests.
+# test suite and its framework tests. On pull requests, once the Linux and
+# WASIX builds exist, one job benchmarks every runtime on the same machine
+# against the base branch, and bench-comment posts the results as one comment
+# without waiting for the tests.
 #
 #   build-<lane>  -->  test-<lane>
 #                 -->  test-frameworks-<lane>
-#                 -->  bench-<runtime>  -->  bench-comment
+#   build-{v8,quickjs}-{linux,wasix}  -->  bench  -->  bench-comment
 #
 # Internal artifacts (build-<lane>) hold what the test jobs read, as tarballs
 # so exec bits and dotfiles survive. Their names must not start with "edge-":
@@ -1652,66 +1653,20 @@ jobs:
   # -------------------------------------------------------------- Benchmarks
   #
   # Pull requests only (release.yml calls this workflow with a ref and skips
-  # them). Each job compares the PR's build of one runtime with the base
-  # branch's build on one runner; see .github/actions/framework-bench and
-  # benchmarks/ci/framework-bench.py. The Node.js jobs compare a binary with
-  # itself, as a reference and a measure of the noise.
-
-  bench-v8-native:
-    name: bench-v8-native
-    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
-    needs: build-v8-linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: ./.github/actions/framework-bench
-        with:
-          runtime: v8-native
-          artifact: edge-linux-amd64
-
-  bench-v8-wasix:
-    name: bench-v8-wasix
-    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
-    needs: build-v8-wasix
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: ./.github/actions/framework-bench
-        with:
-          runtime: v8-wasix
-          artifact: edge-wasix
-
-  bench-quickjs-native:
-    name: bench-quickjs-native
-    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
-    needs: build-quickjs-linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: ./.github/actions/framework-bench
-        with:
-          runtime: quickjs-native
-          artifact: edge-quickjs-linux-amd64
-
-  bench-quickjs-wasix:
-    name: bench-quickjs-wasix
-    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
-    needs: build-quickjs-wasix
+  # them). One job measures every runtime on the same machine, because GitHub
+  # runners differ by more than the changes being measured: Edge.js V8 and
+  # QuickJS, native and WASIX, each PR build against its base branch build,
+  # and Node.js 24 and 26 against themselves as a reference and a measure of
+  # the noise. See benchmarks/ci/framework-bench.py. A runtime whose build
+  # failed is reported as missing; the others are still measured.
+  bench:
+    name: bench
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && !inputs.ref }}
+    needs:
+      - build-v8-linux
+      - build-v8-wasix
+      - build-quickjs-linux
+      - build-quickjs-wasix
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -1721,10 +1676,46 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      # The guest needs the wasmer CLI the build and tests use (it imports
-      # wasm_c_api_v0, which older releases lack); see test-quickjs-wasix.
+      - name: Setup Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - name: Remember Node.js 26
+        shell: bash
+        run: echo "BENCH_NODE26=$(command -v node)" >> "${GITHUB_ENV}"
+
+      # Last, so Node.js 24 is on PATH for the fixtures and load generator.
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Remember Node.js 24
+        shell: bash
+        run: echo "BENCH_NODE24=$(command -v node)" >> "${GITHUB_ENV}"
+
+      - name: Restore benchmark fixtures
+        id: fixtures
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/frameworks/.build
+          key: framework-fixtures-${{ runner.os }}-node24-${{ hashFiles('benchmarks/frameworks/**') }}
+
+      - name: Build benchmark fixtures
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          benchmarks/frameworks/setup.sh
+
+      # The QuickJS WASIX guest needs the wasmer CLI the build and tests use
+      # (it imports wasm_c_api_v0, which older releases lack). Only that
+      # runtime depends on it, so a failure here must not stop the others.
       - name: Resolve Wasmer provisioning
         id: wasmer-provision
+        if: needs.build-quickjs-wasix.result == 'success'
+        continue-on-error: true
         shell: bash
         env:
           WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
@@ -1733,13 +1724,16 @@ jobs:
         run: ./scripts/ci/provision-wasmer.sh resolve wasix
 
       - name: Restore Wasmer source build cache
-        if: steps.wasmer-provision.outputs.mode == 'source'
+        if: needs.build-quickjs-wasix.result == 'success' && steps.wasmer-provision.outputs.mode == 'source'
+        continue-on-error: true
         uses: actions/cache/restore@v4
         with:
           path: .wasmer-provision
           key: ${{ needs.build-quickjs-wasix.outputs.wasmer_cache_key || steps.wasmer-provision.outputs.cache_key }}
 
       - name: Provision Wasmer
+        if: needs.build-quickjs-wasix.result == 'success'
+        continue-on-error: true
         shell: bash
         env:
           WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
@@ -1749,59 +1743,69 @@ jobs:
           GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
         run: ./scripts/ci/provision-wasmer.sh wasix
 
-      - uses: ./.github/actions/framework-bench
+      - name: Download PR builds
+        uses: actions/download-artifact@v4
         with:
-          runtime: quickjs-wasix
-          artifact: edge-quickjs-wasix
+          pattern: "{edge-linux-amd64,edge-wasix,edge-quickjs-linux-amd64,edge-quickjs-wasix,napi-wasmer-linux-amd64}"
+          path: ${{ runner.temp }}/bench/artifacts
 
-  bench-node24:
-    name: bench-node24
-    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: ./.github/actions/framework-bench
-        with:
-          runtime: node24
-          lane-node-version: "24"
+      - name: Prepare PR and base builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py prepare \
+            --artifacts "${RUNNER_TEMP}/bench/artifacts" \
+            --repo "${{ github.repository }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --head-sha "${{ github.sha }}" \
+            --out "${RUNNER_TEMP}/bench/builds"
 
-  bench-node26:
-    name: bench-node26
-    if: ${{ github.event_name == 'pull_request' && !inputs.ref }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: ./.github/actions/framework-bench
-        with:
-          runtime: node26
-          lane-node-version: "26"
+      - name: Benchmark all runtimes
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py run \
+            --builds "${RUNNER_TEMP}/bench/builds" \
+            --node24 "${BENCH_NODE24}" --node26 "${BENCH_NODE26}" \
+            --out "${RUNNER_TEMP}/bench/results"
 
-  # Posts or updates one comment with every runtime's results once all
-  # benchmark jobs have finished, including when some failed. It uses the
-  # repository's default token and declares no permissions, because
-  # release.yml calls this workflow with read-only permissions. Pull requests
-  # from forks get a read-only token: the comment then fails and the report
-  # is only in the job summary.
+      # Readable in the job's summary before the comment is posted.
+      - name: Summarize benchmark
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/ci/framework-bench.py report \
+            --results "${RUNNER_TEMP}/bench/results/results.json" \
+            --repo "${{ github.repository }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-ref "${{ github.event.pull_request.base.ref }}" \
+            --run-id "${{ github.run_id }}"
+
+      - name: Upload benchmark results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-bench
+          path: |
+            ${{ runner.temp }}/bench/results/results.json
+            ${{ runner.temp }}/bench/results/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+  # Posts or updates one comment with the results as soon as the benchmark
+  # finishes, including when it failed. It uses the repository's default
+  # token and declares no permissions, because release.yml calls this
+  # workflow with read-only permissions. Pull requests from forks get a
+  # read-only token: the comment then fails and the report is only in the
+  # job summary.
   bench-comment:
     name: bench-comment
     if: ${{ !cancelled() && github.event_name == 'pull_request' && !inputs.ref }}
-    needs:
-      - bench-v8-native
-      - bench-v8-wasix
-      - bench-quickjs-native
-      - bench-quickjs-wasix
-      - bench-node24
-      - bench-node26
+    needs: bench
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -1815,7 +1819,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          pattern: framework-bench-*
+          name: framework-bench
           path: ${{ runner.temp }}/bench-results
 
       - name: Comment on the pull request
@@ -1823,9 +1827,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/bench-results"
-          python3 benchmarks/ci/framework-bench.py comment --post \
-            --results-dir "${RUNNER_TEMP}/bench-results" \
+          python3 benchmarks/ci/framework-bench.py report --post \
+            --results "${RUNNER_TEMP}/bench-results/results.json" \
             --repo "${{ github.repository }}" \
             --pr "${{ github.event.pull_request.number }}" \
             --head-sha "${{ github.event.pull_request.head.sha }}" \

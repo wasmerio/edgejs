@@ -197,7 +197,7 @@ def wait_ready(process, port, start, timeout=90):
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"server exited with status {process.returncode}")
-        connection = http.client.HTTPConnection(HOST, port, timeout=30)
+        connection = http.client.HTTPConnection(HOST, port, timeout=max(1, min(30, deadline - time.monotonic())))
         try:
             connection.connect()
             listen_ms = (time.monotonic() - start) * 1000

@@ -307,32 +307,33 @@ outputs.
 ### On pull requests
 
 `.github/workflows/test-and-build.yml` builds every lane in parallel, then
-runs each build's Node test suite, its framework tests and its benchmark in
-parallel jobs that reuse the build's artifacts:
+runs each build's Node test suite and framework tests in parallel jobs that
+reuse the build's artifacts. Once the Linux and WASIX builds exist, one job
+benchmarks every runtime on the same machine:
 
 ```text
 build-<lane>  -->  test-<lane>
               -->  test-frameworks-<lane>
-              -->  bench-<runtime>  -->  bench-comment
+build-{v8,quickjs}-{linux,wasix}  -->  bench  -->  bench-comment
 ```
 
-There is one `bench-*` job per runtime: Edge.js V8 native and WASIX, Edge.js
-QuickJS native and WASIX, and Node.js 24 and 26. Each Edge.js job runs the
-PR's build and the newest finished build of the base branch at the same time
-on one runner, each pinned to half of its CPUs and swapping halves between
-rounds. The Node.js jobs run the same binary in both lanes, as a reference and
-a measure of the run's noise. After a warm-up that compiles both builds, each
-job first times process start to the first validated response (five starts
-per server and lane), then measures throughput; each timed run lasts at most
-2 seconds and the benchmark itself about 100 seconds. Every benchmark job
-writes its runtime's results to its job summary as soon as it finishes.
+GitHub runners differ from each other by more than the changes being measured,
+so all runtimes share one job: Edge.js V8 and QuickJS, native and WASIX, each
+PR build against the newest finished build of the base branch, and Node.js 24
+and 26 against themselves, as a reference and a measure of the run's noise.
 
-When all benchmark jobs have finished, without waiting for the tests,
-`bench-comment` posts one pull request comment with every runtime's results,
-and later pushes update it, keeping a short table of earlier runs. The steps
-of a benchmark job are in `.github/actions/framework-bench`, the logic in
-`benchmarks/ci/framework-bench.py`, whose `run` and `comment` subcommands
-also work locally.
+After a warm-up that compiles the WASIX guests, each runtime and server is one
+cell. Its two lanes run at the same time, each pinned to one half of the CPUs.
+Each lane starts the server twice, on opposite halves, to time process start to
+the first validated response, then warms the second server up and measures its
+throughput once on each half. A change counts only when both measurements
+agree. Measurement windows are sized so the whole benchmark takes about 110
+seconds, so they are short (about a second): confirm small changes locally.
+
+The job writes the report to its summary, and `bench-comment` posts it as one
+pull request comment without waiting for the tests; later pushes update it,
+keeping a short table of earlier runs. The logic is in
+`benchmarks/ci/framework-bench.py`.
 
 The harness's lanes are not limited to WASIX builds: a lane with `"binary"`
 runs a host executable (a native Edge.js build, or Node.js with
