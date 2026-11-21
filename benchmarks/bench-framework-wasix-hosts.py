@@ -501,6 +501,8 @@ def cmd_smoke(config, args):
             print(f"{fixture:8} {lane:28} {rate}  {first}  {status}", flush=True)
             if status != "ok":
                 print(f"         log: {paths['log']}", flush=True)
+                for line in log.strip().splitlines()[-15:]:
+                    print(f"         | {line}", flush=True)
     if failures:
         sys.exit(f"{failures} smoke check(s) failed")
 

@@ -321,8 +321,11 @@ QuickJS native and WASIX, and Node.js 24 and 26. Each Edge.js job runs the
 PR's build and the newest finished build of the base branch at the same time
 on one runner, each pinned to half of its CPUs and swapping halves between
 rounds. The Node.js jobs run the same binary in both lanes, as a reference and
-a measure of the run's noise. Each timed run lasts at most 2 seconds and the
-benchmark itself about 100 seconds.
+a measure of the run's noise. After a warm-up that compiles both builds, each
+job first times process start to the first validated response (five starts
+per server and lane), then measures throughput; each timed run lasts at most
+2 seconds and the benchmark itself about 100 seconds. Every benchmark job
+writes its runtime's results to its job summary as soon as it finishes.
 
 When all benchmark jobs have finished, without waiting for the tests,
 `bench-comment` posts one pull request comment with every runtime's results,

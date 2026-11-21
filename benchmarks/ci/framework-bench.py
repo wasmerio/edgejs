@@ -61,6 +61,7 @@ FIXTURE_NAMES = {"http": "node:http", "express": "Express", "hono": "Hono", "nex
 # A change smaller than this, or than the disagreement between rounds, is
 # reported as no significant change.
 THROUGHPUT_FLOOR = 0.03
+# First-reply times: a change must exceed this and the spread of the probes.
 STARTUP_FLOOR = 0.05
 
 
@@ -183,10 +184,12 @@ def cpu_halves():
     return ",".join(map(str, cpus[:half])), ",".join(map(str, cpus[half:]))
 
 
-def harness(config, output, args, startup_runs, cpus):
+def harness(config, output, args, startup_runs, cpus, rounds=1):
+    """The harness command for one lane: `rounds` throughput rounds, then
+    `startup_runs` first-reply probes per fixture (0 skips either)."""
     command = [sys.executable, str(HARNESS), "--config", str(config),
                "--amount-scale", str(args.amount_scale), "--max-seconds", str(args.max_seconds),
-               "run", "--rounds", "1", "--runs", str(args.runs), "--startup-runs", str(startup_runs),
+               "run", "--rounds", str(rounds), "--runs", str(args.runs), "--startup-runs", str(startup_runs),
                "--idle", "0", "--attempts", "1", "--spread", "1", "--output", str(output)]
     if cpus:
         command = ["taskset", "-c", cpus, *command]
@@ -232,18 +235,6 @@ def run_lanes(commands, out, name, deadline):
     return status
 
 
-def startup_estimate(round_results, startup_runs):
-    """Seconds the first-reply probes will take: every fixture starts a server
-    startup_runs + 2 times (hyperfine's warmups), each about as slow as the
-    servers this round started."""
-    firsts = [r["session"]["first_response_ms"] / 1000
-              for lane in round_results.values() for cell in lane["throughput"].values()
-              for row in cell.values() for r in row["rounds"]]
-    per_start = (max(firsts) if firsts else 1.0) + 0.5  # plus process start and stop
-    fixtures = max(len(lane["throughput"]) for lane in round_results.values())
-    return fixtures * (startup_runs + 2) * per_start
-
-
 def cmd_run(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -269,24 +260,40 @@ def cmd_run(args):
     log(f"warm-up took {warm_s:.0f} s: {warm_status}")
     if any(s != "ok" for s in warm_status.values()):
         notes.append("warm-up failed for " + ", ".join(l for l, s in warm_status.items() if s != "ok"))
+        for lane, status in warm_status.items():
+            if status != "ok":
+                log(f"--- {lane} warm-up ({status}):\n"
+                    + (out / f"{lane}-warmup.log").read_text(errors="replace")[-3000:])
+
+    # Time to first response, measured first so the throughput budget can
+    # never squeeze it out. Both lanes probe at the same time, each on its half.
+    startup = None
+    if not notes and args.startup_runs > 0:
+        outputs = {lane: out / f"{lane}-startup.json" for lane in ("head", "base")}
+        commands = {lane: (harness(configs[lane], outputs[lane], args, args.startup_runs,
+                                   halves[i] if halves else None, rounds=0), states[lane])
+                    for i, lane in enumerate(outputs)}
+        startup_started = time.monotonic()
+        status = run_lanes(commands, out, "startup", deadline)
+        if all(s == "ok" for s in status.values()):
+            startup = {lane: json.loads(outputs[lane].read_text()) for lane in outputs}
+            log(f"first-reply probes took {time.monotonic() - startup_started:.0f} s")
+        else:
+            notes.append("first-reply probes: " + ", ".join(f"{l} {s}" for l, s in status.items() if s != "ok"))
 
     last_round_s = 0.0
-    for index in range(args.rounds if not notes else 0):
-        final = index == args.rounds - 1
+    for index in range(args.rounds if not any(n.startswith("warm-up") for n in notes) else 0):
         elapsed = time.monotonic() - started
-        # The next round takes about as long as the last one; the final one
-        # adds the first-reply probes, estimated from this run's start times.
-        extra = startup_estimate(rounds[-1]["results"], args.startup_runs) if rounds and final else 0
-        if rounds and elapsed + last_round_s + extra > args.budget:
+        # The next round takes about as long as the last one.
+        if rounds and elapsed + last_round_s > args.budget:
             notes.append(f"stopped after {len(rounds)} of {args.rounds} rounds to stay within "
                          f"{args.budget:.0f} s")
             break
         round_started = time.monotonic()
         # Swap the CPU halves every round, so neither lane keeps the better half.
         pins = {"head": halves[index % 2], "base": halves[1 - index % 2]} if halves else {}
-        startup = args.startup_runs if final else 0
         outputs = {lane: out / f"{lane}-round{index + 1}.json" for lane in ("head", "base")}
-        commands = {lane: (harness(configs[lane], outputs[lane], args, startup, pins.get(lane)), states[lane])
+        commands = {lane: (harness(configs[lane], outputs[lane], args, 0, pins.get(lane)), states[lane])
                     for lane in outputs}
         status = run_lanes(commands, out, f"round{index + 1}", deadline)
         if all(s == "ok" for s in status.values()):
@@ -307,7 +314,8 @@ def cmd_run(args):
             notes.append("round {} failed for {}".format(index + 1, " and ".join(failed)))
             rounds.append({"index": index + 1, "failed": failed})
         break
-    summary = {"runtime": args.runtime, "rounds": rounds, "notes": notes,
+    summary = {"runtime": args.runtime, "startup": startup, "startup_runs": args.startup_runs,
+               "rounds": rounds, "notes": notes,
                "elapsed_s": time.monotonic() - started, "warmup_elapsed_s": warm_s,
                "cpu_pinning": bool(halves), "max_seconds": args.max_seconds, "runs": args.runs,
                "warmup_s": args.warmup}
@@ -361,18 +369,41 @@ def analyze(results):
                "change": change, "noise": noise, "round_changes": [ratio - 1 for ratio in ratios],
                "verdict": verdict(change, noise, THROUGHPUT_FLOOR),
                "p99_base": statistics.median(base_p99), "p99_head": statistics.median(head_p99)}
-        startup = {}
-        for lane in ("head", "base"):
-            for round_ in rounds:
-                cell = round_["results"][lane].get("startup", {}).get(fixture, {}).get("lane")
-                if cell:
-                    startup[lane] = statistics.median(cell["first_response_ms"])
-        if len(startup) == 2:
-            startup_change = startup["head"] / startup["base"] - 1
-            row.update(first_base=startup["base"], first_head=startup["head"], first_change=startup_change,
-                       first_verdict=verdict(startup_change, 0.0, STARTUP_FLOOR, higher_is_better=False))
         rows[fixture] = row
+    for fixture, startup in analyze_startup(results).items():
+        rows.setdefault(fixture, {}).update(startup)
     return rows
+
+
+def spread(samples):
+    """Relative interquartile range of the probes: how much they disagree."""
+    ordered = sorted(samples)
+    if len(ordered) < 3:
+        return 0.0
+    low, high = ordered[len(ordered) // 4], ordered[(3 * len(ordered)) // 4]
+    return (high - low) / statistics.median(ordered)
+
+
+def analyze_startup(results):
+    """Per fixture: median time from process start to the first validated
+    response for both lanes, and whether the change exceeds the noise."""
+    phase = results.get("startup") or {}
+    found = {}
+    for fixture in FIXTURE_NAMES:
+        samples = {}
+        for lane in ("head", "base"):
+            cell = (phase.get(lane) or {}).get("startup", {}).get(fixture, {}).get("lane")
+            if cell and cell.get("first_response_ms"):
+                samples[lane] = cell["first_response_ms"]
+        if len(samples) != 2:
+            continue
+        head, base = statistics.median(samples["head"]), statistics.median(samples["base"])
+        change = head / base - 1
+        noise = max(spread(samples["head"]), spread(samples["base"]))
+        found[fixture] = {"first_base": base, "first_head": head, "first_change": change,
+                          "first_noise": noise,
+                          "first_verdict": verdict(change, noise, STARTUP_FLOOR, higher_is_better=False)}
+    return found
 
 
 def short(sha):
@@ -409,40 +440,27 @@ def load_runtimes(results_dir):
     return found
 
 
-def overview_cell(row, reference):
-    if row is None:
+MARKS = {"better": " 🟢", "worse": " 🔴", "same": ""}
+
+
+def throughput_cell(row, reference):
+    if not row or "head" not in row:
         return "–"
-    rate = f"{row['head']:,.0f}"
     if reference:
-        return f"{rate} <sub>(A/A {row['change']:+.1%})</sub>"
-    mark = {"better": " 🟢", "worse": " 🔴", "same": ""}[row["verdict"]]
-    return f"{rate} <sub>({row['change']:+.1%})</sub>{mark}"
+        return f"{row['head']:,.0f} <sub>(A/A {row['change']:+.1%})</sub>"
+    return f"{row['head']:,.0f} <sub>({row['change']:+.1%})</sub>{MARKS[row['verdict']]}"
 
 
-def runtime_details(name, data, args):
-    runtime = RUNTIMES[name]
-    reference = runtime.get("reference")
-    results, meta, rows = data["results"], data["meta"], data["rows"]
-    repo_url = f"https://github.com/{args.repo}"
-    lines = [f"<details><summary><b>{runtime['title']}</b></summary>", ""]
+def startup_cell(row, reference):
+    if not row or "first_head" not in row:
+        return "–"
     if reference:
-        lines += ["Both lanes run the same Node.js binary, so their difference is the noise of this "
-                  "run on this runner.", ""]
-    else:
-        base = f"[`{short(meta.get('sha'))}`]({repo_url}/commit/{meta.get('sha')})" if meta.get("sha") else "?"
-        lines += [f"Base build: `{args.base_ref}` at {base}.", ""]
-    if rows:
-        lines += ["| Server | Base req/s | PR req/s | Change | Verdict | p99 base → PR | First reply base → PR |",
-                  "| --- | ---: | ---: | ---: | --- | --- | --- |"]
-        for fixture, r in rows.items():
-            per_round = ", ".join(f"{c:+.1%}" for c in r["round_changes"])
-            first = (f"{r['first_base']:.0f} → {r['first_head']:.0f} ms ({r['first_change']:+.0%})"
-                     if "first_base" in r else "n/a")
-            verdict_text = "reference" if reference else VERDICT_TEXT[r["verdict"]]
-            lines.append(f"| {FIXTURE_NAMES[fixture]} | {r['base']:,.0f} | {r['head']:,.0f} | "
-                         f"{r['change']:+.1%} <sub>({per_round})</sub> | {verdict_text} | "
-                         f"{r['p99_base']:.2f} → {r['p99_head']:.2f} ms | {first} |")
-        lines.append("")
+        return f"{row['first_head']:.0f} <sub>(A/A {row['first_change']:+.0%})</sub>"
+    return f"{row['first_head']:.0f} <sub>({row['first_change']:+.0%})</sub>{MARKS[row['first_verdict']]}"
+
+
+def runtime_notes(data, args):
+    results, meta = data["results"], data["meta"]
     notes = list(results.get("notes", []))
     if meta and not meta.get("exact", True):
         notes.append(f"`{args.base_ref}` at `{short(meta.get('requested_sha'))}` has no finished build yet, "
@@ -456,9 +474,94 @@ def runtime_details(name, data, args):
     if not results.get("cpu_pinning"):
         notes.append("CPU pinning was not available; both lanes shared all CPUs.")
     completed = sum(1 for r in results["rounds"] if "results" in r)
-    notes.append(f"{completed} round(s) in {results['elapsed_s']:.0f} s.")
-    lines += [f"- {note}" for note in notes] + ["", "</details>", ""]
+    notes.append(f"{completed} throughput round(s), {results.get('startup_runs', 0)} first-reply probes per "
+                 f"server and lane, {results['elapsed_s']:.0f} s in all.")
+    return notes
+
+
+def runtime_table(name, data, args):
+    """The per-server table of one runtime, with its notes."""
+    runtime = RUNTIMES[name]
+    reference = runtime.get("reference")
+    meta, rows = data["meta"], data["rows"]
+    repo_url = f"https://github.com/{args.repo}"
+    if reference:
+        lines = ["Both lanes run the same Node.js binary, so their difference is the noise of this "
+                 "run on this runner.", ""]
+    else:
+        base = f"[`{short(meta.get('sha'))}`]({repo_url}/commit/{meta.get('sha')})" if meta.get("sha") else "?"
+        lines = [f"Base build: `{args.base_ref}` at {base}.", ""]
+    if rows:
+        lines += ["| Server | Base req/s | PR req/s | Change | Verdict | p99 base → PR "
+                  "| First reply base → PR | Verdict |",
+                  "| --- | ---: | ---: | ---: | --- | --- | --- | --- |"]
+        for fixture in FIXTURE_NAMES:
+            r = rows.get(fixture)
+            if not r:
+                continue
+            if "head" in r:
+                per_round = ", ".join(f"{c:+.1%}" for c in r["round_changes"])
+                throughput = (f"{r['base']:,.0f} | {r['head']:,.0f} | {r['change']:+.1%} <sub>({per_round})</sub> | "
+                              + ("reference" if reference else VERDICT_TEXT[r["verdict"]])
+                              + f" | {r['p99_base']:.2f} → {r['p99_head']:.2f} ms")
+            else:
+                throughput = "– | – | – | no result | –"
+            if "first_head" in r:
+                startup = (f"{r['first_base']:.0f} → {r['first_head']:.0f} ms ({r['first_change']:+.0%}, "
+                           f"spread {r['first_noise']:.0%}) | "
+                           + ("reference" if reference else VERDICT_TEXT[r["first_verdict"]]))
+            else:
+                startup = "– | no result"
+            lines.append(f"| {FIXTURE_NAMES[fixture]} | {throughput} | {startup} |")
+        lines.append("")
+    lines += [f"- {note}" for note in runtime_notes(data, args)] + [""]
     return lines
+
+
+def findings(runtimes):
+    """Significant changes across the Edge.js runtimes, as headline lines."""
+    found = {"worse": [], "better": [], "slower": [], "faster": []}
+    measured = []
+    for name, data in runtimes.items():
+        if not data or not data["rows"] or RUNTIMES[name].get("reference"):
+            continue
+        measured.append(name)
+        for fixture, row in data["rows"].items():
+            label = f"{RUNTIMES[name]['title']} {FIXTURE_NAMES[fixture]}"
+            if row.get("verdict") in ("worse", "better"):
+                found[row["verdict"]].append(f"{label} ({row['change']:+.1%})")
+            if row.get("first_verdict") in ("worse", "better"):
+                found["slower" if row["first_verdict"] == "worse" else "faster"].append(
+                    f"{label} ({row['first_change']:+.0%})")
+    lines = []
+    if found["worse"]:
+        lines.append("🔴 **Throughput regressed:** " + "; ".join(found["worse"]) + ".")
+    if found["slower"]:
+        lines.append("🔴 **Slower time to first response:** " + "; ".join(found["slower"]) + ".")
+    if found["better"]:
+        lines.append("🟢 **Throughput improved:** " + "; ".join(found["better"]) + ".")
+    if found["faster"]:
+        lines.append("🟢 **Faster time to first response:** " + "; ".join(found["faster"]) + ".")
+    if measured and not any(found.values()):
+        edge_count = sum(not r.get("reference") for r in RUNTIMES.values())
+        lines.append("**No significant change** in throughput or time to first response in "
+                     + ("any Edge.js runtime." if len(measured) == edge_count
+                        else ", ".join(RUNTIMES[n]["title"] for n in measured) + "."))
+    return lines
+
+
+def method_text(results):
+    return ("Each runtime has its own job. It runs the PR build and the base build at the same time on one "
+            "runner, each pinned to half of the CPUs (server and load generator together). After a warm-up "
+            f"that compiles both builds, each server is started {results.get('startup_runs', 0)} times (after "
+            "2 unmeasured starts) to time process start to the first validated response; the verdict needs "
+            f"a change above {STARTUP_FLOOR:.0%} and above the probes' interquartile spread. Then each "
+            "throughput round starts a fresh server per fixture, warms it up for "
+            f"{results['warmup_s']} s with 32 connections and times {results['runs']} load runs of up to "
+            f"{results['max_seconds']:g} s with every reply validated; rounds swap the CPU halves. Change is "
+            "the geometric mean of the per-round PR/base ratios (per round in brackets), counted only above "
+            f"{THROUGHPUT_FLOOR:.0%} and above half the gap between rounds. Shared runners are noisy: confirm "
+            "single-digit changes locally with `benchmarks/bench-framework-wasix-hosts.py`.")
 
 
 def render(args, runtimes, history):
@@ -471,86 +574,81 @@ def render(args, runtimes, history):
     lines.append(f"PR {head_link} (merged into `{args.base_ref}`, as CI builds it) against `{args.base_ref}` "
                  f"at {base_text}. {run_link}.")
     lines.append("")
-
-    regressed, improved, slower_start = [], [], []
-    for name, data in runtimes.items():
-        if not data or RUNTIMES[name].get("reference"):
-            continue
-        for fixture, row in data["rows"].items():
-            label = f"{RUNTIMES[name]['title']} {FIXTURE_NAMES[fixture]} ({row['change']:+.1%})"
-            if row["verdict"] == "worse":
-                regressed.append(label)
-            elif row["verdict"] == "better":
-                improved.append(label)
-            if row.get("first_verdict") == "worse":
-                slower_start.append(f"{RUNTIMES[name]['title']} {FIXTURE_NAMES[fixture]} "
-                                    f"({row['first_change']:+.0%})")
-    # A runtime without comparable rows has no results; one whose later
-    # round failed or was stopped still reports the rounds that finished.
+    lines += findings(runtimes)
     missing = [RUNTIMES[n]["title"] for n, d in runtimes.items() if not d or not d["rows"]]
-    measured = [n for n, d in runtimes.items() if d and d["rows"] and not RUNTIMES[n].get("reference")]
-    if regressed:
-        lines.append("🔴 **Throughput regressed:** " + "; ".join(regressed) + ".")
-    if improved:
-        lines.append("🟢 **Throughput improved:** " + "; ".join(improved) + ".")
-    if measured and not regressed and not improved:
-        lines.append("**No significant throughput change** in "
-                     + ("any Edge.js runtime." if len(measured) == sum(not r.get("reference") for r in RUNTIMES.values())
-                        else ", ".join(RUNTIMES[n]["title"] for n in measured) + "."))
-    if slower_start:
-        lines.append("🔴 **Slower first reply:** " + "; ".join(slower_start) + ".")
     if missing:
         lines.append("⚠️ **No results** for " + ", ".join(missing) + "; see the workflow run.")
     lines.append("")
 
-    lines += ["PR requests per second, change against the base build in brackets:", "",
-              "| Runtime | " + " | ".join(FIXTURE_NAMES.values()) + " |",
+    header = ["| Runtime | " + " | ".join(FIXTURE_NAMES.values()) + " |",
               "| --- | " + " | ".join("---:" for _ in FIXTURE_NAMES) + " |"]
-    for name, data in runtimes.items():
-        reference = RUNTIMES[name].get("reference")
-        rows = data["rows"] if data else {}
-        cells = [overview_cell(rows.get(f), reference) for f in FIXTURE_NAMES]
-        lines.append(f"| {RUNTIMES[name]['title']} | " + " | ".join(cells) + " |")
-    lines += ["", "Each runtime ran on its own runner, so compare requests per second within a row, "
-              "not across rows. Node.js rows compare a binary with itself and show the noise.", ""]
+    for title, cell in (("**Requests per second** (PR, change against the base build):", throughput_cell),
+                        ("**Time to first response, ms** (PR, change against the base build):", startup_cell)):
+        lines += [title, ""] + header
+        for name, data in runtimes.items():
+            rows = data["rows"] if data else {}
+            cells = [cell(rows.get(f), RUNTIMES[name].get("reference")) for f in FIXTURE_NAMES]
+            lines.append(f"| {RUNTIMES[name]['title']} | " + " | ".join(cells) + " |")
+        lines.append("")
+    lines += ["Each runtime ran on its own runner, so compare within a row, not across rows. Node.js rows "
+              "compare a binary with itself and show the noise.", ""]
 
     for name, data in runtimes.items():
         if data:
-            lines += runtime_details(name, data, args)
+            lines += [f"<details><summary><b>{RUNTIMES[name]['title']}</b></summary>", ""]
+            lines += runtime_table(name, data, args) + ["</details>", ""]
 
     sample = next((d["results"] for d in runtimes.values() if d), None)
     if sample:
-        lines += ["<details><summary>Method</summary>", "",
-                  "Each runtime has its own job. It runs the PR build and the base build at the same time "
-                  "on one runner, each pinned to half of the CPUs (server and load generator together), "
-                  "and swaps the halves between rounds. Each round starts a fresh server per fixture, "
-                  f"warms it up for {sample['warmup_s']} s with 32 connections, then times "
-                  f"{sample['runs']} load runs of up to {sample['max_seconds']:g} s with every reply "
-                  "validated. Change is the geometric mean of the per-round PR/base ratios (per-round "
-                  f"changes in brackets in the details). A change counts only above {THROUGHPUT_FLOOR:.0%} "
-                  "and above half the gap between rounds. First reply is process start to the first "
-                  f"validated response, median of the probes ({STARTUP_FLOOR:.0%} threshold). Shared "
-                  "runners are noisy: confirm single-digit changes locally with "
-                  "`benchmarks/bench-framework-wasix-hosts.py`.", "", "</details>", ""]
+        lines += ["<details><summary>Method</summary>", "", method_text(sample), "", "</details>", ""]
 
     entry = {"head": args.head_sha, "run": args.run_id,
-             "changes": {name: {f: round(r["change"], 4) for f, r in d["rows"].items()}
-                         for name, d in runtimes.items() if d and not RUNTIMES[name].get("reference")}}
+             "changes": {name: {f: round(r["change"], 4) for f, r in d["rows"].items() if "change" in r}
+                         for name, d in runtimes.items() if d and not RUNTIMES[name].get("reference")},
+             "first": {name: {f: round(r["first_change"], 4) for f, r in d["rows"].items() if "first_change" in r}
+                       for name, d in runtimes.items() if d and not RUNTIMES[name].get("reference")}}
     history = [h for h in history if h.get("head") != args.head_sha and "changes" in h][-9:] + [entry]
     if len(history) > 1:
         lines += ["<details><summary>Earlier runs on this PR</summary>", "",
+                  "Change against the base build: requests per second / time to first response.", "",
                   "| PR commit | Runtime | " + " | ".join(FIXTURE_NAMES.values()) + " |",
                   "| --- | --- | " + " | ".join("---:" for _ in FIXTURE_NAMES) + " |"]
         for h in reversed(history):
             for name, changes in h["changes"].items():
                 if not isinstance(changes, dict) or name not in RUNTIMES:
                     continue
-                cells = [f"{changes[f]:+.1%}" if f in changes else "" for f in FIXTURE_NAMES]
+                first = h.get("first", {}).get(name, {})
+                cells = [" / ".join(filter(None, (f"{changes[f]:+.1%}" if f in changes else "",
+                                                  f"{first[f]:+.0%}" if f in first else "")))
+                         for f in FIXTURE_NAMES]
                 lines.append(f"| `{short(h['head'])}` | {RUNTIMES[name]['title']} | " + " | ".join(cells) + " |")
         lines += ["", "</details>", ""]
     lines.append(f"<sub>Updated for {head_link}.</sub>")
     lines.append(HISTORY_PREFIX + base64.b64encode(json.dumps(history).encode()).decode() + " -->")
     return "\n".join(lines) + "\n"
+
+
+def cmd_summary(args):
+    """Writes one runtime's results to the job summary, so they can be read
+    before every benchmark has finished and the comment is posted."""
+    runtimes = {name: None for name in RUNTIMES}
+    runtimes.update({name: data for name, data in load_runtimes(args.results_dir).items()
+                     if name == args.runtime and data})
+    data = runtimes[args.runtime]
+    title = RUNTIMES[args.runtime]["title"]
+    lines = [f"## Framework benchmark: {title}", ""]
+    if data:
+        if not RUNTIMES[args.runtime].get("reference"):
+            lines += findings(runtimes) + [""]
+        lines += runtime_table(args.runtime, data, args)
+        lines += ["<details><summary>Method</summary>", "", method_text(data["results"]), "", "</details>", ""]
+    else:
+        lines += ["⚠️ No results; see the step logs above.", ""]
+    body = "\n".join(lines) + "\n"
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+            summary.write(body)
+    print(body)
 
 
 def find_comment(repo, pr):
@@ -601,12 +699,17 @@ def main():
     run.add_argument("--out", required=True)
     run.add_argument("--rounds", type=int, default=2)
     run.add_argument("--runs", type=int, default=2)
-    run.add_argument("--startup-runs", type=int, default=3)
+    run.add_argument("--startup-runs", type=int, default=5, help="first-reply probes per fixture and lane")
     run.add_argument("--warmup", type=int, default=2)
     run.add_argument("--amount-scale", type=float, default=1.0)
     run.add_argument("--max-seconds", type=float, default=2.0, help="time limit of each timed load run")
     run.add_argument("--budget", type=float, default=100, help="seconds; no round starts that would end later")
     run.add_argument("--grace", type=float, default=15, help="seconds past the budget before a round is killed")
+    summary = sub.add_parser("summary", help="write one runtime's results to the job summary")
+    summary.add_argument("--runtime", required=True, choices=list(RUNTIMES))
+    summary.add_argument("--results-dir", required=True, help="holds <runtime>/results.json")
+    summary.add_argument("--repo", required=True)
+    summary.add_argument("--base-ref", required=True)
     comment = sub.add_parser("comment")
     comment.add_argument("--results-dir", required=True, help="one subdirectory per runtime")
     comment.add_argument("--repo", required=True)
@@ -617,7 +720,8 @@ def main():
     comment.add_argument("--out", required=True)
     comment.add_argument("--post", action="store_true")
     args = parser.parse_args()
-    {"fetch-base": cmd_fetch_base, "run": cmd_run, "comment": cmd_comment}[args.command](args)
+    {"fetch-base": cmd_fetch_base, "run": cmd_run, "summary": cmd_summary,
+     "comment": cmd_comment}[args.command](args)
 
 
 if __name__ == "__main__":

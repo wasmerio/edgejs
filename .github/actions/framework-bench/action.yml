@@ -89,14 +89,16 @@ runs:
           chmod +x "${head}/runner/napi_wasmer"
         fi
 
-    # The released Wasmer CLI runs both QuickJS WASIX lanes.
-    - name: Install Wasmer CLI
+    # QuickJS WASIX lanes run on the wasmer CLI that the calling job put on
+    # PATH (provisioned as for the tests, which needs repository variables
+    # and secrets a composite action cannot read).
+    - name: Check Wasmer CLI
       if: ${{ inputs.runtime == 'quickjs-wasix' }}
       shell: bash
-      env:
-        WASMER_SOURCE_REF: ""
-        WASMER_ARTIFACT_RUN_ID: ""
-      run: ./scripts/ci/provision-wasmer.sh wasix
+      run: |
+        set -euo pipefail
+        command -v wasmer
+        wasmer --version
 
     - name: Download base build
       if: ${{ inputs.artifact != '' }}
@@ -116,7 +118,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        out="${RUNNER_TEMP}/bench/out"
+        out="${RUNNER_TEMP}/bench/results/${{ inputs.runtime }}"
         if [[ -n "${BENCH_LANE_NODE:-}" ]]; then
           head="${BENCH_LANE_NODE}" base="${BENCH_LANE_NODE}"
         else
@@ -130,14 +132,26 @@ runs:
         fi
         exit "${status}"
 
+    # This runtime's report, readable in the job's summary before the
+    # bench-comment job has collected every runtime.
+    - name: Summarize benchmark
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 benchmarks/ci/framework-bench.py summary --runtime "${{ inputs.runtime }}" \
+          --results-dir "${RUNNER_TEMP}/bench/results" \
+          --repo "${{ github.repository }}" --base-ref "${{ github.event.pull_request.base.ref }}"
+
     - name: Upload benchmark results
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: framework-bench-${{ inputs.runtime }}
         path: |
-          ${{ runner.temp }}/bench/out/*.json
-          ${{ runner.temp }}/bench/out/*.log
+          ${{ runner.temp }}/bench/results/${{ inputs.runtime }}/*.json
+          ${{ runner.temp }}/bench/results/${{ inputs.runtime }}/*.log
+          ${{ runner.temp }}/bench/results/${{ inputs.runtime }}/state/*/cells/*.log
         if-no-files-found: ignore
         retention-days: 14
         overwrite: true

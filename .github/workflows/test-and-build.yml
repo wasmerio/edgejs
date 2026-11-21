@@ -1720,6 +1720,35 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+
+      # The guest needs the wasmer CLI the build and tests use (it imports
+      # wasm_c_api_v0, which older releases lack); see test-quickjs-wasix.
+      - name: Resolve Wasmer provisioning
+        id: wasmer-provision
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+        run: ./scripts/ci/provision-wasmer.sh resolve wasix
+
+      - name: Restore Wasmer source build cache
+        if: steps.wasmer-provision.outputs.mode == 'source'
+        uses: actions/cache/restore@v4
+        with:
+          path: .wasmer-provision
+          key: ${{ needs.build-quickjs-wasix.outputs.wasmer_cache_key || steps.wasmer-provision.outputs.cache_key }}
+
+      - name: Provision Wasmer
+        shell: bash
+        env:
+          WASMER_SOURCE_REF: ${{ needs.build-quickjs-wasix.outputs.wasmer_resolved_sha || vars.WASMER_SOURCE_REF }}
+          WASMER_SOURCE_REPO: ${{ vars.WASMER_SOURCE_REPO }}
+          WASMER_ARTIFACT_RUN_ID: ${{ vars.WASMER_ARTIFACT_RUN_ID }}
+          WASMER_RELEASE_VERSION: ${{ vars.WASMER_RELEASE_VERSION }}
+          GH_TOKEN: ${{ secrets.WASMER_ARTIFACTS_TOKEN }}
+        run: ./scripts/ci/provision-wasmer.sh wasix
+
       - uses: ./.github/actions/framework-bench
         with:
           runtime: quickjs-wasix
