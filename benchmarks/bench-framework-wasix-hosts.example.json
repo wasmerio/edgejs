@@ -1,0 +1,12 @@
+{
+  "compiler": "cranelift",
+  "connections": 32,
+  "warmup": 3,
+  "lanes": {
+    "baseline": { "snapshot": "baseline" },
+    "current": {
+      "build": "../build-wasix",
+      "runner": "../build-wasix-napi/target/release/napi_wasmer"
+    }
+  }
+}
