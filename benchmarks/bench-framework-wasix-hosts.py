@@ -553,7 +553,7 @@ def cmd_run(config, config_path, args):
             export = results_dir / f"startup-{fixture}-{lane}.json"
             idle_before = wait_quiet(args.idle)
             result = run_hyperfine(lane, f"{self} probe {lane} {fixture}", export,
-                                   ["--warmup", "2", "--runs", str(args.startup_runs)])
+                                   ["--warmup", str(args.startup_warmup), "--runs", str(args.startup_runs)])
             probes = read_jsonl(cell_paths(config, lane, fixture)["probes"])[-args.startup_runs:]
             data["startup"].setdefault(fixture, {})[lane] = {
                 "cpu_idle_before": idle_before,
@@ -626,6 +626,7 @@ def main():
     run.add_argument("--rounds", type=int, default=2)
     run.add_argument("--runs", type=int, default=2)
     run.add_argument("--startup-runs", type=int, default=5, help="0 skips the startup pass")
+    run.add_argument("--startup-warmup", type=int, default=2, help="unmeasured server starts before them")
     run.add_argument("--idle", type=float, default=85.0,
                      help="minimum system idle CPU %% before a cell; 0 disables the idle checks")
     run.add_argument("--idle-after", type=float, default=70.0, help="idle CPU %% below which a finished cell is redone")

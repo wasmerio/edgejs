@@ -58,8 +58,10 @@ RUNTIMES = {
     "node26": {"title": "Node.js 26", "reference": True},
 }
 FIXTURE_NAMES = {"http": "node:http", "express": "Express", "hono": "Hono", "next": "Next.js"}
-# A change smaller than this, or than the disagreement between rounds, is
-# reported as no significant change.
+# Throughput: a change counts only when every round moves the same way by
+# more than this (twice this with a single round). Shared runners produce
+# one-off outliers of 10-20% even between identical binaries, which an average
+# of the rounds would report as a change.
 THROUGHPUT_FLOOR = 0.03
 # First-reply times: a change must exceed this and the spread of the probes.
 STARTUP_FLOOR = 0.05
@@ -186,10 +188,12 @@ def cpu_halves():
 
 def harness(config, output, args, startup_runs, cpus, rounds=1):
     """The harness command for one lane: `rounds` throughput rounds, then
-    `startup_runs` first-reply probes per fixture (0 skips either)."""
+    `startup_runs` first-reply probes per fixture after one unmeasured start
+    (0 skips either)."""
     command = [sys.executable, str(HARNESS), "--config", str(config),
                "--amount-scale", str(args.amount_scale), "--max-seconds", str(args.max_seconds),
                "run", "--rounds", str(rounds), "--runs", str(args.runs), "--startup-runs", str(startup_runs),
+               "--startup-warmup", "1",
                "--idle", "0", "--attempts", "1", "--spread", "1", "--output", str(output)]
     if cpus:
         command = ["taskset", "-c", cpus, *command]
@@ -266,20 +270,27 @@ def cmd_run(args):
                     + (out / f"{lane}-warmup.log").read_text(errors="replace")[-3000:])
 
     # Time to first response, measured first so the throughput budget can
-    # never squeeze it out. Both lanes probe at the same time, each on its half.
+    # never squeeze it out. Both lanes probe at the same time, each on its
+    # half of the CPUs, in two passes that swap the halves.
     startup = None
     if not notes and args.startup_runs > 0:
-        outputs = {lane: out / f"{lane}-startup.json" for lane in ("head", "base")}
-        commands = {lane: (harness(configs[lane], outputs[lane], args, args.startup_runs,
-                                   halves[i] if halves else None, rounds=0), states[lane])
-                    for i, lane in enumerate(outputs)}
+        passes = []
+        per_pass = max(2, (args.startup_runs + 1) // 2)
         startup_started = time.monotonic()
-        status = run_lanes(commands, out, "startup", deadline)
-        if all(s == "ok" for s in status.values()):
-            startup = {lane: json.loads(outputs[lane].read_text()) for lane in outputs}
+        for index in range(2):
+            pins = {"head": halves[index], "base": halves[1 - index]} if halves else {}
+            outputs = {lane: out / f"{lane}-startup{index + 1}.json" for lane in ("head", "base")}
+            commands = {lane: (harness(configs[lane], outputs[lane], args, per_pass, pins.get(lane), rounds=0),
+                               states[lane]) for lane in outputs}
+            status = run_lanes(commands, out, f"startup{index + 1}", deadline)
+            if not all(s == "ok" for s in status.values()):
+                notes.append(f"first-reply pass {index + 1}: "
+                             + ", ".join(f"{l} {s}" for l, s in status.items() if s != "ok"))
+                break
+            passes.append({"pins": pins, **{lane: json.loads(outputs[lane].read_text()) for lane in outputs}})
+        if passes:
+            startup = {"passes": passes}
             log(f"first-reply probes took {time.monotonic() - startup_started:.0f} s")
-        else:
-            notes.append("first-reply probes: " + ", ".join(f"{l} {s}" for l, s in status.items() if s != "ok"))
 
     last_round_s = 0.0
     for index in range(args.rounds if not any(n.startswith("warm-up") for n in notes) else 0):
@@ -314,7 +325,8 @@ def cmd_run(args):
             notes.append("round {} failed for {}".format(index + 1, " and ".join(failed)))
             rounds.append({"index": index + 1, "failed": failed})
         break
-    summary = {"runtime": args.runtime, "startup": startup, "startup_runs": args.startup_runs,
+    startup_runs = sum(1 for p in (startup or {}).get("passes", [])) * max(2, (args.startup_runs + 1) // 2)
+    summary = {"runtime": args.runtime, "startup": startup, "startup_runs": startup_runs,
                "rounds": rounds, "notes": notes,
                "elapsed_s": time.monotonic() - started, "warmup_elapsed_s": warm_s,
                "cpu_pinning": bool(halves), "max_seconds": args.max_seconds, "runs": args.runs,
@@ -332,6 +344,15 @@ def cmd_run(args):
 
 def geometric_mean(values):
     return math.exp(statistics.mean(math.log(value) for value in values))
+
+
+def throughput_verdict(round_changes):
+    floor = THROUGHPUT_FLOOR if len(round_changes) > 1 else 2 * THROUGHPUT_FLOOR
+    if round_changes and all(c > floor for c in round_changes):
+        return "better"
+    if round_changes and all(c < -floor for c in round_changes):
+        return "worse"
+    return "same"
 
 
 def verdict(change, noise, floor, higher_is_better=True):
@@ -367,7 +388,7 @@ def analyze(results):
         noise = (max(ratios) - min(ratios)) / 2 if len(ratios) > 1 else 0.0
         row = {"base": statistics.mean(base_rates), "head": statistics.mean(head_rates),
                "change": change, "noise": noise, "round_changes": [ratio - 1 for ratio in ratios],
-               "verdict": verdict(change, noise, THROUGHPUT_FLOOR),
+               "verdict": throughput_verdict([ratio - 1 for ratio in ratios]),
                "p99_base": statistics.median(base_p99), "p99_head": statistics.median(head_p99)}
         rows[fixture] = row
     for fixture, startup in analyze_startup(results).items():
@@ -386,23 +407,40 @@ def spread(samples):
 
 def analyze_startup(results):
     """Per fixture: median time from process start to the first validated
-    response for both lanes, and whether the change exceeds the noise."""
+    response for both lanes, and whether it changed. Each pass swaps the CPU
+    halves; a change counts only when every pass moves the same way by more
+    than STARTUP_FLOOR (twice that with one pass) and the overall change
+    exceeds the probes' spread."""
     phase = results.get("startup") or {}
+    passes = phase.get("passes") or ([phase] if phase else [])
     found = {}
     for fixture in FIXTURE_NAMES:
-        samples = {}
-        for lane in ("head", "base"):
-            cell = (phase.get(lane) or {}).get("startup", {}).get(fixture, {}).get("lane")
-            if cell and cell.get("first_response_ms"):
-                samples[lane] = cell["first_response_ms"]
-        if len(samples) != 2:
+        samples = {"head": [], "base": []}
+        pass_changes = []
+        for one in passes:
+            medians = {}
+            for lane in ("head", "base"):
+                cell = (one.get(lane) or {}).get("startup", {}).get(fixture, {}).get("lane")
+                if cell and cell.get("first_response_ms"):
+                    samples[lane] += cell["first_response_ms"]
+                    medians[lane] = statistics.median(cell["first_response_ms"])
+            if len(medians) == 2:
+                pass_changes.append(medians["head"] / medians["base"] - 1)
+        if not pass_changes:
             continue
         head, base = statistics.median(samples["head"]), statistics.median(samples["base"])
         change = head / base - 1
         noise = max(spread(samples["head"]), spread(samples["base"]))
+        floor = STARTUP_FLOOR if len(pass_changes) > 1 else 2 * STARTUP_FLOOR
+        if all(c < -floor for c in pass_changes) and abs(change) > noise:
+            first_verdict = "better"
+        elif all(c > floor for c in pass_changes) and abs(change) > noise:
+            first_verdict = "worse"
+        else:
+            first_verdict = "same"
         found[fixture] = {"first_base": base, "first_head": head, "first_change": change,
-                          "first_noise": noise,
-                          "first_verdict": verdict(change, noise, STARTUP_FLOOR, higher_is_better=False)}
+                          "first_noise": noise, "first_pass_changes": pass_changes,
+                          "first_verdict": first_verdict}
     return found
 
 
@@ -507,8 +545,10 @@ def runtime_table(name, data, args):
             else:
                 throughput = "– | – | – | no result | –"
             if "first_head" in r:
-                startup = (f"{r['first_base']:.0f} → {r['first_head']:.0f} ms ({r['first_change']:+.0%}, "
-                           f"spread {r['first_noise']:.0%}) | "
+                passes = ", ".join(f"{c:+.0%}" for c in r.get("first_pass_changes", []))
+                startup = (f"{r['first_base']:.0f} → {r['first_head']:.0f} ms ({r['first_change']:+.0%}"
+                           + (f" <sub>({passes})</sub>" if passes else "")
+                           + f", spread {r['first_noise']:.0%}) | "
                            + ("reference" if reference else VERDICT_TEXT[r["first_verdict"]]))
             else:
                 startup = "– | no result"
@@ -553,14 +593,16 @@ def findings(runtimes):
 def method_text(results):
     return ("Each runtime has its own job. It runs the PR build and the base build at the same time on one "
             "runner, each pinned to half of the CPUs (server and load generator together). After a warm-up "
-            f"that compiles both builds, each server is started {results.get('startup_runs', 0)} times (after "
-            "2 unmeasured starts) to time process start to the first validated response; the verdict needs "
-            f"a change above {STARTUP_FLOOR:.0%} and above the probes' interquartile spread. Then each "
+            f"that compiles both builds, each server is started {results.get('startup_runs', 0)} times, in two "
+            "passes that swap the CPU halves (each after one unmeasured start), to time process start to the "
+            "first validated response; a change counts only when both passes move the same way by more than "
+            f"{STARTUP_FLOOR:.0%} and it exceeds the probes' interquartile spread. Then each "
             "throughput round starts a fresh server per fixture, warms it up for "
             f"{results['warmup_s']} s with 32 connections and times {results['runs']} load runs of up to "
             f"{results['max_seconds']:g} s with every reply validated; rounds swap the CPU halves. Change is "
-            "the geometric mean of the per-round PR/base ratios (per round in brackets), counted only above "
-            f"{THROUGHPUT_FLOOR:.0%} and above half the gap between rounds. Shared runners are noisy: confirm "
+            "the geometric mean of the per-round PR/base ratios (per round in brackets); it counts only when "
+            f"every round moves the same way by more than {THROUGHPUT_FLOOR:.0%} ({2 * THROUGHPUT_FLOOR:.0%} "
+            "with a single round). Shared runners are noisy: confirm "
             "single-digit changes locally with `benchmarks/bench-framework-wasix-hosts.py`.")
 
 
